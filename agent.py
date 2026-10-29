@@ -28,29 +28,24 @@ EXT_RATIO = 1.08          # 第三筆加碼點位：1.08 * B (+8%)
 
 LOOKBACK = 30             # 尋找波段高點 B 的觀察天數
 MAX_AVG_RATIO = 0.94      # 前兩筆平均成本不高於 B 的 94% (等價於回檔至少 14%)
-PULLBACK_MAX = 0.20       # 最大允許回檔 20% (低於 0.80B 視為走弱不接)
+PULLBACK_MAX = 0.20       # 最大允許回檔 20%
 VOL_RATIO = 0.60          # 今日成交量需 <= 高點量能的 60%
 STOP_PCT = 0.10           # 停損幅度 10%
 RRR = 2.5                 # 風險報酬比 2.5 倍 (獲利目標 +25%)
 
-# 依公式精準推算第一筆進場容許上限：
-# (0.3E + 0.4B)/0.7 <= 0.94B  =>  E <= 0.86B
+# 第一筆進場容許上限：E <= 0.86B
 MAX_ENTRY_RATIO = round(
     (MAX_AVG_RATIO * (TRANCHE_1 + TRANCHE_2) - TRANCHE_2) / TRANCHE_1, 4
 )
 MIN_ENTRY_RATIO = 1.0 - PULLBACK_MAX  # 0.80
 
-BATCH = 60                # 批次下載數量 (降低 yfinance 限流風險)
-
-# 已進場持股追蹤池範例：
-# HOLDINGS = {"2382.TW": {"entry": 265.0, "B": 315.0, "stage": 1}}
+BATCH = 60                # 批次下載數量
 HOLDINGS = {}
-
 FALLBACK = ["2330.TW", "2317.TW", "2454.TW", "2382.TW", "3231.TW", "2603.TW"]
 
 
 # =====================================================
-# 2. 輔助函式：台股法定跳動檔位 (Tick Size) 與強健推播模組
+# 2. 輔助函式：台股法定跳動檔位 (Tick Size) 與強健推播
 # =====================================================
 def to_tw_tick(price: float) -> float:
     """
@@ -75,23 +70,23 @@ def to_tw_tick(price: float) -> float:
 
 def send_telegram(blocks):
     """
-    強健推播函式：先以 Markdown 發送，若因特殊字元報錯則自動轉純文字降級重送，確保 100% 送達。
+    強健推播函式：以明確區塊分隔發送，若 Markdown 語法報錯自動轉純文字降級重送。
     """
-    text_all = "\n\n".join(blocks)
     if not TG_TOKEN or not TG_CHAT:
         print("\n❌ 錯誤：找不到 TG_BOT_TOKEN 或 TG_CHAT_ID，請檢查 GitHub Secrets！")
-        print(text_all)
+        for b in blocks:
+            print(b)
         return
 
-    # 支援以逗號分隔的多個 Chat ID
     target_chats = [cid.strip() for cid in TG_CHAT.split(",") if cid.strip()]
 
+    # 組合訊息，在每張卡片/股票之間保留清晰間距
     chunks, cur = [], ""
     for b in blocks:
-        if len(cur) + len(b) + 2 > 3500 and cur:
+        if len(cur) + len(b) + 4 > 3500 and cur:
             chunks.append(cur)
             cur = ""
-        cur += ("\n\n" if cur else "") + b
+        cur += ("\n\n\n" if cur else "") + b
     if cur:
         chunks.append(cur)
 
@@ -105,7 +100,6 @@ def send_telegram(blocks):
                     timeout=15
                 )
                 if not res.ok:
-                    # Markdown 語法例外處理，降級為純文字重送
                     requests.post(
                         url,
                         json={"chat_id": chat_id, "text": c.replace("*", "").replace("`", "")},
@@ -142,20 +136,22 @@ def run_morning():
                     prev = float(sub["Close"].iloc[-2])
                     chg_pct = (curr - prev) / prev * 100
                     icon = "🔴" if chg_pct < 0 else "🟢"
-                    market_lines.append(f"{icon} *{label}*: `{curr:,.1f}` ({chg_pct:+.2f}%)")
+                    market_lines.append(f"{icon} *{label}*：`{curr:,.1f}`（{chg_pct:+.2f}%）")
             except Exception:
                 continue
     except Exception as e:
         market_lines.append(f"⚠️ 國際盤態獲取異常: {e}")
 
-    report = [
-        f"☀️ *【台股晨間作戰速報 · 08:30】*",
-        f"📅 執行時間：`{now.strftime('%Y-%m-%d %H:%M')}`",
-        f"\n🌍 *即時晨間國際盤態與期指：*",
-    ] + market_lines + [
-        f"\n💡 *開盤提醒*：08:45 台指期開盤、09:00 現貨開盤，請搭配昨夜 22:30 選股名單觀察委託點位。"
-    ]
-    send_telegram(["\n".join(report)])
+    report = (
+        f"☀️ *【台股晨間作戰速報 · 08:30】*\n"
+        f"📅 執行時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🌍 *即時國際盤態與期指走勢：*\n" +
+        "\n".join(market_lines) +
+        f"\n━━━━━━━━━━━━━━━━━━\n"
+        f"💡 08:45 台指期開盤、09:00 現貨開盤，請搭配昨夜作戰清單進場。"
+    )
+    send_telegram([report])
     print("晨間國際行情推播完成。")
 
 
@@ -175,7 +171,7 @@ def get_universe():
             df = tables[0]
             df.columns = df.iloc[0]
             df = df.iloc[1:]
-            df = df[df["CFICode"] == "ESVUFR"]  # 只保留普通股
+            df = df[df["CFICode"] == "ESVUFR"]
             for _, row in df.iterrows():
                 s = str(row["有價證券代號及名稱"])
                 industry = str(row.get("產業別", "熱門標的")).strip()
@@ -191,9 +187,6 @@ def get_universe():
 
 
 def get_tdcc_large_ratio(stock_id: str):
-    """
-    爬取神秘金字塔最新一期 400 張以上大戶持股比率
-    """
     clean_id = stock_id.replace(".TWO", "").replace(".TW", "")
     url = f"https://norway.twsthr.info/StockHolders.aspx?stock={clean_id}"
     try:
@@ -219,7 +212,7 @@ def download_batch(tickers):
             if data is not None and not data.empty:
                 return data
         except Exception as e:
-            print(f"批次下載重試 ({attempt+1}/3): {e}")
+            print(f"批次下載重試: {e}")
         time.sleep(3)
     return None
 
@@ -257,14 +250,13 @@ def analyze(df, ticker, info):
     if pd.isna(turnover) or turnover < MIN_AVG_TURNOVER:
         return None
 
-    # 2. 定位前波高點 B (避開最近 2 天，確保已進入拉回洗盤期)
+    # 2. 定位前波高點 B (避開最近 2 天)
     search_window = df.iloc[-LOOKBACK:-2]
     if search_window.empty:
         return None
     B = float(search_window["High"].max())
     B_idx = search_window["High"].idxmax()
 
-    # 趨勢檢核：B 不得低於更早以前的高點
     prior_window = df.iloc[:-LOOKBACK]
     if not prior_window.empty and B < float(prior_window["High"].max()) * 0.98:
         return None
@@ -317,8 +309,6 @@ def analyze(df, ticker, info):
 
 def format_match(m):
     ticker = m['ticker']
-    
-    # 精確判斷上市 (TWSE) 還是上櫃 (TPEX)，解決代號殘留 O 與交易所錯誤問題
     if ticker.endswith(".TWO"):
         exchange = "TPEX"
         clean_code = ticker.replace(".TWO", "")
@@ -326,24 +316,28 @@ def format_match(m):
         exchange = "TWSE"
         clean_code = ticker.replace(".TW", "")
 
-    # 組成精準的 TradingView 即時圖表超連結
     tv_link = f"https://tw.tradingview.com/chart/?symbol={exchange}%3A{clean_code}"
 
+    # 使用加粗框線與層次分明的結構，讓每一檔股票獨立成卡片
     return (
-        f"🎯 *【夜間精選作戰標的】{clean_code} {m['name']}* （{m['industry']}）\n"
+        f"════════════════════\n"
+        f"📌 *【精選標的】{clean_code} {m['name']}* （{m['industry']}）\n"
         f"👑 *400張大戶持股*：`{m['large_ratio']}`\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"▫️ 第一筆進場 (30% 部位)：`{m['close']}`（回測 -{m['pullback']}%）\n"
-        f"▫️ 第二筆加碼 (40% 部位)：`{m['B']}`（突破波段前高）\n"
-        f"▫️ 第三筆加碼 (30% 部位)：`{m['B2']}`（突破延伸 +8%）\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"💎 *三筆打滿預估均價*：`{m['avg_3']}`\n"
-        f"🛑 *階梯式防守規劃*：\n"
-        f"　├ 現階段停損：`{m['stop_first']}`（單筆 -10%）\n"
-        f"　├ 加碼第 2 筆後防守：成本價保本出場\n"
-        f"　└ 加碼第 3 筆後防守：`{m['B']}`（前高鎖定零風險獲利）\n"
-        f"🎯 *波段最終目標價*：`{m['target']}`（風報比 {RRR}:1）\n"
-        f"📈 [點此開啟 TradingView 查閱線型]({tv_link})"
+        f"────────────────────\n"
+        f"📍 *三段金字塔點位規劃*：\n"
+        f"  • 第 1 筆進場 (30%)：`{m['close']}`（回測 -{m['pullback']}%）\n"
+        f"  • 第 2 筆加碼 (40%)：`{m['B']}`（突破前高）\n"
+        f"  • 第 3 筆加碼 (30%)：`{m['B2']}`（突破延伸 +8%）\n"
+        f"  💎 *三筆打滿預估總均價*：`{m['avg_3']}`\n"
+        f"────────────────────\n"
+        f"🛡️ *防守與目標出場*：\n"
+        f"  • 現階段初始停損：`{m['stop_first']}`（單筆 -10%）\n"
+        f"  • 第 2 筆後防守：成本價保本出場\n"
+        f"  • 第 3 筆後防守：`{m['B']}`（前高鎖定獲利）\n"
+        f"  🎯 *波段目標價*：`{m['target']}`（風報比 {RRR}:1）\n"
+        f"────────────────────\n"
+        f"🔗 [點此開啟 TradingView 即時圖表]({tv_link})\n"
+        f"════════════════════"
     )
 
 
@@ -367,17 +361,21 @@ def check_holdings():
 
         if stage == 1 and curr_close >= B:
             alerts.append(
-                f"🔔 *【持股加碼第 2 筆】{t}*\n"
+                f"════════════════════\n"
+                f"🔔 *【持股加碼通知】{t}*\n"
                 f"現價 `{curr_close:.2f}` 已突破前高 `{B:.2f}`！\n"
                 f"👉 執行指令：動用 40% 資金於 `{to_tw_tick(curr_close)}` 加碼。\n"
-                f"🛡️ 防守更新：將第一筆停損價上推至進場成本（鎖定保本）。"
+                f"🛡️ 防守更新：將第一筆停損價上推至進場成本（鎖定保本）。\n"
+                f"════════════════════"
             )
         elif stage == 2 and curr_close >= (B * EXT_RATIO):
             alerts.append(
-                f"🚀 *【持股加碼第 3 筆】{t}*\n"
-                f"現價 `{curr_close:.2f}` 站上主升延伸點 `{to_tw_tick(B * EXT_RATIO)}`！\n"
+                f"════════════════════\n"
+                f"🚀 *【主升段打滿通知】{t}*\n"
+                f"現價 `{curr_close:.2f}` 站上延伸點 `{to_tw_tick(B * EXT_RATIO)}`！\n"
                 f"👉 執行指令：動用剩餘 30% 資金打滿 100% 部位。\n"
-                f"🛡️ 防守更新：全數部位停損點強制上推至前高 `{to_tw_tick(B)}`（鎖定零風險獲利）。"
+                f"🛡️ 防守更新：全數部位停損點強制上推至前高 `{to_tw_tick(B)}`。\n"
+                f"════════════════════"
             )
     return alerts
 
@@ -430,7 +428,12 @@ def run_night():
     if not matches:
         head += "\n\n今日無符合「創高回測量縮＋籌碼鎖定」標的，明日保持空手觀望 ✅"
 
-    blocks = [head] + [format_match(m) for m in matches] + check_holdings()
+    # 以獨立元素加入 blocks，避免字串黏接
+    blocks = [head]
+    for m in matches:
+        blocks.append(format_match(m))
+    blocks.extend(check_holdings())
+
     send_telegram(blocks)
     print("夜間選股推播完成。")
 
