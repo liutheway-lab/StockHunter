@@ -14,9 +14,7 @@ import yfinance as yf
 TG_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT = os.getenv("TG_CHAT_ID", "")
 
-# 標的價格與流動性硬濾網 (剔除冷門怪股)
-MIN_PRICE = 25.0          # 最低股價 (排除低價投機水餃股)
-MAX_PRICE = 800.0         # 最高股價 (避開散戶資金難配置的超高價股)
+# 標的流動性硬濾網 (剔除冷門怪股)
 MIN_VOL_SHARES = 1000     # 5 日均量至少 1000 張 (張 = 股數 / 1000)
 MIN_AVG_TURNOVER = 5e7    # 20 日均成交金額 >= 5000 萬
 
