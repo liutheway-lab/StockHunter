@@ -1,0 +1,25 @@
+name: Manual Strategy Backtest
+
+on:
+  workflow_dispatch: # 支援手動一鍵點擊執行
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下載專案代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安裝依賴套件
+        run: pip install yfinance pandas tabulate requests
+
+      - name: 執行歷史回測
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python backtest.py
