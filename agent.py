@@ -128,18 +128,23 @@ def analyze(df):
         return None
 
     # 交易計畫
-    entry = close
-    avg = (TRANCHE_ENTRY * entry + TRANCHE_BREAKOUT * B) / (TRANCHE_ENTRY + TRANCHE_BREAKOUT)
-    return {
-        "close": close,
-        "B": B,
-        "pullback": (1 - ratio) * 100,
-        "avg": avg,
-        "avg_ratio": avg / B * 100,
-        "stop_first": entry * (1 - STOP_PCT),
-        "stop_avg": avg * (1 - STOP_PCT),
-        "target": avg * (1 + STOP_PCT * RRR),
-    }
+    entry = to_tw_tick(close)
+avg_cost = (TRANCHE_ENTRY * entry + TRANCHE_BREAKOUT * B) / (TRANCHE_ENTRY + TRANCHE_BREAKOUT)
+
+# 依台灣合法 Tick 檔位對齊：
+return {
+    "close": entry,
+    "B": to_tw_tick(B),
+    "pullback": round((1 - entry / B) * 100, 1),
+    "avg": to_tw_tick(avg_cost),
+    "avg_ratio": round((avg_cost / B) * 100, 1),
+    "stop_first": to_tw_tick(entry * (1 - STOP_PCT)),          # 第一筆停損合法檔位
+    "stop_avg": to_tw_tick(avg_cost * (1 - STOP_PCT)),        # 加碼後停損合法檔位
+    "target": to_tw_tick(avg_cost * (1 + STOP_PCT * RRR)),    # 目標價合法檔位
+    "large_ratio": f"{large_ratio:.1f}%" if large_ratio else "維持高檔",
+    "industry": info["industry"],
+}
+
 
 
 def format_match(m):
