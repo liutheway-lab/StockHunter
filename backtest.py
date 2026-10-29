@@ -1,30 +1,145 @@
 import os
+import pandas as pd
 import requests
+import yfinance as yf
 
-# 取得 Telegram 憑證
+# ==========================================
+# 1. 回測設定
+# ==========================================
 TG_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT = os.getenv("TG_CHAT_ID", "")
 
-df_results = pd.DataFrame(all_trades)
+TICKERS = [
+    "2382.TW", "2330.TW", "2317.TW", "2454.TW", "3231.TW",
+    "2603.TW", "3035.TW", "3443.TW", "2376.TW", "6669.TW"
+]
+START_DATE = "2023-01-01"
+END_DATE = "2026-10-01"
 
-if df_results.empty:
+TRANCHE_1 = 0.30
+TRANCHE_2 = 0.40
+TRANCHE_3 = 0.30
+EXT_RATIO = 1.08
+LOOKBACK = 30
+MAX_PULLBACK = 0.20
+MIN_PULLBACK = 0.14
+VOL_RATIO = 0.60
+STOP_PCT = 0.10
+STOP_ADD_PCT = 0.05
+RRR = 2.5
+
+
+def run_backtest_ticker(t, df):
+    if len(df) < 80:
+        return []
+
+    df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
+    df["EMA60"] = df["Close"].ewm(span=60, adjust=False).mean()
+    df["MAV20"] = df["Volume"].rolling(20).mean()
+    df["MAV5"] = df["Volume"].rolling(5).mean()
+
+    trades = []
+    in_trade = False
+    stage = 0
+    entry_p, B_p, B2_p = 0.0, 0.0, 0.0
+    entry_date = ""
+
+    for i in range(80, len(df)):
+        cur = df.iloc[i]
+        date = df.index[i].strftime("%Y-%m-%d")
+        close = float(cur["Close"])
+        vol = float(cur["Volume"])
+
+        if not in_trade:
+            search_window = df.iloc[i - LOOKBACK: i - 2]
+            B = float(search_window["High"].max())
+            B_idx = search_window["High"].idxmax()
+            vol_B = float(df.loc[B_idx, "Volume"])
+
+            pullback = (B - close) / B
+            if (MIN_PULLBACK <= pullback <= MAX_PULLBACK and
+                vol <= VOL_RATIO * vol_B and
+                vol <= cur["MAV20"] and
+                cur["EMA20"] > cur["EMA60"] and
+                close >= cur["EMA60"] * 0.98 and
+                cur["MAV5"] >= 1000 * 1000):
+
+                in_trade = True
+                stage = 1
+                entry_p = close
+                B_p = B
+                B2_p = B * EXT_RATIO
+                entry_date = date
+                continue
+
+        if in_trade:
+            if stage == 1:
+                stop_loss = entry_p * (1 - STOP_PCT)
+                if close <= stop_loss:
+                    trades.append({"ticker": t, "entry": entry_date, "exit": date, "pnl": -STOP_PCT * TRANCHE_1, "tag": "Stage 1 Stop"})
+                    in_trade = False
+                elif close >= B_p:
+                    stage = 2
+
+            elif stage == 2:
+                stop_second = B_p * (1 - STOP_ADD_PCT)
+                avg_2 = (TRANCHE_1 * entry_p + TRANCHE_2 * B_p) / 0.7
+                target_p = avg_2 * (1 + STOP_PCT * RRR)
+
+                if close <= stop_second:
+                    trades.append({"ticker": t, "entry": entry_date, "exit": date, "pnl": 0.0, "tag": "Cut Add-on Breakeven"})
+                    in_trade = False
+                elif close >= target_p:
+                    trades.append({"ticker": t, "entry": entry_date, "exit": date, "pnl": (target_p - avg_2) / avg_2 * 0.7, "tag": "Stage 2 Target"})
+                    in_trade = False
+                elif close >= B2_p:
+                    stage = 3
+
+            elif stage == 3:
+                stop_third = B_p
+                avg_3 = (TRANCHE_1 * entry_p + TRANCHE_2 * B_p + TRANCHE_3 * B2_p) / 1.0
+                target_p = avg_3 * (1 + STOP_PCT * RRR)
+
+                if close <= stop_third:
+                    trades.append({"ticker": t, "entry": entry_date, "exit": date, "pnl": (stop_third - avg_3) / avg_3 * 1.0, "tag": "Stage 3 Trailing Stop"})
+                    in_trade = False
+                elif close >= target_p:
+                    trades.append({"ticker": t, "entry": entry_date, "exit": date, "pnl": (target_p - avg_3) / avg_3 * 1.0, "tag": "Stage 3 Target"})
+                    in_trade = False
+
+    return trades
+
+
+print("執行台股指標股歷史回測...")
+all_trades = []
+for t in TICKERS:
+    try:
+        data = yf.download(t, start=START_DATE, end=END_DATE, progress=False, auto_adjust=True)
+        if isinstance(data.columns, pd.MultiIndex):
+            data = data.xs(t, axis=1, level=1) if t in data.columns.levels[1] else data[t]
+        all_trades.extend(run_backtest_ticker(t, data))
+    except Exception:
+        continue
+
+df_res = pd.DataFrame(all_trades)
+if df_res.empty:
     report = "⚠️ 回測期間內未觸發任何完整交易訊號。"
 else:
-    wins = df_results[df_results["pnl_pct"] > 0]
-    losses = df_results[df_results["pnl_pct"] < 0]
-    breakevens = df_results[df_results["pnl_pct"] == 0]
+    wins = df_res[df_res["pnl"] > 0]
+    losses = df_res[df_res["pnl"] < 0]
+    breakevens = df_res[df_res["pnl"] == 0]
 
-    win_rate = len(wins) / len(df_results) * 100
-    avg_win = wins["pnl_pct"].mean() * 100 if not wins.empty else 0
-    avg_loss = losses["pnl_pct"].mean() * 100 if not losses.empty else 0
-    total_cum_ret = df_results["pnl_pct"].sum() * 100
+    win_rate = len(wins) / len(df_res) * 100
+    avg_win = wins["pnl"].mean() * 100 if not wins.empty else 0
+    avg_loss = losses["pnl"].mean() * 100 if not losses.empty else 0
+    total_ret = df_res["pnl"].sum() * 100
     p_l_ratio = f"{abs(avg_win / avg_loss):.2f}:1" if avg_loss != 0 else "N/A"
 
     report = (
-        f"📊 *【三段金字塔加碼波段策略 · 歷史回測報告】*\n"
+        f"📊 *【三段金字塔策略 · 歷史回測報告】*\n"
         f"📅 期間：`{START_DATE}` ~ `{END_DATE}`\n"
         f"────────────────────\n"
-        f"• 總交易次數：`{len(df_results)}` 次\n"
+        f"• 總交易次數：`{len(df_res)}` 次\n"
         f"• 獲利次數：`{len(wins)}` 次\n"
         f"• 保本平手：`{len(breakevens)}` 次（砍第2筆保本成功）\n"
         f"• 停損次數：`{len(losses)}` 次（第1筆 -10% 出場）\n"
@@ -36,16 +151,14 @@ else:
         f"  - 平均單筆獲利：`+{avg_win:.2f}%`\n"
         f"  - 平均單筆虧損：`{avg_loss:.2f}%`\n"
         f"  - 風報比 (盈虧比)：`{p_l_ratio}`\n"
-        f"  - 策略累計報酬率：`{total_cum_ret:+.2f}%`\n"
+        f"  - 策略累計報酬率：`{total_ret:+.2f}%`\n"
         f"────────────────────"
     )
 
 print(report)
 
-# 推播到 Telegram
 if TG_TOKEN and TG_CHAT:
-    target_chats = [cid.strip() for cid in TG_CHAT.split(",") if cid.strip()]
-    for cid in target_chats:
+    for cid in [cid.strip() for cid in TG_CHAT.split(",") if cid.strip()]:
         requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
             json={"chat_id": cid, "text": report, "parse_mode": "Markdown"}
