@@ -1,0 +1,22 @@
+name: daily-scan
+
+on:
+  schedule:
+    - cron: "0 7 * * 1-5"   # 台灣時間每週一到週五 15:00（收盤後）
+  workflow_dispatch:         # 允許手動按鈕測試
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python agent.py
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
