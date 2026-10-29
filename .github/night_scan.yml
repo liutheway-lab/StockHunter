@@ -1,0 +1,27 @@
+name: Night Stock Screener (22:30)
+
+on:
+  schedule:
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  run-night:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下載代碼
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安裝依賴套件
+        run: pip install yfinance pandas requests
+
+      - name: 執行夜間選股
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python agent.py --mode night
