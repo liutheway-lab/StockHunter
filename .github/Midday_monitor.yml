@@ -1,0 +1,24 @@
+name: Midday Defense Monitor (13:18)
+
+on:
+  schedule:
+    - cron: '18 5 * * 1-5'  # 台灣時間平日 13:18
+  workflow_dispatch:
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下載代碼
+        uses: actions/checkout@v4
+      - name: 設定 Python
+        uses: setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安裝套件
+        run: pip install yfinance pandas requests
+      - name: 檢查持股防守點
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python agent.py --mode monitor
