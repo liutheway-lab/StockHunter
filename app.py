@@ -2,53 +2,21 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import requests
-import io
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from core.indicators import to_tw_tick
 
-# 頁面配置
+# ==========================================
+# 頁面與風格配置
+# ==========================================
 st.set_page_config(page_title="StockHunter 智能戰情室", page_icon="📈", layout="centered")
-
-# ==========================================
-# 1. 動態全市場台股代號與名稱快取
-# ==========================================
-@st.cache_data(ttl=86400)
-def load_full_tw_universe():
-    """抓取證交所與櫃買中心全市場清單，支援全中文反查"""
-    stocks = {}
-    for mode, suffix in [(2, ".TW"), (4, ".TWO")]:
-        try:
-            url = f"https://isin.twse.com.tw/isin/C_public.jsp?strMode={mode}"
-            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            r.encoding = "ms950"
-            tables = pd.read_html(io.StringIO(r.text))
-            if tables:
-                df = tables[0]
-                df.columns = df.iloc[0]
-                df = df.iloc[1:]
-                for _, row in df.iterrows():
-                    val = str(row.get("有價證券代號及名稱", ""))
-                    parts = val.split("\u3000")
-                    if len(parts) >= 2 and parts[0].isdigit() and len(parts[0]) == 4:
-                        code, name = parts[0], parts[1].strip()
-                        ticker = f"{code}{suffix}"
-                        stocks[name] = ticker
-                        stocks[code] = ticker
-                        stocks[ticker] = ticker
-        except Exception:
-            pass
-    return stocks
-
-universe_map = load_full_tw_universe()
 
 st.title("📈 StockHunter 戰情室")
 now = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
 st.caption(f"台灣時間：`{now}` ｜ 多策略動態部位操盤系統")
 
 # ==========================================
-# 2. 策略規則說明指南 (折疊式面板)
+# 策略規則說明指南
 # ==========================================
 with st.expander("📖 點此查看【四大策略進出場與風控規格書】"):
     st.markdown("""
@@ -60,18 +28,10 @@ with st.expander("📖 點此查看【四大策略進出場與風控規格書】
 
     ---
     ### 🎯 四大選股策略定義
-    1. **創高量縮回測 (策略一)**：
-       * 條件：距近30日高點回測 8%~16%、量縮至突破日 60% 以下、20EMA > 60EMA。
-       * 停損：單筆 -10% ｜ 目標：風報比 2.5 倍。
-    2. **低檔爆量起漲 (策略二 / A)**：
-       * 條件：離近60日低點不超過 18%、今日量能 $\ge$ 2 倍 20MAV、帶量突破 30 日頸線。
-       * 停損：頸線下緣 2% 或 -7% ｜ 目標：預期波段 +20%。
-    3. **量縮抗跌強勢股 (策略 B)**：
-       * 條件：大盤顯著重挫時，個股跌幅不到大盤一半、成交量縮至 20MAV 的 50% 以下。
-       * 停損：跌破近 10 日個股前低 ｜ 目標：風報比 2.5 倍。
-    4. **噴出後整理再攻 (策略 C)**：
-       * 條件：近 15 日曾有噴出 (單日 $\ge$ 4% 或 3 日 $\ge$ 15% 且爆量 1.5 倍)，拉回整理不破噴出高度 1/2，逼近前高 4% 或已突破。
-       * 停損：噴出 1/2 高度與買價 -5% 取孰低 ｜ 目標：等幅測量。
+    1. **創高量縮回測 (策略一)**：距近30日高點回測 8%~16%、量縮至突破日 60% 以下。停損守單筆 -10%。
+    2. **低檔爆量起漲 (策略二 / A)**：近60日低點不超過 18%、量能 $\ge$ 2 倍 20MAV 帶量突破 30 日頸線。
+    3. **量縮抗跌強勢股 (策略 B)**：大盤顯著重挫時，個股跌幅不到大盤一半，量縮至 20MAV 的 50% 以下。
+    4. **噴出後整理再攻 (策略 C)**：近 15 日曾噴出，整理不破 1/2 高度，逼近前高 4% 或已突破。
     """)
 
 tab_diag, tab_backtest = st.tabs(["📱 即時診斷與部位試算", "🧪 歷史策略回測實驗室"])
@@ -80,7 +40,6 @@ tab_diag, tab_backtest = st.tabs(["📱 即時診斷與部位試算", "🧪 歷�
 # 分頁一：即時診斷與部位試算
 # ==========================================
 with tab_diag:
-    # 大盤狀態分析
     st.subheader("🌐 大盤多空位階與准入狀態")
     market_level, market_allow, is_rebounded = 3, False, False
     with st.spinner("評估大盤位階中..."):
@@ -96,7 +55,6 @@ with tab_diag:
             ma20 = float(twii["Close"].rolling(20).mean().iloc[-1])
             ma60 = float(twii["Close"].rolling(60).mean().iloc[-1])
             
-            # 止跌檢查
             recent_3_low = float(twii["Low"].iloc[-3:].min())
             prev_20_low = float(twii["Low"].iloc[-23:-3].min())
             down_days = twii.iloc[-20:][twii.iloc[-20:]["Close"] < twii.iloc[-20:]["Open"]]
@@ -122,30 +80,30 @@ with tab_diag:
             if market_allow:
                 st.success(f"🟢 **大盤准入**：允許進場（位階：{lvl_name}）")
             else:
-                st.error("🛑 **大盤禁止進場**：處於空頭結構且未見有效止跌爆量，嚴格限制多頭交易！")
+                st.error("🛑 **大盤禁止進場**：處於空頭或轉折風險區且未見止跌爆量，嚴格限制多頭交易！")
         except Exception as e:
-            st.warning(f"大盤資料連線中：{e}")
+            st.warning(f"大盤資料讀取中：{e}")
 
     st.divider()
 
-    # 權重調整 (改為數字步進器 + 快捷按鈕，手機極好點擊)
+    # 權重調整 (點擊按鈕直接切換 + 步進微調)
     st.subheader("⚙️ 自訂三段進場資金權重")
     
-    if "w_tuple" not in st.session_state:
-        st.session_state.w_tuple = [30, 40, 30]
+    if "w_list" not in st.session_state:
+        st.session_state.w_list = [30, 40, 30]
 
     b1, b2, b3 = st.columns(3)
     if b1.button("平衡 30/40/30", use_container_width=True):
-        st.session_state.w_tuple = [30, 40, 30]
+        st.session_state.w_list = [30, 40, 30]
     if b2.button("重壓 30/50/20", use_container_width=True):
-        st.session_state.w_tuple = [30, 50, 20]
+        st.session_state.w_list = [30, 50, 20]
     if b3.button("右側 20/50/30", use_container_width=True):
-        st.session_state.w_tuple = [20, 50, 30]
+        st.session_state.w_list = [20, 50, 30]
 
     cw1, cw2, cw3 = st.columns(3)
-    w1 = cw1.number_input("第 1 筆 (%)", 0, 100, st.session_state.w_tuple[0], step=5)
-    w2 = cw2.number_input("第 2 筆 (%)", 0, 100, st.session_state.w_tuple[1], step=5)
-    w3 = cw3.number_input("第 3 筆 (%)", 0, 100, st.session_state.w_tuple[2], step=5)
+    w1 = cw1.number_input("第 1 筆 (%)", 0, 100, st.session_state.w_list[0], step=5)
+    w2 = cw2.number_input("第 2 筆 (%)", 0, 100, st.session_state.w_list[1], step=5)
+    w3 = cw3.number_input("第 3 筆 (%)", 0, 100, st.session_state.w_list[2], step=5)
 
     tot_w = w1 + w2 + w3
     if tot_w == 100:
@@ -155,47 +113,39 @@ with tab_diag:
 
     st.divider()
 
-    # 個股查詢 (支援全市場中文/代號)
+    # 純 4 碼股票代號查詢 (全台股通吃、零網路卡頓)
     st.subheader("🔍 個股即時診斷與點位試算")
-    user_input = st.text_input("輸入股票代號或中文名稱（例：玉晶光、台積電、3406、2330）：", "玉晶光").strip()
+    code_input = st.text_input("輸入 4 位台股代號（例如：2330、3406、2454、6274、8054）：", "3406").strip()
 
     if st.button("🚀 開始即時診斷", use_container_width=True):
-        # 查表反查
-        ticker = universe_map.get(user_input, None)
-        if not ticker:
-            # 嘗試正規化代號
-            raw_code = user_input.upper().replace(".TW", "").replace(".TWO", "")
-            if raw_code.isdigit():
-                ticker = f"{raw_code}.TW"
-            else:
-                ticker = None
-
-        if not ticker:
-            st.error(f"❌ 查無標的【{user_input}】，請確認名稱或輸入 4 碼代號。")
+        code = code_input.upper().replace(".TW", "").replace(".TWO", "")
+        if not (code.isdigit() and len(code) == 4):
+            st.error("⚠️ 請輸入正確的 4 碼數字股票代號！")
         else:
-            clean_code = ticker.replace(".TW", "").replace(".TWO", "")
-            # 反查中文名稱
-            stock_name = [k for k, v in universe_map.items() if v == ticker and not k.isdigit() and "." not in k]
-            disp_name = stock_name[0] if stock_name else clean_code
-
-            with st.spinner(f"載入 {clean_code} {disp_name} 數據中..."):
+            with st.spinner(f"正在連線分析 {code}..."):
                 try:
-                    df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=True)
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df = df.xs(ticker, axis=1, level=1)
-                    df = df.dropna(subset=["Close"])
+                    # 先查上市 (.TW)，若無資料自動改查上櫃 (.TWO)
+                    ticker = f"{code}.TW"
+                    tk = yf.Ticker(ticker)
+                    df = tk.history(period="6mo")
+                    if df.empty or len(df) < 20:
+                        ticker = f"{code}.TWO"
+                        tk = yf.Ticker(ticker)
+                        df = tk.history(period="6mo")
 
-                    if df.empty or len(df) < 30:
-                        st.error("此標的歷史資料不足。")
+                    if df.empty or len(df) < 20:
+                        st.error(f"❌ 查無代號【{code}】的歷史資料，請確認是否為有效上市櫃股票。")
                     else:
+                        # 自動嘗試從 yfinance 取得公司名稱
+                        short_name = tk.info.get("shortName", code)
                         close = float(df["Close"].iloc[-1])
                         prev_c = float(df["Close"].iloc[-2])
                         diff_pct = (close - prev_c) / prev_c * 100
                         icon = "🔴" if diff_pct > 0 else "🟢"
 
-                        st.markdown(f"### {icon} **{clean_code} {disp_name}** ｜ 現價：`{close:.2f}` 元 ({diff_pct:+.2f}%)")
+                        st.markdown(f"### {icon} **{code} {short_name}** ｜ 現價：`{close:.2f}` 元 ({diff_pct:+.2f}%)")
 
-                        # 內嵌即時線圖
+                        # 即時線圖
                         st.caption("📈 近 6 個月走勢圖與均線結構 (5MA / 20MA / 60MA)：")
                         df["5MA"] = df["Close"].rolling(5).mean()
                         df["20MA"] = df["Close"].rolling(20).mean()
@@ -203,11 +153,11 @@ with tab_diag:
                         st.line_chart(df[["Close", "5MA", "20MA", "60MA"]].iloc[-90:])
 
                         # 大盤聯動決策指引
-                        st.markdown("#### 🎯 進場適宜度與策略診斷")
+                        st.markdown("#### 🎯 進場適宜度評估")
                         if not market_allow:
-                            st.error(f"🛑 **【不建議進場】** 大盤處於空頭或轉折風險區，未見有效止跌量能。即使個股符合形態，進場勝率大幅降低，建議空手觀望！")
+                            st.error("🛑 **【大盤禁止進場】** 目前大盤處於空頭或轉折風險區，未見止跌爆量。即使個股符合形態，進場風險過高，建議空手觀望！")
                         else:
-                            st.success(f"✅ **【允許交易】** 大盤環境符合准入標準，可參考下方策略點位分批佈局。")
+                            st.success("✅ **【大盤准入放行】** 盤勢符合進場環境，可依照下方動態點位分批試單。")
 
                         # 計算點位
                         scale = tot_w if tot_w > 0 else 100
@@ -244,7 +194,7 @@ with tab_diag:
 # ==========================================
 with tab_backtest:
     st.subheader("🧪 歷史策略回測與壓力測試")
-    st.caption("套用上方自訂資金配比與風控停損點位，評估策略在歷史極端行情的表現：")
+    st.caption("套用上方自訂資金配比與風控停損點位，評估歷史極端行情的表現：")
 
     scenario = st.radio(
         "選擇測試情境：",
