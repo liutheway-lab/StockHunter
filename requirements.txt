@@ -5,4 +5,4 @@ requests
 lxml
 html5lib
 numpy
-poorly
+plotly
