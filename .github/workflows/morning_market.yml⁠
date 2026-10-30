@@ -1,27 +1,26 @@
-name: Morning Market Brief (08:00)
+name: Morning Market Brief (08:30)
 
 on:
   schedule:
-    # 台灣時間 08:00 (UTC 00:00)
-    - cron: '0 0 * * 1-5'
+    - cron: '30 0 * * 1-5'
   workflow_dispatch:
 
 jobs:
-  run-market:
+  run-morning:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: pip install yfinance pandas requests
 
-      - name: Run Morning Market Brief
+      - name: Run Morning Brief
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
