@@ -1,13 +1,10 @@
-name: Market Crash Sentinel (13:40)
+name: Crash Defense Backtest (2022 Stress Test)
 
 on:
-  schedule:
-    # 台灣時間平日 13:40 (UTC 05:40)
-    - cron: '40 5 * * 1-5'
-  workflow_dispatch: # 支援隨時手動一鍵檢測
+  workflow_dispatch:
 
 jobs:
-  run-crash-sentinel:
+  crash-backtest:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -21,8 +18,8 @@ jobs:
       - name: Install Dependencies
         run: pip install yfinance pandas requests
 
-      - name: Run Sentinel
+      - name: Run Crash Backtest
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: python crash_sentinel.py
+        run: python backtest_crash.py
