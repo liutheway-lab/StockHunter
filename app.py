@@ -22,7 +22,7 @@ if "bt_w2" not in st.session_state: st.session_state.bt_w2 = 40
 def set_dw(a, b): st.session_state.diag_w1, st.session_state.diag_w2 = a, b
 def set_bw(a, b): st.session_state.bt_w1, st.session_state.bt_w2 = a, b
 
-# --- 繪製 K 線 + 成交量（以台股法定「張數」計算） ---
+# --- 繪製 K 線 + 成交量（修復切頂問題、高度擴展至 420px） ---
 def plot_k_vol(df):
     p = df.iloc[-60:].copy()
     p["Vol_Lots"] = p["Volume"] / 1000.0  # 股數轉張數
@@ -31,68 +31,32 @@ def plot_k_vol(df):
     dates = [d.strftime('%m/%d') for d in p.index]
     v_colors = ['#e04a4a' if c >= o else '#2e9e4f' for c, o in zip(p["Close"], p["Open"])]
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.72, 0.28])
+    # 調整主圖與副圖比例為 78% : 22%，預留充足上方頭部空間
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.78, 0.22])
+    
+    # 主 K 線
     fig.add_trace(go.Candlestick(x=dates, open=p["Open"], high=p["High"], low=p["Low"], close=p["Close"], name="日K", increasing_line_color='#e04a4a', decreasing_line_color='#2e9e4f'), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["5MA"], line=dict(color='#f1c40f', width=1.2), name="5MA"), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["20MA"], line=dict(color='#9b59b6', width=1.4), name="20MA"), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["60MA"], line=dict(color='#3498db', width=1.6), name="60MA"), row=1, col=1)
     
-    # 底部成交量柱（張數）
+    # 成交量柱（張數）
     fig.add_trace(go.Bar(x=dates, y=p["Vol_Lots"], marker_color=v_colors, name="成交量 (張)"), row=2, col=1)
-    fig.add_trace(go.Scatter(x=dates, y=p["20VMA"], line=dict(color='#e67e22', width=1.1), name="20均量(張)"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=p["20VMA"], line=dict(color='#e67e22', width=1.1), name="20均量"), row=2, col=1)
 
-    fig.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=10, b=5), height=340, legend=dict(orientation="h", y=1.02, x=0), template="plotly_dark", dragmode=False)
+    fig.update_layout(
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=5, r=5, t=25, b=5),  # 增加頂部 margin 避免削頂
+        height=420,                         # 擴展高度給足 K 線伸展空間
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
+        template="plotly_dark",
+        dragmode=False
+    )
     fig.update_xaxes(type="category", tickangle=-45, showgrid=False)
     fig.update_yaxes(side="right", gridcolor='rgba(255,255,255,0.08)')
     return fig
 
-# --- 本地廣譜台股對照名冊 (涵蓋光學、生技、鋼鐵、散熱、電子、重電等) ---
-FULL_TW_STOCK_MAP = {
-    # 光學
-    "3406": ("玉晶光", "光電 / 光學鏡頭", ["iPhone潛望式鏡頭", "Meta VR概念", "蘋果鏡頭供應鏈"]),
-    "3008": ("大立光", "光電 / 光學鏡頭", ["高階長焦鏡頭", "蘋果概念", "車用鏡頭"]),
-    "3504": ("揚明光", "光電 / 車用光學", ["微投影", "AR/VR光學模組", "車載光學"]),
-    "3362": ("先進光", "光電 / 筆電鏡頭", ["NB鏡頭龍頭", "指紋辨識", "車載鏡頭模組"]),
-    # 生技醫療
-    "6472": ("保瑞", "生技醫療", ["CDMO製藥委外", "美洲代工", "學名藥外銷"]),
-    "1795": ("美時", "生技醫療", ["抗癌藥物外銷", "血癌藥", "國際藥廠代工"]),
-    "6446": ("藥華藥", "生技醫療", ["罕見血癌新藥", "美國FDA查廠", "新藥研發"]),
-    "4743": ("合一", "生技醫療", ["糖尿病足潰瘍傷口乳膏", "新藥授權", "中天集團"]),
-    "4128": ("中天", "生技醫療", ["生技創投", "免疫療法", "新藥控股"]),
-    # 鋼鐵與基礎建設
-    "2002": ("中鋼", "鋼鐵工業", ["碳鋼線材", "中鋼盤價", "公共工程推動"]),
-    "2027": ("大成鋼", "鋼鐵工業", ["美國鋁捲板龍頭", "不銹鋼通路", "美國基礎建設"]),
-    "2006": ("東和鋼鐵", "鋼鐵工業", ["H型鋼龍頭", "鋼筋需求", "耐震鋼構"]),
-    "2014": ("中鴻", "鋼鐵工業", ["熱軋鋼捲", "鋼鐵盤價調漲", "冷軋外銷"]),
-    # 半導體、散熱、伺服器
-    "2330": ("台積電", "半導體業", ["3nm/2nm先進製程", "CoWoS先進封裝", "AI晶片代工"]),
-    "2317": ("鴻海", "電腦及週邊", ["GB200 AI伺服器", "電動車代工", "水冷伺服器機櫃"]),
-    "2454": ("聯發科", "半導體 / IC設計", ["天璣系列手機晶片", "邊緣AI", "客製化ASIC晶片"]),
-    "2382": ("廣達", "電腦及週邊", ["AI伺服器代工", "CSP雲端大廠", "AI PC筆電"]),
-    "3231": ("緯創", "電腦及週邊", ["GPU基板算力模組", "Compute Board", "伺服器組裝"]),
-    "3017": ("奇鋐", "電子零組件 / 散熱", ["3D VC均熱板", "液冷散熱模組", "水冷板"]),
-    "3324": ("雙鴻", "電子零組件 / 散熱", ["伺服器水冷散熱", "冷卻液分配CDU", "散熱板"]),
-    "6274": ("台燿", "電子零組件 / CCL", ["高頻高速銅箔基板", "800G交換器", "PCIe 5.0"]),
-    "8054": ("安國", "半導體 / ASIC", ["神盾集團", "客製化晶片設計", "Arm架構"]),
-    "1519": ("華城", "電機機械 / 重電", ["電力變壓器外銷", "台電強韌電網", "儲能綠電"]),
-    "1513": ("中興電", "電機機械 / 重電", ["GIS氣體絕緣開關", "台電強韌電網", "氫能充電"]),
-    "2603": ("長榮", "航運業", ["美西/美東長約", "歐洲線貨櫃", "SCFI運價"]),
-}
-
-def resolve_meta(code):
-    if code in FULL_TW_STOCK_MAP:
-        return FULL_TW_STOCK_MAP[code]
-    try:
-        r = requests.get(f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.searchResult;query={code}", headers={"User-Agent": "Mozilla/5.0"}, timeout=3).json()
-        it = r.get("list", [])
-        if it:
-            name = it[0].get("symbolName", code)
-            sector = it[0].get("sectorName") or it[0].get("industryName") or "上市櫃一般"
-            return name, sector, [f"{sector}概念", "法人籌碼動能", "波段趨勢股"]
-    except:
-        pass
-    return code, "台灣上市櫃股票", ["市場關注標的"]
-
+# --- 神秘金字塔籌碼 ---
 def get_tdcc(code):
     try:
         r = requests.get(f"https://norway.twsthr.info/StockHolders.aspx?stock={code}", timeout=3, headers={"User-Agent": "Mozilla/5.0"})
@@ -140,7 +104,7 @@ with tab_diag:
         c1, c2 = st.columns(2)
         c1.metric("加權指數", f"{c_tw:,.1f}")
         c2.metric("位階判定", f"第 {lvl} 層", "止跌量達標" if rebound else "量能不足")
-        st.caption("加權指數日 K 線與成交張數走勢：")
+        st.caption("加權指數日 K 線與成交量走勢：")
         st.plotly_chart(plot_k_vol(twii), use_container_width=True, config={"displayModeBar": False})
         
         if ok: st.success(f"🟢 **大盤准入**：{desc} 允許進場。")
@@ -162,13 +126,13 @@ with tab_diag:
 
     st.divider()
     st.subheader("🔍 個股即時診斷與點位試算")
-    code = st.text_input("輸入 4 位台股代號（例：3406、6472、2002、2330）：", "3406").strip()
+    code = st.text_input("輸入 4 位台股代號（例：3406、2330、2002、6472）：", "3406").strip()
 
     if st.button("🚀 開始即時診斷", use_container_width=True):
         if not (code.isdigit() and len(code) == 4):
             st.error("請輸入正確 4 碼數字股票代號！")
         else:
-            with st.spinner("分析個股與產業題材中..."):
+            with st.spinner("載入個股行情中..."):
                 ticker = f"{code}.TW"
                 tk = yf.Ticker(ticker)
                 df = tk.history(period="6mo")
@@ -180,12 +144,15 @@ with tab_diag:
                 if df.empty or len(df) < 10:
                     st.error(f"查無代號【{code}】歷史資料，請確認是否為有效掛牌標的。")
                 else:
-                    name, sec, tags = resolve_meta(code)
+                    # 直接採用 yfinance 官方標準名稱與產業（免繁雜爬蟲）
+                    info = tk.info
+                    name = info.get("shortName") or info.get("longName") or f"Ticker {code}"
+                    sector = info.get("sector") or info.get("industry") or "Taiwan Listed Equities"
+
                     close = float(df["Close"].iloc[-1])
                     diff = (close - float(df["Close"].iloc[-2])) / float(df["Close"].iloc[-2]) * 100
                     st.markdown(f"### {'🔴' if diff > 0 else '🟢'} **{code} {name}** ｜ 現價：`{close:.2f}` 元 ({diff:+.2f}%)")
-                    st.markdown(f"🧩 **所屬產業族群**：`{sec}`")
-                    st.markdown("🔥 **核心題材概念**：" + " ".join([f"`{t}`" for t in tags]))
+                    st.markdown(f"🧩 **所屬產業類別**：`{sector}`")
                     
                     r_tdcc, t_tdcc = get_tdcc(code)
                     c_t1, c_t2 = st.columns([1, 2])
