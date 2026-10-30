@@ -4,7 +4,7 @@ import requests
 import yfinance as yf
 
 # ==========================================
-# 1. 回測環境與參數設定 (10年跨度)
+# 1. 回測環境與參數設定 (5年跨度)
 # ==========================================
 TG_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT = os.getenv("TG_CHAT_ID", "")
@@ -164,7 +164,7 @@ for t in TICKERS:
 df_res = pd.DataFrame(all_trades)
 
 if df_res.empty:
-    report = f"⚠️ 在 10 年期間 ({START_DATE} ~ {END_DATE}) 未觸發任何交易訊號。"
+    report = f"⚠️ 在 5 年期間 ({START_DATE} ~ {END_DATE}) 未觸發任何交易訊號。"
 else:
     wins = df_res[df_res["pnl"] > 0]
     losses = df_res[df_res["pnl"] < 0]
@@ -177,7 +177,7 @@ else:
     p_l_ratio = f"{abs(avg_win / avg_loss):.2f}:1" if avg_loss != 0 else "N/A"
 
     report = (
-        f"📊 *【三段金字塔策略 · 10年期歷史回測報告】*\n"
+        f"📊 *【三段金字塔策略 · 5 年期歷史回測報告】*\n"
         f"📅 期間：`{START_DATE}` ~ `{END_DATE}`\n"
         f"────────────────────\n"
         f"• 總交易次數：`{len(df_res)}` 次\n"
