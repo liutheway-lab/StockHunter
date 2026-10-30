@@ -150,6 +150,12 @@ def check_tdcc_increasing(stock_id: str):
     return False, None, None
 
 
+def get_tv_link(ticker: str):
+    if ticker.endswith(".TWO"):
+        return ticker.replace(".TWO", ""), f"https://tw.tradingview.com/chart/?symbol=TPEX%3A{ticker.replace('.TWO', '')}"
+    return ticker.replace(".TW", ""), f"https://tw.tradingview.com/chart/?symbol=TWSE%3A{ticker.replace('.TW', '')}"
+
+
 # =====================================================
 # 3. 策略分析模組
 # =====================================================
@@ -279,18 +285,154 @@ def analyze_bottom(df, ticker, info, is_large_inc, latest_ratio, diff):
 
 
 # =====================================================
-# 4. 執行模式模組 (night, morning, monitor)
+# 4. 執行模組 (晨間速報 · 修正基準點數與漲跌幅)
 # =====================================================
-def get_tv_link(ticker: str):
-    if ticker.endswith(".TWO"):
-        return ticker.replace(".TWO", ""), f"https://tw.tradingview.com/chart/?symbol=TPEX%3A{ticker.replace('.TWO', '')}"
-    return ticker.replace(".TW", ""), f"https://tw.tradingview.com/chart/?symbol=TWSE%3A{ticker.replace('.TW', '')}"
+def run_morning():
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    symbols = {
+        "小Nasdaq期": "NQ=F",
+        "小S&P期": "ES=F",
+        "小道瓊期": "YM=F",
+        "日經225": "^N225",
+        "韓國KOSPI": "^KS11",
+        "恐慌指數VIX": "^VIX",
+    }
+
+    market_lines = []
+
+    for label, sym in symbols.items():
+        try:
+            tk = yf.Ticker(sym)
+            hist = tk.history(period="5d", interval="1d")
+
+            if hist.empty or len(hist) < 2:
+                continue
+
+            curr = float(hist["Close"].iloc[-1])
+
+            # 優先讀取官方標準前日收盤價 (Previous Close)
+            prev = None
+            try:
+                fast_info = getattr(tk, "fast_info", None)
+                if fast_info and hasattr(fast_info, "previous_close") and fast_info.previous_close:
+                    prev = float(fast_info.previous_close)
+            except Exception:
+                pass
+
+            if not prev or prev <= 0:
+                prev = float(hist["Close"].iloc[-2])
+
+            diff_pts = curr - prev
+            pct_chg = (diff_pts / prev) * 100
+
+            # 台股慣例：紅漲 🔴，綠跌 🟢
+            if diff_pts > 0:
+                icon = "🔴"
+                sign = "+"
+            elif diff_pts < 0:
+                icon = "🟢"
+                sign = ""
+            else:
+                icon = "⚪"
+                sign = " "
+
+            # 依指數大小切換小數點位數
+            if curr >= 1000:
+                curr_str = f"{curr:,.1f}"
+                diff_str = f"{sign}{diff_pts:,.1f} 點"
+            else:
+                curr_str = f"{curr:,.2f}"
+                diff_str = f"{sign}{diff_pts:,.2f}"
+
+            market_lines.append(
+                f"{icon} *{label}*：`{curr_str}` ｜ `{diff_str}`（`{pct_chg:+.2f}%`）"
+            )
+        except Exception as e:
+            market_lines.append(f"⚠️ *{label}*：獲取異常 ({e})")
+
+    report = (
+        f"☀️ *【台股晨間作戰速報 · 08:30】*\n"
+        f"📅 執行時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n"
+        f"────────────────────\n"
+        f"🌍 *即時國際盤態與期指走勢：*\n" +
+        "\n".join(market_lines) +
+        f"\n────────────────────\n"
+        f"💡 08:45 台指期開盤、09:00 現貨開盤，請搭配昨夜作戰清單進場。"
+    )
+
+    send_telegram([report])
+    print("晨間國際行情推播完成。")
 
 
+# =====================================================
+# 5. 執行模組 (尾盤哨兵 · 13:18)
+# =====================================================
+def run_monitor():
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    holdings = get_remote_holdings()
+    if not holdings:
+        print(f"[{now.strftime('%H:%M:%S')}] Google 試算表目前無任何持股需監控。")
+        return
+
+    tickers = list(holdings.keys())
+    try:
+        data = yf.download(tickers, period="5d", interval="1d", group_by="ticker", auto_adjust=True, progress=False)
+    except Exception as e:
+        print(f"獲取持股報價異常: {e}")
+        return
+
+    alerts, safe_lines = [], []
+    for t, info in holdings.items():
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                sub = data[t].dropna(subset=["Close"]) if t in data.columns.levels[0] else data.xs(t, axis=1, level=1).dropna(subset=["Close"])
+            else:
+                sub = data.dropna(subset=["Close"])
+            if sub.empty:
+                continue
+
+            curr = to_tw_tick(float(sub["Close"].iloc[-1]))
+            E, B, stage = info["entry"], info["B"], info["stage"]
+
+            stop_second = to_tw_tick(B * (1 - STOP_ADD_PCT))
+            loss_second = (stop_second - B) * TRANCHE_2
+            breakeven = to_tw_tick((E * TRANCHE_1 - loss_second) / TRANCHE_1)
+
+            if stage == 1:
+                stop_first = to_tw_tick(E * (1 - STOP_PCT))
+                if curr >= B:
+                    alerts.append(f"🚀 *【加碼訊號】{t}* 現價 `{curr}` 突破前高 `{B}`！請動用 40% 資金加碼第 2 筆，並將試算表 stage 改為 2。")
+                elif curr <= stop_first:
+                    alerts.append(f"🚨 *【停損警報】{t}* 現價 `{curr}` 跌破停損點 `{stop_first}` (-10%)！請全數平倉第 1 筆。")
+                else:
+                    safe_lines.append(f"• *{t}* (階段1): 現價 `{curr}` ｜ 停損守 `{stop_first}` ｜ 前高突破看 `{B}`")
+
+            elif stage == 2:
+                ext_price = to_tw_tick(B * EXT_RATIO)
+                if curr <= stop_second:
+                    alerts.append(
+                        f"🚨 *【第 2 筆加碼停損】{t}* 現價 `{curr}` 跌破專屬防守價 `{stop_second}` (-5%)！\n"
+                        f"👉 建議平倉砍掉加碼的 40% 部位。第 1 筆保本底線守 `{breakeven}`。請將 stage 改回 1。"
+                    )
+                elif curr >= ext_price:
+                    alerts.append(f"🌟 *【第 3 筆打滿】{t}* 現價 `{curr}` 突破延伸點 `{ext_price}` (+8%)！請動用剩餘 30% 打滿部位，防守移至前高 `{B}`。")
+                else:
+                    safe_lines.append(f"• *{t}* (階段2): 現價 `{curr}` ｜ 假突破防守守 `{stop_second}`")
+        except Exception:
+            continue
+
+    if alerts:
+        send_telegram([f"⚡ *【台股尾盤防守警報 · 13:18】*\n📅 時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n────────────────────"] + alerts)
+    elif safe_lines:
+        send_telegram([f"🛡️ *【台股尾盤持股安全回報 · 13:18】*\n📅 時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n────────────────────\n" + "\n".join(safe_lines)])
+
+
+# =====================================================
+# 6. 執行模組 (夜間雙策略掃描 · 22:30)
+# =====================================================
 def run_night():
     now = datetime.now(ZoneInfo("Asia/Taipei"))
 
-    # 抓取台股全市場母體清單
     universe = {}
     for mode, suffix in ((2, ".TW"), (4, ".TWO")):
         url = f"https://isin.twse.com.tw/isin/C_public.jsp?strMode={mode}"
@@ -355,7 +497,6 @@ def run_night():
                 continue
         time.sleep(1)
 
-    # 組合 Telegram 推播訊息
     head = (
         f"🌙 *【台股夜間雙策略作戰名單 · 22:30】*\n"
         f"📅 結算時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n"
@@ -410,102 +551,9 @@ def run_night():
     print("夜間選股推播完成。")
 
 
-def run_morning():
-    now = datetime.now(ZoneInfo("Asia/Taipei"))
-    symbols = {
-        "日經225": "^N225", "韓國KOSPI": "^KS11", "小Nasdaq期": "NQ=F",
-        "小S&P期": "ES=F", "小道瓊期": "YM=F", "恐慌指數VIX": "^VIX"
-    }
-    market_lines = []
-    try:
-        data = yf.download(list(symbols.values()), period="5d", interval="1d", progress=False, group_by="ticker")
-        for label, sym in symbols.items():
-            try:
-                sub = data[sym].dropna(subset=["Close"]) if isinstance(data.columns, pd.MultiIndex) else data.dropna(subset=["Close"])
-                if len(sub) >= 2:
-                    curr = float(sub["Close"].iloc[-1])
-                    prev = float(sub["Close"].iloc[-2])
-                    pct = (curr - prev) / prev * 100
-                    icon = "🔴" if pct < 0 else "🟢"
-                    market_lines.append(f"{icon} *{label}*：`{curr:,.1f}`（{pct:+.2f}%）")
-            except Exception:
-                continue
-    except Exception as e:
-        market_lines.append(f"⚠️ 國際行情獲取異常: {e}")
-
-    report = (
-        f"☀️ *【台股晨間作戰速報 · 08:30】*\n"
-        f"📅 執行時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n"
-        f"────────────────────\n"
-        f"🌍 *即時國際盤態與期指走勢：*\n" +
-        "\n".join(market_lines) +
-        f"\n────────────────────\n"
-        f"💡 08:45 台指期開盤、09:00 現貨開盤，請搭配昨夜作戰清單進場。"
-    )
-    send_telegram([report])
-    print("晨間速報推播完成。")
-
-
-def run_monitor():
-    now = datetime.now(ZoneInfo("Asia/Taipei"))
-    holdings = get_remote_holdings()
-    if not holdings:
-        print(f"[{now.strftime('%H:%M:%S')}] Google 試算表目前無任何持股需監控。")
-        return
-
-    tickers = list(holdings.keys())
-    try:
-        data = yf.download(tickers, period="5d", interval="1d", group_by="ticker", auto_adjust=True, progress=False)
-    except Exception as e:
-        print(f"獲取持股報價異常: {e}")
-        return
-
-    alerts, safe_lines = [], []
-    for t, info in holdings.items():
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                sub = data[t].dropna(subset=["Close"]) if t in data.columns.levels[0] else data.xs(t, axis=1, level=1).dropna(subset=["Close"])
-            else:
-                sub = data.dropna(subset=["Close"])
-            if sub.empty:
-                continue
-
-            curr = to_tw_tick(float(sub["Close"].iloc[-1]))
-            E, B, stage = info["entry"], info["B"], info["stage"]
-
-            stop_second = to_tw_tick(B * (1 - STOP_ADD_PCT))
-            loss_second = (stop_second - B) * TRANCHE_2
-            breakeven = to_tw_tick((E * TRANCHE_1 - loss_second) / TRANCHE_1)
-
-            if stage == 1:
-                stop_first = to_tw_tick(E * (1 - STOP_PCT))
-                if curr >= B:
-                    alerts.append(f"🚀 *【加碼訊號】{t}* 現價 `{curr}` 突破前高 `{B}`！請動用 40% 資金加碼第 2 筆，並將試算表 stage 改為 2。")
-                elif curr <= stop_first:
-                    alerts.append(f"🚨 *【停損警報】{t}* 現價 `{curr}` 跌破停損點 `{stop_first}` (-10%)！請全數平倉第 1 筆。")
-                else:
-                    safe_lines.append(f"• *{t}* (階段1): 現價 `{curr}` ｜ 停損守 `{stop_first}` ｜ 前高突破看 `{B}`")
-
-            elif stage == 2:
-                ext_price = to_tw_tick(B * EXT_RATIO)
-                if curr <= stop_second:
-                    alerts.append(
-                        f"🚨 *【第 2 筆加碼停損】{t}* 現價 `{curr}` 跌破專屬防守價 `{stop_second}` (-5%)！\n"
-                        f"👉 建議平倉砍掉加碼的 40% 部位。第 1 筆保本底線守 `{breakeven}`。請將 stage 改回 1。"
-                    )
-                elif curr >= ext_price:
-                    alerts.append(f"🌟 *【第 3 筆打滿】{t}* 現價 `{curr}` 突破延伸點 `{ext_price}` (+8%)！請動用剩餘 30% 打滿部位，防守移至前高 `{B}`。")
-                else:
-                    safe_lines.append(f"• *{t}* (階段2): 現價 `{curr}` ｜ 假突破防守守 `{stop_second}`")
-        except Exception:
-            continue
-
-    if alerts:
-        send_telegram([f"⚡ *【台股尾盤防守警報 · 13:18】*\n📅 時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n────────────────────"] + alerts)
-    elif safe_lines:
-        send_telegram([f"🛡️ *【台股尾盤持股安全回報 · 13:18】*\n📅 時間：`{now.strftime('%Y-%m-%d %H:%M')}`\n────────────────────\n" + "\n".join(safe_lines)])
-
-
+# =====================================================
+# 7. 主程式進入點
+# =====================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Stock Screener Agent")
     parser.add_argument("--mode", choices=["night", "morning", "monitor"], default="night")
