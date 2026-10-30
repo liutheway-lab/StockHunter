@@ -1,0 +1,28 @@
+name: Market Crash Sentinel (13:40)
+
+on:
+  schedule:
+    # 台灣時間平日 13:40 (UTC 05:40)
+    - cron: '40 5 * * 1-5'
+  workflow_dispatch: # 支援隨時手動一鍵檢測
+
+jobs:
+  run-crash-sentinel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install yfinance pandas requests
+
+      - name: Run Sentinel
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python crash_sentinel.py
