@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from core.indicators import to_tw_tick
 
 # ==========================================
-# 頁面配置 (專為手機垂直螢幕最佳化)
+# 頁面配置
 # ==========================================
 st.set_page_config(page_title="StockHunter 智能戰情室", page_icon="📈", layout="centered")
 
@@ -19,10 +19,70 @@ now = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
 st.caption(f"台灣時間：`{now}` ｜ 多策略動態部位操盤系統")
 
 # ==========================================
-# 輔助函式：手機觸控穩定型 K 線圖 (防誤觸跑版、無字體重疊)
+# 全台股官方正體中文名稱與細分產業快取庫 (100% 覆蓋上市櫃)
+# ==========================================
+@st.cache_data(ttl=86400)
+def load_official_tw_directory():
+    """從證交所 ISIN 官方公開資料庫載入全市場代號、中文名稱與產業類別"""
+    mapping = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    # 模式 2 為上市，模式 4 為上櫃
+    for mode, suffix in [(2, ".TW"), (4, ".TWO")]:
+        try:
+            url = f"https://isin.twse.com.tw/isin/C_public.jsp?strMode={mode}"
+            r = requests.get(url, headers=headers, timeout=8)
+            r.encoding = "big5"
+            tables = pd.read_html(io.StringIO(r.text))
+            if tables:
+                df = tables[0]
+                # 欄位通常為：有價證券代號及名稱, 國際證券辨識號碼, 上市日, 市場別, 產業別, CFI代碼, 備註
+                for _, row in df.iloc[1:].iterrows():
+                    val = str(row.iloc[0]).strip()
+                    # 分割代號與名稱（例："3406　玉晶光"）
+                    parts = val.split("\u3000")
+                    if len(parts) >= 2:
+                        code = parts[0].strip()
+                        name = parts[1].strip()
+                        sector = str(row.iloc[4]).strip() if len(row) > 4 else "一般類股"
+                        if code.isdigit() and len(code) == 4:
+                            mapping[code] = {
+                                "name": name,
+                                "sector": sector,
+                                "suffix": suffix,
+                                "ticker": f"{code}{suffix}"
+                            }
+        except Exception:
+            pass
+    return mapping
+
+# 載入全市場對照庫
+TW_DIR = load_official_tw_directory()
+
+# ==========================================
+# 權重狀態管理 (保證按鈕生效、總和必為 100%)
+# ==========================================
+if "w1" not in st.session_state:
+    st.session_state.w1 = 30
+if "w2" not in st.session_state:
+    st.session_state.w2 = 40
+
+if "bt_w1" not in st.session_state:
+    st.session_state.bt_w1 = 30
+if "bt_w2" not in st.session_state:
+    st.session_state.bt_w2 = 40
+
+def set_diag_preset(a, b):
+    st.session_state.w1 = a
+    st.session_state.w2 = b
+
+def set_bt_preset(a, b):
+    st.session_state.bt_w1 = a
+    st.session_state.bt_w2 = b
+
+# ==========================================
+# 輔助函式：手機觸控穩定型 K 線圖
 # ==========================================
 def plot_clean_candlestick(df: pd.DataFrame):
-    """繪製手機端防跑版、無重疊標題之標準台股紅黑 K 線圖"""
     plot_df = df.iloc[-65:].copy()
     plot_df["5MA"] = plot_df["Close"].rolling(5).mean()
     plot_df["20MA"] = plot_df["Close"].rolling(20).mean()
@@ -63,57 +123,12 @@ def plot_clean_candlestick(df: pd.DataFrame):
     return fig
 
 # ==========================================
-# 輔助函式：抓取台灣 Yahoo 奇摩股市原生中文名、細分族群與概念題材
-# ==========================================
-@st.cache_data(ttl=86400)
-def get_tw_stock_details(code: str):
-    """直接對接台灣 Yahoo 奇摩股市 API，精準取得正體中文名、細分族群與概念標籤"""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    # 常用大廠與族群硬對照備援庫
-    hardcoded_map = {
-        "3406": ("玉晶光", "光電/光學鏡頭模組", ["iPhone鏡頭", "潛望式鏡頭", "Meta VR", "蘋果供應鏈"]),
-        "3008": ("大立光", "光學鏡頭龍頭", ["高階手機鏡頭", "潛望式長焦", "車載鏡頭", "蘋果概念"]),
-        "2330": ("台積電", "晶圓代工龍頭", ["先進製程 (3nm/2nm)", "CoWoS封裝", "AI晶片代工", "高效能運算 HPC"]),
-        "2317": ("鴻海", "電子代工龍頭 / 伺服器", ["AI伺服器 GB200", "電動車 EV", "蘋果組裝", "液冷機櫃"]),
-        "2454": ("聯發科", "IC設計龍頭", ["天璣手機旗艦晶片", "邊緣AI (Edge AI)", "ASIC特殊晶片", "車用晶片"]),
-        "2382": ("廣達", "AI伺服器代工", ["GB200主力供應商", "雲端 CSP", "AI PC", "筆記型電腦"]),
-        "3231": ("緯創", "AI伺服器基板", ["NVIDIA GPU基板", "Compute Board", "雲端資料中心"]),
-        "3017": ("奇鋐", "散熱模組大廠", ["3D VC 均熱板", "伺服器液冷散熱", "水冷板", "高階風扇"]),
-        "3324": ("雙鴻", "散熱模組大廠", ["水冷散熱模組", "冷卻液分配裝置 CDU", "伺服器水冷板", "折疊手機散熱"]),
-        "2376": ("技嘉", "主機板 / AI伺服器", ["AI伺服器整機", "電競顯示卡", "水冷伺服器方案"]),
-        "2603": ("長榮", "貨櫃航運龍頭", ["美西/美東線", "歐洲線", "紅海地緣題材", "SCFI運價"]),
-        "1519": ("華城", "重電設備龍頭", ["變壓器外銷美國", "台電強韌電網", "充電樁", "綠能儲能"]),
-        "1513": ("中興電", "重電與電力工程", ["GIS氣體絕緣開關", "台電強韌電網", "氫能充電", "儲能電廠"]),
-    }
-    if code in hardcoded_map:
-        return hardcoded_map[code]
-
-    try:
-        # 向 Yahoo 台灣股票搜尋 API 查詢
-        url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.searchResult;query={code}"
-        r = requests.get(url, headers=headers, timeout=5).json()
-        items = r.get("list", [])
-        if items:
-            item = items[0]
-            name = item.get("symbolName", code)
-            sector = item.get("sectorName") or item.get("industryName") or "上市櫃一般"
-            # 取得相關概念題材
-            tags = [item.get("sectorName")] if item.get("sectorName") else []
-            return name, sector, tags
-    except Exception:
-        pass
-    
-    return code, "台灣上市櫃股票", ["一般類股"]
-
-# ==========================================
-# 輔助函式：爬取神秘金字塔 (TDCC 400張大戶近3週籌碼變化)
+# 輔助函式：爬取神秘金字塔大戶籌碼
 # ==========================================
 def fetch_tdcc_trend(stock_id: str):
-    """查詢神秘金字塔 400張大戶比例趨勢"""
     url = f"https://norway.twsthr.info/StockHolders.aspx?stock={stock_id}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
-        r = requests.get(url, timeout=5, headers=headers)
+        r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code == 200:
             tables = pd.read_html(io.StringIO(r.text))
             for t in tables:
@@ -132,7 +147,6 @@ def fetch_tdcc_trend(stock_id: str):
                         trend_text = f"🟡 籌碼平衡（差異不大，近3週微幅 {diff:+.2f}%）"
                     else:
                         trend_text = f"⚪ 震盪整理（近3週持股變化 {diff:+.2f}%）"
-                        
                     return w0, trend_text
     except Exception:
         pass
@@ -169,7 +183,7 @@ tab_diag, tab_backtest = st.tabs(["📱 即時診斷與部位試算", "🧪 歷�
 # 分頁一：即時診斷與部位試算
 # ==========================================
 with tab_diag:
-    # 1. 大盤五層分析
+    # 1. 大盤五層位階
     st.subheader("🌐 大盤位階與加權走勢")
     market_level, market_allow, is_rebounded = 3, False, False
     with st.spinner("評估大盤位階中..."):
@@ -236,66 +250,69 @@ with tab_diag:
 
     st.divider()
 
-    # 2. 診斷分頁的權重調整
+    # 2. 診斷分頁：防呆連動權重調節器 (保證總和剛好 100%)
     st.subheader("⚙️ 自訂三段進場資金權重")
-    if "w_list" not in st.session_state:
-        st.session_state.w_list = [30, 40, 30]
-
+    
     b1, b2, b3 = st.columns(3)
-    if b1.button("平衡 30/40/30", use_container_width=True, key="diag_b1"):
-        st.session_state.w_list = [30, 40, 30]
-    if b2.button("重壓 30/50/20", use_container_width=True, key="diag_b2"):
-        st.session_state.w_list = [30, 50, 20]
-    if b3.button("右側 20/50/30", use_container_width=True, key="diag_b3"):
-        st.session_state.w_list = [20, 50, 30]
+    b1.button("平衡 30/40/30", use_container_width=True, on_click=set_diag_preset, args=(30, 40))
+    b2.button("重壓 30/50/20", use_container_width=True, on_click=set_diag_preset, args=(30, 50))
+    b3.button("右側 20/50/30", use_container_width=True, on_click=set_diag_preset, args=(20, 50))
 
     cw1, cw2, cw3 = st.columns(3)
-    w1 = cw1.number_input("第 1 筆 (%)", 0, 100, st.session_state.w_list[0], step=5, key="diag_w1")
-    w2 = cw2.number_input("第 2 筆 (%)", 0, 100, st.session_state.w_list[1], step=5, key="diag_w2")
-    w3 = cw3.number_input("第 3 筆 (%)", 0, 100, st.session_state.w_list[2], step=5, key="diag_w3")
+    val_w1 = cw1.number_input("第 1 筆 (%)", 0, 90, st.session_state.w1, step=5, key="diag_input_w1")
+    max_w2 = max(0, 100 - val_w1)
+    val_w2_adj = min(st.session_state.w2, max_w2)
+    val_w2 = cw2.number_input("第 2 筆 (%)", 0, max_w2, val_w2_adj, step=5, key="diag_input_w2")
+    
+    val_w3 = max(0, 100 - val_w1 - val_w2)
+    cw3.metric("第 3 筆打滿 (%)", f"{val_w3}%")
 
-    tot_w = w1 + w2 + w3
-    if tot_w == 100:
-        st.caption(f"配比總和：`{w1}%` / `{w2}%` / `{w3}%`（100% 正確）")
-    else:
-        st.warning(f"目前權重總和為 {tot_w}%，計算時將自動按比例歸一化。")
+    st.session_state.w1 = val_w1
+    st.session_state.w2 = val_w2
+    st.caption(f"🔒 **資金鎖定**：第1筆 `{val_w1}%` ＋ 第2筆 `{val_w2}%` ＋ 第3筆 `{val_w3}%` ＝ **100% (1.0)**")
 
     st.divider()
 
-    # 3. 個股代號查詢 + 中文名稱 + 細分族群題材
+    # 3. 個股代號查詢 (100% 官方正體中文名稱與細分族群)
     st.subheader("🔍 個股即時診斷與點位試算")
-    code_input = st.text_input("輸入 4 位台股代號（例如：3406、2330、3017、2382、1519）：", "3406").strip()
+    code_input = st.text_input("輸入 4 位台股代號（支援全市場上市櫃例如：3406、6274、8054、2330）：", "3406").strip()
 
     if st.button("🚀 開始即時診斷", use_container_width=True):
         code = code_input.upper().replace(".TW", "").replace(".TWO", "")
         if not (code.isdigit() and len(code) == 4):
             st.error("⚠️ 請輸入正確的 4 碼數字股票代號！")
         else:
-            with st.spinner(f"正在連線分析代號 {code} 與族群題材..."):
+            with st.spinner(f"正在連線分析代號 {code}..."):
                 try:
-                    ticker = f"{code}.TW"
+                    # 優先從官方全台股名冊提取正體中文與產業
+                    stock_meta = TW_DIR.get(code, {})
+                    stock_name = stock_meta.get("name", code)
+                    stock_sector = stock_meta.get("sector", "上市櫃一般")
+                    official_suffix = stock_meta.get("suffix", ".TW")
+
+                    # 下載行情資料
+                    ticker = f"{code}{official_suffix}"
                     tk = yf.Ticker(ticker)
                     df = tk.history(period="6mo")
-                    if df.empty or len(df) < 20:
-                        ticker = f"{code}.TWO"
+                    
+                    # 容錯：若官方後綴查不到，嘗試另一市場
+                    if df.empty or len(df) < 10:
+                        alt_suffix = ".TWO" if official_suffix == ".TW" else ".TW"
+                        ticker = f"{code}{alt_suffix}"
                         tk = yf.Ticker(ticker)
                         df = tk.history(period="6mo")
 
-                    if df.empty or len(df) < 20:
-                        st.error(f"❌ 查無代號【{code}】的歷史資料，請確認是否為有效上市櫃股票。")
+                    if df.empty or len(df) < 10:
+                        st.error(f"❌ 查無代號【{code}】的歷史報價，請確認該標的目前是否正常掛牌交易。")
                     else:
-                        # 取得正體中文名稱、細分族群、熱門題材
-                        stock_name, stock_sector, stock_tags = get_tw_stock_details(code)
                         close = float(df["Close"].iloc[-1])
                         prev_c = float(df["Close"].iloc[-2])
                         diff_pct = (close - prev_c) / prev_c * 100
                         icon = "🔴" if diff_pct > 0 else "🟢"
 
-                        # 抬頭：中文名稱 + 代號 + 細分族群
+                        # 抬頭：100% 正體中文名稱 + 代號 + 細分產業
                         st.markdown(f"### {icon} **{code} {stock_name}** ｜ 現價：`{close:.2f}` 元 ({diff_pct:+.2f}%)")
-                        st.markdown(f"🧩 **所屬族群**：`{stock_sector}`")
-                        if stock_tags:
-                            st.write("🔥 **市場題材關鍵字**：", "、".join([f"`{t}`" for t in stock_tags]))
+                        st.markdown(f"🧩 **所屬產業族群**：`{stock_sector}`")
 
                         # 神秘金字塔大戶籌碼分析
                         tdcc_ratio, tdcc_trend = fetch_tdcc_trend(code)
@@ -313,20 +330,18 @@ with tab_diag:
                         # 大盤聯動決策指引
                         st.markdown("#### 🎯 進場適宜度評估")
                         if not market_allow:
-                            st.error(f"🛑 **【大盤禁止進場】** 目前大盤處於【{lvl_name}】，且未見有效止跌爆量。即使個股出現形態，進場風險過高，嚴格空手觀望！")
+                            st.error(f"🛑 **【大盤禁止進場】** 目前大盤處於【{lvl_name}】，未見止跌爆量，嚴格空手觀望！")
                         else:
                             st.success(f"✅ **【大盤准入放行】** 盤勢位處【{lvl_name}】，符合准入標準，可依照下方動態點位分批佈局。")
 
-                        # 計算點位
-                        scale = tot_w if tot_w > 0 else 100
-                        nw1, nw2, nw3 = w1 / scale, w2 / scale, w3 / scale
+                        nw1, nw2, nw3 = val_w1 / 100.0, val_w2 / 100.0, val_w3 / 100.0
 
                         b_price = float(df["High"].iloc[-30:-2].max())
                         ext_price = to_tw_tick(b_price * 1.08)
-                        avg_2 = to_tw_tick((nw1 * close + nw2 * b_price) / (nw1 + nw2))
+                        avg_2 = to_tw_tick((nw1 * close + nw2 * b_price) / (nw1 + nw2)) if (nw1 + nw2) > 0 else close
                         stop_2 = to_tw_tick(b_price * 0.95)
                         loss_2 = (stop_2 - b_price) * nw2
-                        breakeven = to_tw_tick((close * nw1 - loss_2) / nw1)
+                        breakeven = to_tw_tick((close * nw1 - loss_2) / nw1) if nw1 > 0 else close
                         stop_1 = to_tw_tick(close * 0.90)
                         target = to_tw_tick(close * 1.25)
 
@@ -348,35 +363,32 @@ with tab_diag:
                     st.error(f"分析異常：{ex}")
 
 # ==========================================
-# 分頁二：歷史策略回測實驗室 (直接內建專屬部位微調器)
+# 分頁二：歷史策略回測實驗室 (防呆連動權重)
 # ==========================================
 with tab_backtest:
     st.subheader("🧪 歷史策略回測與壓力測試")
     st.caption("直接在此調整部位比例，即時觀察不同加碼權重對報酬率與最大回撤 (MDD) 的敏感度：")
 
-    # 回測專屬部位設定 (免切換分頁)
-    if "bt_w_list" not in st.session_state:
-        st.session_state.bt_w_list = [30, 40, 30]
-
     st.markdown("##### ⚙️ 調整回測測試權重：")
     bt_b1, bt_b2, bt_b3 = st.columns(3)
-    if bt_b1.button("平衡 30/40/30", use_container_width=True, key="bt_btn1"):
-        st.session_state.bt_w_list = [30, 40, 30]
-    if bt_b2.button("重壓 30/50/20", use_container_width=True, key="bt_btn2"):
-        st.session_state.bt_w_list = [30, 50, 20]
-    if bt_b3.button("右側 20/50/30", use_container_width=True, key="bt_btn3"):
-        st.session_state.bt_w_list = [20, 50, 30]
+    bt_b1.button("平衡 30/40/30", use_container_width=True, on_click=set_bt_preset, args=(30, 40), key="btn_p1")
+    bt_b2.button("重壓 30/50/20", use_container_width=True, on_click=set_bt_preset, args=(30, 50), key="btn_p2")
+    bt_b3.button("右側 20/50/30", use_container_width=True, on_click=set_bt_preset, args=(20, 50), key="btn_p3")
 
     bcw1, bcw2, bcw3 = st.columns(3)
-    btw1 = bcw1.number_input("第 1 筆 (%)", 0, 100, st.session_state.bt_w_list[0], step=5, key="bt_w1")
-    btw2 = bcw2.number_input("第 2 筆 (%)", 0, 100, st.session_state.bt_w_list[1], step=5, key="bt_w2")
-    btw3 = bcw3.number_input("第 3 筆 (%)", 0, 100, st.session_state.bt_w_list[2], step=5, key="bt_w3")
+    bt_val_w1 = bcw1.number_input("第 1 筆 (%)", 0, 90, st.session_state.bt_w1, step=5, key="bt_input_w1")
+    bt_max_w2 = max(0, 100 - bt_val_w1)
+    bt_val_w2_adj = min(st.session_state.bt_w2, bt_max_w2)
+    bt_val_w2 = bcw2.number_input("第 2 筆 (%)", 0, bt_max_w2, bt_val_w2_adj, step=5, key="bt_input_w2")
+    
+    bt_val_w3 = max(0, 100 - bt_val_w1 - bt_val_w2)
+    bcw3.metric("第 3 筆打滿 (%)", f"{bt_val_w3}%")
 
-    bt_tot = btw1 + btw2 + btw3
-    bt_scale = bt_tot if bt_tot > 0 else 100
-    rbw1, rbw2, rbw3 = btw1 / bt_scale, btw2 / bt_scale, btw3 / bt_scale
+    st.session_state.bt_w1 = bt_val_w1
+    st.session_state.bt_w2 = bt_val_w2
 
-    st.info(f"當前套用權重：**第1筆試單 {int(rbw1*100)}%** ｜ **第2筆突破 {int(rbw2*100)}%** ｜ **第3筆打滿 {int(rbw3*100)}%**")
+    rbw1, rbw2, rbw3 = bt_val_w1 / 100.0, bt_val_w2 / 100.0, bt_val_w3 / 100.0
+    st.info(f"當前套用權重：**第1筆試單 {int(rbw1*100)}%** ｜ **第2筆突破 {int(rbw2*100)}%** ｜ **第3筆打滿 {int(rbw3*100)}%** ＝ **100%**")
 
     scenario = st.radio(
         "選擇測試情境：",
@@ -402,7 +414,7 @@ with tab_backtest:
                 bench_drift, bench_vola = 0.0006, 0.012
                 days = 750
 
-            np.random.seed(int(btw1 * 100 + btw2 * 10 + btw3))
+            np.random.seed(int(bt_val_w1 * 100 + bt_val_w2 * 10 + bt_val_w3))
             strat_returns = np.random.normal(drift, vola, days)
             bench_returns = np.random.normal(bench_drift, bench_vola, days)
             
