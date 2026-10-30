@@ -1,4 +1,5 @@
 yfinance
 pandas
 requests
+python-telegram-bot
 lxml
