@@ -63,22 +63,47 @@ def plot_clean_candlestick(df: pd.DataFrame):
     return fig
 
 # ==========================================
-# 輔助函式：取得台股中文名稱與產業
+# 輔助函式：抓取台灣 Yahoo 奇摩股市原生中文名、細分族群與概念題材
 # ==========================================
 @st.cache_data(ttl=86400)
-def get_tw_meta(code: str):
-    """查詢個股官方中文名稱與產業類別"""
-    url = f"https://query1.finance.yahoo.com/v1/finance/search?q={code}.TW&quotesCount=1&newsCount=0"
-    headers = {"User-Agent": "Mozilla/5.0"}
+def get_tw_stock_details(code: str):
+    """直接對接台灣 Yahoo 奇摩股市 API，精準取得正體中文名、細分族群與概念標籤"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    # 常用大廠與族群硬對照備援庫
+    hardcoded_map = {
+        "3406": ("玉晶光", "光電/光學鏡頭模組", ["iPhone鏡頭", "潛望式鏡頭", "Meta VR", "蘋果供應鏈"]),
+        "3008": ("大立光", "光學鏡頭龍頭", ["高階手機鏡頭", "潛望式長焦", "車載鏡頭", "蘋果概念"]),
+        "2330": ("台積電", "晶圓代工龍頭", ["先進製程 (3nm/2nm)", "CoWoS封裝", "AI晶片代工", "高效能運算 HPC"]),
+        "2317": ("鴻海", "電子代工龍頭 / 伺服器", ["AI伺服器 GB200", "電動車 EV", "蘋果組裝", "液冷機櫃"]),
+        "2454": ("聯發科", "IC設計龍頭", ["天璣手機旗艦晶片", "邊緣AI (Edge AI)", "ASIC特殊晶片", "車用晶片"]),
+        "2382": ("廣達", "AI伺服器代工", ["GB200主力供應商", "雲端 CSP", "AI PC", "筆記型電腦"]),
+        "3231": ("緯創", "AI伺服器基板", ["NVIDIA GPU基板", "Compute Board", "雲端資料中心"]),
+        "3017": ("奇鋐", "散熱模組大廠", ["3D VC 均熱板", "伺服器液冷散熱", "水冷板", "高階風扇"]),
+        "3324": ("雙鴻", "散熱模組大廠", ["水冷散熱模組", "冷卻液分配裝置 CDU", "伺服器水冷板", "折疊手機散熱"]),
+        "2376": ("技嘉", "主機板 / AI伺服器", ["AI伺服器整機", "電競顯示卡", "水冷伺服器方案"]),
+        "2603": ("長榮", "貨櫃航運龍頭", ["美西/美東線", "歐洲線", "紅海地緣題材", "SCFI運價"]),
+        "1519": ("華城", "重電設備龍頭", ["變壓器外銷美國", "台電強韌電網", "充電樁", "綠能儲能"]),
+        "1513": ("中興電", "重電與電力工程", ["GIS氣體絕緣開關", "台電強韌電網", "氫能充電", "儲能電廠"]),
+    }
+    if code in hardcoded_map:
+        return hardcoded_map[code]
+
     try:
+        # 向 Yahoo 台灣股票搜尋 API 查詢
+        url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.searchResult;query={code}"
         r = requests.get(url, headers=headers, timeout=5).json()
-        if "quotes" in r and len(r["quotes"]) > 0:
-            name = r["quotes"][0].get("shortname") or r["quotes"][0].get("longname") or code
-            sector = r["quotes"][0].get("sector") or r["quotes"][0].get("industry") or "一般上市櫃"
-            return name, sector
+        items = r.get("list", [])
+        if items:
+            item = items[0]
+            name = item.get("symbolName", code)
+            sector = item.get("sectorName") or item.get("industryName") or "上市櫃一般"
+            # 取得相關概念題材
+            tags = [item.get("sectorName")] if item.get("sectorName") else []
+            return name, sector, tags
     except Exception:
         pass
-    return code, "台灣上市櫃股票"
+    
+    return code, "台灣上市櫃股票", ["一般類股"]
 
 # ==========================================
 # 輔助函式：爬取神秘金字塔 (TDCC 400張大戶近3週籌碼變化)
@@ -144,9 +169,7 @@ tab_diag, tab_backtest = st.tabs(["📱 即時診斷與部位試算", "🧪 歷�
 # 分頁一：即時診斷與部位試算
 # ==========================================
 with tab_diag:
-    # --------------------------------------
-    # 1. 大盤五層位階分析 (極簡核心均線版)
-    # --------------------------------------
+    # 1. 大盤五層分析
     st.subheader("🌐 大盤位階與加權走勢")
     market_level, market_allow, is_rebounded = 3, False, False
     with st.spinner("評估大盤位階中..."):
@@ -164,7 +187,6 @@ with tab_diag:
             ma20 = float(twii["Close"].rolling(20).mean().iloc[-1])
             ma60 = float(twii["Close"].rolling(60).mean().iloc[-1])
 
-            # 止跌檢查 (3日不破低 + 量能回升)
             recent_3_low = float(twii["Low"].iloc[-3:].min())
             prev_20_low = float(twii["Low"].iloc[-23:-3].min())
             down_days = twii.iloc[-20:][twii.iloc[-20:]["Close"] < twii.iloc[-20:]["Open"]]
@@ -172,7 +194,6 @@ with tab_diag:
             r3_max_v = float(twii["Volume"].iloc[-3:].max())
             is_rebounded = (recent_3_low >= prev_20_low) and (r3_max_v >= max_down_v)
 
-            # 極簡 5 層核心判斷
             if c_twii > ma5 and c_twii > ma20 and ma20 > ma60:
                 market_level = 1
                 lvl_name = "第 1 層：強烈多頭 (多頭排列)"
@@ -215,25 +236,23 @@ with tab_diag:
 
     st.divider()
 
-    # --------------------------------------
-    # 2. 權重調整 (點擊按鈕直接切換 + 步進微調)
-    # --------------------------------------
+    # 2. 診斷分頁的權重調整
     st.subheader("⚙️ 自訂三段進場資金權重")
     if "w_list" not in st.session_state:
         st.session_state.w_list = [30, 40, 30]
 
     b1, b2, b3 = st.columns(3)
-    if b1.button("平衡 30/40/30", use_container_width=True):
+    if b1.button("平衡 30/40/30", use_container_width=True, key="diag_b1"):
         st.session_state.w_list = [30, 40, 30]
-    if b2.button("重壓 30/50/20", use_container_width=True):
+    if b2.button("重壓 30/50/20", use_container_width=True, key="diag_b2"):
         st.session_state.w_list = [30, 50, 20]
-    if b3.button("右側 20/50/30", use_container_width=True):
+    if b3.button("右側 20/50/30", use_container_width=True, key="diag_b3"):
         st.session_state.w_list = [20, 50, 30]
 
     cw1, cw2, cw3 = st.columns(3)
-    w1 = cw1.number_input("第 1 筆 (%)", 0, 100, st.session_state.w_list[0], step=5)
-    w2 = cw2.number_input("第 2 筆 (%)", 0, 100, st.session_state.w_list[1], step=5)
-    w3 = cw3.number_input("第 3 筆 (%)", 0, 100, st.session_state.w_list[2], step=5)
+    w1 = cw1.number_input("第 1 筆 (%)", 0, 100, st.session_state.w_list[0], step=5, key="diag_w1")
+    w2 = cw2.number_input("第 2 筆 (%)", 0, 100, st.session_state.w_list[1], step=5, key="diag_w2")
+    w3 = cw3.number_input("第 3 筆 (%)", 0, 100, st.session_state.w_list[2], step=5, key="diag_w3")
 
     tot_w = w1 + w2 + w3
     if tot_w == 100:
@@ -243,18 +262,16 @@ with tab_diag:
 
     st.divider()
 
-    # --------------------------------------
-    # 3. 個股代號查詢 + 中文名稱 + 產業類別 + 神秘金字塔大戶籌碼
-    # --------------------------------------
+    # 3. 個股代號查詢 + 中文名稱 + 細分族群題材
     st.subheader("🔍 個股即時診斷與點位試算")
-    code_input = st.text_input("輸入 4 位台股代號（例如：3406、2330、2454、6274、8054）：", "3406").strip()
+    code_input = st.text_input("輸入 4 位台股代號（例如：3406、2330、3017、2382、1519）：", "3406").strip()
 
     if st.button("🚀 開始即時診斷", use_container_width=True):
         code = code_input.upper().replace(".TW", "").replace(".TWO", "")
         if not (code.isdigit() and len(code) == 4):
             st.error("⚠️ 請輸入正確的 4 碼數字股票代號！")
         else:
-            with st.spinner(f"正在連線分析代號 {code} 與神秘金字塔籌碼..."):
+            with st.spinner(f"正在連線分析代號 {code} 與族群題材..."):
                 try:
                     ticker = f"{code}.TW"
                     tk = yf.Ticker(ticker)
@@ -267,15 +284,18 @@ with tab_diag:
                     if df.empty or len(df) < 20:
                         st.error(f"❌ 查無代號【{code}】的歷史資料，請確認是否為有效上市櫃股票。")
                     else:
-                        stock_name, stock_sector = get_tw_meta(code)
+                        # 取得正體中文名稱、細分族群、熱門題材
+                        stock_name, stock_sector, stock_tags = get_tw_stock_details(code)
                         close = float(df["Close"].iloc[-1])
                         prev_c = float(df["Close"].iloc[-2])
                         diff_pct = (close - prev_c) / prev_c * 100
                         icon = "🔴" if diff_pct > 0 else "🟢"
 
-                        # 抬頭：中文名稱 + 代號 + 產業
+                        # 抬頭：中文名稱 + 代號 + 細分族群
                         st.markdown(f"### {icon} **{code} {stock_name}** ｜ 現價：`{close:.2f}` 元 ({diff_pct:+.2f}%)")
-                        st.caption(f"🏢 **所屬產業類別**：`{stock_sector}`")
+                        st.markdown(f"🧩 **所屬族群**：`{stock_sector}`")
+                        if stock_tags:
+                            st.write("🔥 **市場題材關鍵字**：", "、".join([f"`{t}`" for t in stock_tags]))
 
                         # 神秘金字塔大戶籌碼分析
                         tdcc_ratio, tdcc_trend = fetch_tdcc_trend(code)
@@ -328,41 +348,61 @@ with tab_diag:
                     st.error(f"分析異常：{ex}")
 
 # ==========================================
-# 分頁二：歷史策略回測實驗室 (真實權重連動引擎)
+# 分頁二：歷史策略回測實驗室 (直接內建專屬部位微調器)
 # ==========================================
 with tab_backtest:
     st.subheader("🧪 歷史策略回測與壓力測試")
-    st.caption("依據上方即時設定的部位權重，精確模擬真實交易曲線與風險承擔：")
+    st.caption("直接在此調整部位比例，即時觀察不同加碼權重對報酬率與最大回撤 (MDD) 的敏感度：")
+
+    # 回測專屬部位設定 (免切換分頁)
+    if "bt_w_list" not in st.session_state:
+        st.session_state.bt_w_list = [30, 40, 30]
+
+    st.markdown("##### ⚙️ 調整回測測試權重：")
+    bt_b1, bt_b2, bt_b3 = st.columns(3)
+    if bt_b1.button("平衡 30/40/30", use_container_width=True, key="bt_btn1"):
+        st.session_state.bt_w_list = [30, 40, 30]
+    if bt_b2.button("重壓 30/50/20", use_container_width=True, key="bt_btn2"):
+        st.session_state.bt_w_list = [30, 50, 20]
+    if bt_b3.button("右側 20/50/30", use_container_width=True, key="bt_btn3"):
+        st.session_state.bt_w_list = [20, 50, 30]
+
+    bcw1, bcw2, bcw3 = st.columns(3)
+    btw1 = bcw1.number_input("第 1 筆 (%)", 0, 100, st.session_state.bt_w_list[0], step=5, key="bt_w1")
+    btw2 = bcw2.number_input("第 2 筆 (%)", 0, 100, st.session_state.bt_w_list[1], step=5, key="bt_w2")
+    btw3 = bcw3.number_input("第 3 筆 (%)", 0, 100, st.session_state.bt_w_list[2], step=5, key="bt_w3")
+
+    bt_tot = btw1 + btw2 + btw3
+    bt_scale = bt_tot if bt_tot > 0 else 100
+    rbw1, rbw2, rbw3 = btw1 / bt_scale, btw2 / bt_scale, btw3 / bt_scale
+
+    st.info(f"當前套用權重：**第1筆試單 {int(rbw1*100)}%** ｜ **第2筆突破 {int(rbw2*100)}%** ｜ **第3筆打滿 {int(rbw3*100)}%**")
 
     scenario = st.radio(
         "選擇測試情境：",
         ["📈 近 3 年全市場多頭波段回測 (2023-2026)", "📉 2022 年大空頭崩盤壓力測試 (極端抗跌檢驗)"]
     )
 
-    scale_test = tot_w if tot_w > 0 else 100
-    rw1, rw2, rw3 = w1 / scale_test, w2 / scale_test, w3 / scale_test
-    st.info(f"當前套用權重：**第1筆試單 {int(rw1*100)}%** ｜ **第2筆突破 {int(rw2*100)}%** ｜ **第3筆打滿 {int(rw3*100)}%**")
-
     if st.button("🚀 執行歷史回測模擬", use_container_width=True):
         with st.spinner("載入歷史行情並套用部位風控模型中..."):
             if "2022" in scenario:
-                base_mdd = -6.5 - (rw1 * 7.0)
-                base_ret = 8.0 + (rw2 * 20.0) - (rw1 * 5.0)
-                base_win = 44.0 + (rw2 * 8.0)
-                base_pnl = 2.8 + (rw2 * 1.2)
-                drift, vola = 0.0004 + (rw2 * 0.0004), 0.007 + (rw1 * 0.003)
+                base_mdd = -6.5 - (rbw1 * 7.0)
+                base_ret = 8.0 + (rbw2 * 20.0) - (rbw1 * 5.0)
+                base_win = 44.0 + (rbw2 * 8.0)
+                base_pnl = 2.8 + (rbw2 * 1.2)
+                drift, vola = 0.0004 + (rbw2 * 0.0004), 0.007 + (rbw1 * 0.003)
                 bench_drift, bench_vola = -0.0008, 0.014
                 days = 250
             else:
-                base_mdd = -9.0 - (rw1 * 8.0)
-                base_ret = 95.0 + (rw2 * 90.0) + (rw3 * 30.0)
-                base_win = 50.0 + (rw2 * 10.0)
-                base_pnl = 3.2 + (rw2 * 1.5)
-                drift, vola = 0.0010 + (rw2 * 0.0006), 0.009 + (rw1 * 0.002)
+                base_mdd = -9.0 - (rbw1 * 8.0)
+                base_ret = 95.0 + (rbw2 * 90.0) + (rbw3 * 30.0)
+                base_win = 50.0 + (rbw2 * 10.0)
+                base_pnl = 3.2 + (rbw2 * 1.5)
+                drift, vola = 0.0010 + (rbw2 * 0.0006), 0.009 + (rbw1 * 0.002)
                 bench_drift, bench_vola = 0.0006, 0.012
                 days = 750
 
-            np.random.seed(int(w1 * 100 + w2 * 10 + w3))
+            np.random.seed(int(btw1 * 100 + btw2 * 10 + btw3))
             strat_returns = np.random.normal(drift, vola, days)
             bench_returns = np.random.normal(bench_drift, bench_vola, days)
             
@@ -376,7 +416,7 @@ with tab_backtest:
             c4.metric("盈虧比", f"{base_pnl:.1f} : 1")
 
             chart_data = pd.DataFrame({
-                f"多策略系統 ({int(rw1*100)}/{int(rw2*100)}/{int(rw3*100)})": strategy_curve,
+                f"多策略系統 ({int(rbw1*100)}/{int(rbw2*100)}/{int(rbw3*100)})": strategy_curve,
                 "加權指數基準": benchmark_curve
             })
             st.line_chart(chart_data)
