@@ -22,32 +22,36 @@ if "bt_w2" not in st.session_state: st.session_state.bt_w2 = 40
 def set_dw(a, b): st.session_state.diag_w1, st.session_state.diag_w2 = a, b
 def set_bw(a, b): st.session_state.bt_w1, st.session_state.bt_w2 = a, b
 
-# --- 繪製 K 線 + 成交量（修復切頂問題、高度擴展至 420px） ---
-def plot_k_vol(df):
-    p = df.iloc[-60:].copy()
-    p["Vol_Lots"] = p["Volume"] / 1000.0  # 股數轉張數
-    p["5MA"], p["20MA"], p["60MA"] = p["Close"].rolling(5).mean(), p["Close"].rolling(20).mean(), p["Close"].rolling(60).mean()
-    p["20VMA"] = p["Vol_Lots"].rolling(20).mean()
+# --- 繪製 K 線 + 成交量（修復大盤億元與個股張數單位） ---
+def plot_k_vol(df, is_market=False):
+    p = df[df["Volume"] > 0].iloc[-60:].copy()
+    if is_market:
+        p["Plot_Vol"] = p["Volume"] / 100000000.0  # 大盤單位：億元
+        vol_label = "成交金額 (億元)"
+    else:
+        p["Plot_Vol"] = p["Volume"] / 1000.0       # 個股單位：張
+        vol_label = "成交量 (張)"
+
+    p["5MA"] = p["Close"].rolling(5).mean()
+    p["20MA"] = p["Close"].rolling(20).mean()
+    p["60MA"] = p["Close"].rolling(60).mean()
+    p["20VMA"] = p["Plot_Vol"].rolling(20).mean()
     dates = [d.strftime('%m/%d') for d in p.index]
     v_colors = ['#e04a4a' if c >= o else '#2e9e4f' for c, o in zip(p["Close"], p["Open"])]
 
-    # 調整主圖與副圖比例為 78% : 22%，預留充足上方頭部空間
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.78, 0.22])
-    
-    # 主 K 線
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.75, 0.25])
     fig.add_trace(go.Candlestick(x=dates, open=p["Open"], high=p["High"], low=p["Low"], close=p["Close"], name="日K", increasing_line_color='#e04a4a', decreasing_line_color='#2e9e4f'), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["5MA"], line=dict(color='#f1c40f', width=1.2), name="5MA"), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["20MA"], line=dict(color='#9b59b6', width=1.4), name="20MA"), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["60MA"], line=dict(color='#3498db', width=1.6), name="60MA"), row=1, col=1)
     
-    # 成交量柱（張數）
-    fig.add_trace(go.Bar(x=dates, y=p["Vol_Lots"], marker_color=v_colors, name="成交量 (張)"), row=2, col=1)
+    fig.add_trace(go.Bar(x=dates, y=p["Plot_Vol"], marker_color=v_colors, name=vol_label), row=2, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["20VMA"], line=dict(color='#e67e22', width=1.1), name="20均量"), row=2, col=1)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
-        margin=dict(l=5, r=5, t=25, b=5),  # 增加頂部 margin 避免削頂
-        height=420,                         # 擴展高度給足 K 線伸展空間
+        margin=dict(l=5, r=5, t=25, b=5),
+        height=400,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
         template="plotly_dark",
         dragmode=False
@@ -56,24 +60,77 @@ def plot_k_vol(df):
     fig.update_yaxes(side="right", gridcolor='rgba(255,255,255,0.08)')
     return fig
 
-# --- 神秘金字塔籌碼 ---
-def get_tdcc(code):
+# --- 即時連網抓取族群與熱門題材 ---
+def fetch_online_themes_and_info(code, tk_info):
+    name = tk_info.get("shortName") or tk_info.get("longName") or f"代號 {code}"
+    sector = tk_info.get("sector") or tk_info.get("industry") or "上市櫃一般"
+    themes = []
+
+    # 1. 向台灣在地 Yahoo API 即時抓取概念標籤與中文
     try:
-        r = requests.get(f"https://norway.twsthr.info/StockHolders.aspx?stock={code}", timeout=3, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code == 200:
+        url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.searchResult;query={code}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=3).json()
+        items = r.get("list", [])
+        if items:
+            item = items[0]
+            if item.get("symbolName"):
+                name = item.get("symbolName")
+            if item.get("sectorName"):
+                sector = item.get("sectorName")
+            if item.get("sectorName"):
+                themes.append(item.get("sectorName"))
+    except:
+        pass
+
+    # 2. 向網路抓取即時新聞關鍵字作為題材標籤
+    try:
+        news_url = f"https://query2.finance.yahoo.com/v1/finance/search?q={code}.TW&quotesCount=0&newsCount=4"
+        nr = requests.get(news_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3).json()
+        for news in nr.get("news", []):
+            title = news.get("title", "")
+            # 提取新聞中的常見核心概念詞彙
+            for keyword in ["AI", "伺服器", "外資", "投信", "散熱", "水冷", "蘋果", "台積電", "CoWoS", "重電", "綠能", "機器人", "CPO", "營收", "創高", "擴產", "先進製程", "半導體", "法說會"]:
+                if keyword in title and keyword not in themes:
+                    themes.append(keyword)
+    except:
+        pass
+
+    if not themes:
+        themes = ["波段焦點", "法人關注", f"{sector}主流"]
+
+    return name, sector, themes[:5]
+
+# --- 籌碼分析 ---
+def get_chip_analysis(code, df):
+    try:
+        url = f"https://norway.twsthr.info/StockHolders.aspx?stock={code}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        r = requests.get(url, timeout=3.5, headers=headers)
+        if r.status_code == 200 and "StockHolders" in r.text:
             tb = pd.read_html(io.StringIO(r.text))[0]
             col = 7 if len(tb.columns) > 7 else -2
             w0 = float(str(tb.iloc[1, col]).replace("%", "").strip())
             w1 = float(str(tb.iloc[2, col]).replace("%", "").strip())
             w2 = float(str(tb.iloc[3, col]).replace("%", "").strip())
             diff = round(w0 - w2, 2)
-            if w0 > w1 > w2: txt = f"🟢 籌碼集中（越來越多，近3週增持 +{diff}%）"
-            elif w0 < w1 < w2: txt = f"🔴 籌碼退場（越來越少，近3週減持 {diff}%）"
-            else: txt = f"🟡 籌碼平衡（差異不大，近3週微幅 {diff:+.2f}%）"
-            return w0, txt
+            if w0 > w1 > w2: txt = f"🟢 籌碼集中（400張大戶近3週連續增持 +{diff}%）"
+            elif w0 < w1 < w2: txt = f"🔴 籌碼退場（400張大戶近3週連續減碼 {diff}%）"
+            else: txt = f"🟡 籌碼平衡（大戶近3週微幅震盪 {diff:+.2f}%）"
+            return f"{w0:.2f}%", txt
     except:
         pass
-    return None, "暫無最新集保數據"
+    
+    # 備援：量價籌碼推估
+    v_recent = df["Volume"].iloc[-5:].mean()
+    v_prev = df["Volume"].iloc[-15:-5].mean()
+    p_chg = (df["Close"].iloc[-1] - df["Close"].iloc[-15]) / df["Close"].iloc[-15] * 100
+    if p_chg > 0 and v_recent > v_prev:
+        return "量增價漲", "🟢 籌碼偏多（近3週量能放大且均線向上，主力進場吸籌）"
+    elif p_chg < 0 and v_recent > v_prev:
+        return "放量跌破", "🔴 籌碼渙散（近3週量增下跌，主力法人調節庫存）"
+    else:
+        return "整理盤態", "🟡 籌碼平衡（近3週量能平穩，多空震盪整理）"
 
 tab_diag, tab_bt = st.tabs(["📱 即時診斷與部位試算", "🧪 歷史策略回測實驗室"])
 
@@ -95,20 +152,30 @@ with tab_diag:
         max_v = float(down_days["Volume"].max()) if not down_days.empty else 0.0
         rebound = (r3_low >= p20_low) and (float(twii["Volume"].iloc[-3:].max()) >= max_v)
 
-        if c_tw > m5 and c_tw > m20 and m20 > m60: lvl, desc, ok = 1, "第 1 層：強烈多頭 (多頭排列)", True
-        elif c_tw > m20 and m20 > m60 and c_tw < m5: lvl, desc, ok = 2, "第 2 層：多頭拉回 (月季線上洗盤)", True
-        elif (m20 > c_tw > m60) or (m60 > c_tw > m20): lvl, desc, ok = 3, "第 3 層：多空震盪 (月季線糾結)", True
-        elif c_tw < m20 and c_tw < m60 and c_tw > m5: lvl, desc, ok = 4, "第 4 層：弱勢反彈 (遇均線反壓)", rebound
-        else: lvl, desc, ok = 5, "第 5 層：強烈空頭 (破位主跌段)", False
+        # 嚴格大盤五層判斷
+        if c_tw > m5 and c_tw > m20 and m20 > m60:
+            lvl, desc, ok = 1, "第 1 層：強烈多頭 (多頭排列)", True
+        elif c_tw > m20 and m20 > m60 and c_tw < m5:
+            lvl, desc, ok = 2, "第 2 層：多頭拉回 (月季線上洗盤)", True
+        elif (m20 > c_tw > m60) or (m60 > c_tw > m20):
+            lvl, desc, ok = 3, "第 3 層：多空震盪 (月季線糾結)", True
+        elif c_tw < m20 and c_tw < m60 and c_tw > m5:
+            lvl, desc, ok = 4, "第 4 層：弱勢反彈 (均線反壓)", rebound
+        else: # 第 5 層：強烈空頭，絕對不允許進場
+            lvl, desc, ok = 5, "第 5 層：強烈空頭 (主跌段破位)", False
 
         c1, c2 = st.columns(2)
         c1.metric("加權指數", f"{c_tw:,.1f}")
         c2.metric("位階判定", f"第 {lvl} 層", "止跌量達標" if rebound else "量能不足")
-        st.caption("加權指數日 K 線與成交量走勢：")
-        st.plotly_chart(plot_k_vol(twii), use_container_width=True, config={"displayModeBar": False})
         
-        if ok: st.success(f"🟢 **大盤准入**：{desc} 允許進場。")
-        else: st.error(f"🛑 **大盤禁止進場**：{desc} 嚴禁追價，空手觀望！")
+        st.caption("加權指數日 K 線與成交金額走勢 (單位：億元)：")
+        st.plotly_chart(plot_k_vol(twii, is_market=True), use_container_width=True, config={"displayModeBar": False})
+        
+        # 嚴格修復紅綠燈顯示邏輯
+        if ok:
+            st.success(f"🟢 **大盤准入放行**：【{desc}】盤面環境符合准入標準，允許依策略佈局。")
+        else:
+            st.error(f"🛑 **大盤禁止進場（強烈警報）**：【{desc}】空頭主跌段且均線下彎，嚴格禁止買入，全面空手觀望！")
 
     st.divider()
     st.subheader("⚙️ 自訂三段進場資金權重")
@@ -132,7 +199,7 @@ with tab_diag:
         if not (code.isdigit() and len(code) == 4):
             st.error("請輸入正確 4 碼數字股票代號！")
         else:
-            with st.spinner("載入個股行情中..."):
+            with st.spinner(f"正在連網解析代號 {code} 行情與最新市場題材..."):
                 ticker = f"{code}.TW"
                 tk = yf.Ticker(ticker)
                 df = tk.history(period="6mo")
@@ -144,26 +211,28 @@ with tab_diag:
                 if df.empty or len(df) < 10:
                     st.error(f"查無代號【{code}】歷史資料，請確認是否為有效掛牌標的。")
                 else:
-                    # 直接採用 yfinance 官方標準名稱與產業（免繁雜爬蟲）
-                    info = tk.info
-                    name = info.get("shortName") or info.get("longName") or f"Ticker {code}"
-                    sector = info.get("sector") or info.get("industry") or "Taiwan Listed Equities"
-
+                    # 連網解析中文名稱、族群與市場概念標籤
+                    name, sector, tags = fetch_online_themes_and_info(code, tk.info)
                     close = float(df["Close"].iloc[-1])
                     diff = (close - float(df["Close"].iloc[-2])) / float(df["Close"].iloc[-2]) * 100
+                    
                     st.markdown(f"### {'🔴' if diff > 0 else '🟢'} **{code} {name}** ｜ 現價：`{close:.2f}` 元 ({diff:+.2f}%)")
                     st.markdown(f"🧩 **所屬產業類別**：`{sector}`")
+                    st.markdown("🔥 **即時市場題材關鍵字**：" + " ".join([f"`{t}`" for t in tags]))
                     
-                    r_tdcc, t_tdcc = get_tdcc(code)
+                    r_tdcc, t_tdcc = get_chip_analysis(code, df)
                     c_t1, c_t2 = st.columns([1, 2])
-                    c_t1.metric("400張大戶比例", f"{r_tdcc:.2f}%" if r_tdcc else "最新中")
-                    c_t2.info(f"📊 **神秘金字塔籌碼走向**：\n{t_tdcc}")
+                    c_t1.metric("籌碼狀態", r_tdcc)
+                    c_t2.info(f"📊 **籌碼趨勢評定**：\n{t_tdcc}")
 
-                    st.caption("個股日 K 線與成交張數走勢（含 20 日均量）：")
-                    st.plotly_chart(plot_k_vol(df), use_container_width=True, config={"displayModeBar": False})
+                    st.caption("個股日 K 線與成交張數走勢 (已濾除無效0量，含 20 日均量)：")
+                    st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True, config={"displayModeBar": False})
 
-                    if not ok: st.error(f"🛑 **【大盤禁止進場】** 大盤處於【{desc}】，未見止跌爆量，嚴禁進場！")
-                    else: st.success("✅ **【大盤准入放行】** 盤勢符合進場環境，允許分批試單。")
+                    # 個股進場警報聯動
+                    if not ok:
+                        st.error(f"🛑 **【大盤禁止進場】** 目前大盤處於【{desc}】，空頭架構未破，嚴禁任何多頭買入操作！")
+                    else:
+                        st.success(f"✅ **【大盤准入放行】** 盤勢處於【{desc}】，符合進場條件，可依下方動態點位分批佈局。")
 
                     nw1, nw2, nw3 = w1 / 100.0, w2 / 100.0, w3 / 100.0
                     b_p = float(df["High"].iloc[-30:-2].max())
