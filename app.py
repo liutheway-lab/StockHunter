@@ -5,6 +5,7 @@ import numpy as np
 import requests
 import io
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from core.indicators import to_tw_tick
@@ -19,77 +20,49 @@ now = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
 st.caption(f"台灣時間：`{now}` ｜ 多策略動態部位操盤系統")
 
 # ==========================================
-# 全台股官方正體中文名稱與細分產業快取庫 (100% 覆蓋上市櫃)
+# 權重狀態與按鈕回呼機制 (徹底根除無反應問題)
 # ==========================================
-@st.cache_data(ttl=86400)
-def load_official_tw_directory():
-    """從證交所 ISIN 官方公開資料庫載入全市場代號、中文名稱與產業類別"""
-    mapping = {}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    # 模式 2 為上市，模式 4 為上櫃
-    for mode, suffix in [(2, ".TW"), (4, ".TWO")]:
-        try:
-            url = f"https://isin.twse.com.tw/isin/C_public.jsp?strMode={mode}"
-            r = requests.get(url, headers=headers, timeout=8)
-            r.encoding = "big5"
-            tables = pd.read_html(io.StringIO(r.text))
-            if tables:
-                df = tables[0]
-                # 欄位通常為：有價證券代號及名稱, 國際證券辨識號碼, 上市日, 市場別, 產業別, CFI代碼, 備註
-                for _, row in df.iloc[1:].iterrows():
-                    val = str(row.iloc[0]).strip()
-                    # 分割代號與名稱（例："3406　玉晶光"）
-                    parts = val.split("\u3000")
-                    if len(parts) >= 2:
-                        code = parts[0].strip()
-                        name = parts[1].strip()
-                        sector = str(row.iloc[4]).strip() if len(row) > 4 else "一般類股"
-                        if code.isdigit() and len(code) == 4:
-                            mapping[code] = {
-                                "name": name,
-                                "sector": sector,
-                                "suffix": suffix,
-                                "ticker": f"{code}{suffix}"
-                            }
-        except Exception:
-            pass
-    return mapping
-
-# 載入全市場對照庫
-TW_DIR = load_official_tw_directory()
-
-# ==========================================
-# 權重狀態管理 (保證按鈕生效、總和必為 100%)
-# ==========================================
-if "w1" not in st.session_state:
-    st.session_state.w1 = 30
-if "w2" not in st.session_state:
-    st.session_state.w2 = 40
+if "diag_w1" not in st.session_state:
+    st.session_state.diag_w1 = 30
+if "diag_w2" not in st.session_state:
+    st.session_state.diag_w2 = 40
 
 if "bt_w1" not in st.session_state:
     st.session_state.bt_w1 = 30
 if "bt_w2" not in st.session_state:
     st.session_state.bt_w2 = 40
 
-def set_diag_preset(a, b):
-    st.session_state.w1 = a
-    st.session_state.w2 = b
+def apply_diag_preset(w1_val, w2_val):
+    st.session_state.diag_w1 = w1_val
+    st.session_state.diag_w2 = w2_val
 
-def set_bt_preset(a, b):
-    st.session_state.bt_w1 = a
-    st.session_state.bt_w2 = b
+def apply_bt_preset(w1_val, w2_val):
+    st.session_state.bt_w1 = w1_val
+    st.session_state.bt_w2 = w2_val
 
 # ==========================================
-# 輔助函式：手機觸控穩定型 K 線圖
+# 輔助函式：專業雙子圖 K 線＋成交量 (Plotly Subplots)
 # ==========================================
-def plot_clean_candlestick(df: pd.DataFrame):
+def plot_candlestick_with_volume(df: pd.DataFrame, title: str = ""):
+    """上方 75% 繪製紅黑 K 線與 5/20/60MA，下方 25% 繪製成交量柱與 20MAV"""
     plot_df = df.iloc[-65:].copy()
     plot_df["5MA"] = plot_df["Close"].rolling(5).mean()
     plot_df["20MA"] = plot_df["Close"].rolling(20).mean()
     plot_df["60MA"] = plot_df["Close"].rolling(60).mean()
+    plot_df["20VMA"] = plot_df["Volume"].rolling(20).mean()
     date_strs = [d.strftime('%m/%d') for d in plot_df.index]
 
-    fig = go.Figure()
+    # 量柱顏色：紅漲綠跌
+    vol_colors = ['#e04a4a' if c >= o else '#2e9e4f' for c, o in zip(plot_df["Close"], plot_df["Open"])]
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.72, 0.28]
+    )
+
+    # 1. 主 K 線 (紅漲綠跌)
     fig.add_trace(go.Candlestick(
         x=date_strs,
         open=plot_df["Open"],
@@ -101,26 +74,85 @@ def plot_clean_candlestick(df: pd.DataFrame):
         increasing_fillcolor='#e04a4a',
         decreasing_line_color='#2e9e4f',
         decreasing_fillcolor='#2e9e4f'
-    ))
+    ), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=date_strs, y=plot_df["5MA"], line=dict(color='#f1c40f', width=1.2), name="5MA"))
-    fig.add_trace(go.Scatter(x=date_strs, y=plot_df["20MA"], line=dict(color='#9b59b6', width=1.5), name="20MA"))
-    fig.add_trace(go.Scatter(x=date_strs, y=plot_df["60MA"], line=dict(color='#3498db', width=1.8), name="60MA"))
+    # 均線
+    fig.add_trace(go.Scatter(x=date_strs, y=plot_df["5MA"], line=dict(color='#f1c40f', width=1.2), name="5MA"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=date_strs, y=plot_df["20MA"], line=dict(color='#9b59b6', width=1.4), name="20MA"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=date_strs, y=plot_df["60MA"], line=dict(color='#3498db', width=1.6), name="60MA"), row=1, col=1)
+
+    # 2. 成交量柱與 20VMA
+    fig.add_trace(go.Bar(
+        x=date_strs,
+        y=plot_df["Volume"],
+        name="成交量",
+        marker_color=vol_colors,
+        opacity=0.8
+    ), row=2, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=date_strs,
+        y=plot_df["20VMA"],
+        line=dict(color='#e67e22', width=1.1),
+        name="20均量"
+    ), row=2, col=1)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
-        margin=dict(l=5, r=5, t=10, b=10),
-        height=290,
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=11)),
+        margin=dict(l=5, r=5, t=10, b=5),
+        height=350,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10)),
         template="plotly_dark",
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
         dragmode=False,
         hovermode="x unified"
     )
-    fig.update_xaxes(type="category", tickangle=-45, tickfont=dict(size=10))
-    fig.update_yaxes(side="right", tickfont=dict(size=10))
+    fig.update_xaxes(type="category", tickangle=-45, tickfont=dict(size=9), showgrid=False)
+    fig.update_yaxes(side="right", tickfont=dict(size=9), showgrid=True, gridcolor='rgba(255,255,255,0.08)')
     return fig
+
+# ==========================================
+# 輔助函式：在地化中文、族群與題材關鍵字
+# ==========================================
+THEME_DATABASE = {
+    "3406": ("玉晶光", "光學鏡頭模組", ["iPhone潛望鏡頭", "蘋果供應鏈", "Meta Quest VR", "車載ADAS鏡頭"]),
+    "3008": ("大立光", "光學鏡頭龍頭", ["高階旗艦鏡頭", "潛望式變焦", "車載鏡頭", "蘋果核心供應商"]),
+    "2330": ("台積電", "晶圓代工龍頭", ["先進製程 (3nm/2nm)", "CoWoS 先進封裝", "AI晶片代工", "高效能運算 (HPC)"]),
+    "2317": ("鴻海", "電子代工 / 伺服器", ["AI伺服器 GB200", "電動車 MIH", "蘋果iPhone組裝", "液冷高速運算"]),
+    "2454": ("聯發科", "IC設計龍頭", ["天璣手機AI晶片", "邊緣 AI (Edge AI)", "客製化 ASIC", "Wi-Fi 7 / 車用晶片"]),
+    "2382": ("廣達", "AI伺服器代工", ["GB200主力供應", "雲端資料中心 CSP", "AI PC", "車載電腦"]),
+    "3231": ("緯創", "AI伺服器基板", ["NVIDIA GPU運算基板", "Compute Board", "雲端資料中心伺服器"]),
+    "3017": ("奇鋐", "散熱模組大廠", ["3D VC 均熱板", "伺服器液冷模組", "水冷冷卻板", "高階風扇"]),
+    "3324": ("雙鴻", "散熱模組大廠", ["伺服器水冷散熱", "冷卻分配裝置 (CDU)", "水冷板", "高階筆電散熱"]),
+    "2376": ("技嘉", "主機板 / AI伺服器", ["AI伺服器整機", "電競顯示卡", "浸沒式水冷", "雲端運算"]),
+    "2603": ("長榮", "貨櫃航運龍頭", ["美西/美東線", "歐洲長約", "紅海地緣題材", "SCFI運價指數"]),
+    "1519": ("華城", "重電設備龍頭", ["電力變壓器外銷美國", "台電強韌電網", "電動車充電樁", "儲能綠電"]),
+    "1513": ("中興電", "重電工程大廠", ["GIS高壓氣體絕緣開關", "台電強韌電網", "氫能充電站", "儲能電廠"]),
+    "6274": ("台燿", "銅箔基板 (CCL)", ["高頻高速 CCL", "AI伺服器 800G 交換器", "PCIe 5.0/6.0", "交換器CCL"]),
+    "8054": ("安國", "ASIC / 晶片設計", ["神盾集團", "客製化 ASIC", "Arm架構設計", "邊緣運算晶片"]),
+    "3661": ("世芯-KY", "ASIC 設計服務", ["北美雲端大廠客製晶片", "CoWoS封裝", "7nm/5nm先進製程", "AI高速運算"]),
+    "3443": ("創意", "ASIC 設計服務", ["台積電大同盟", "HBM3高頻寬記憶體", "AI晶片設計服務", "高速傳輸介面"]),
+}
+
+def resolve_stock_info(code: str):
+    """取得中文名、細分族群與題材關鍵字"""
+    if code in THEME_DATABASE:
+        return THEME_DATABASE[code]
+    
+    # 針對名單外股票，連線 Yahoo 取得中文與產業
+    try:
+        url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.searchResult;query={code}"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3).json()
+        items = r.get("list", [])
+        if items:
+            name = items[0].get("symbolName", code)
+            sector = items[0].get("sectorName") or items[0].get("industryName") or "上市櫃一般"
+            tags = [sector, f"{sector}概念", "台股中小型焦點"]
+            return name, sector, tags
+    except Exception:
+        pass
+    return code, "台灣上市櫃股票", ["法人關注標的", "波段籌碼股"]
 
 # ==========================================
 # 輔助函式：爬取神秘金字塔大戶籌碼
@@ -128,7 +160,7 @@ def plot_clean_candlestick(df: pd.DataFrame):
 def fetch_tdcc_trend(stock_id: str):
     url = f"https://norway.twsthr.info/StockHolders.aspx?stock={stock_id}"
     try:
-        r = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(url, timeout=4, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code == 200:
             tables = pd.read_html(io.StringIO(r.text))
             for t in tables:
@@ -238,8 +270,8 @@ with tab_diag:
             m1.metric("加權指數現價", f"{c_twii:,.1f}", f"{diff_twii:+.2f}%")
             m2.metric("大盤位階判定", f"第 {market_level} 層", "止跌量：達標" if is_rebounded else "止跌量：不足")
 
-            st.caption("📊 加權指數日 K 與均線走勢 (黃: 5MA ｜ 紫: 20MA ｜ 藍: 60MA)：")
-            st.plotly_chart(plot_clean_candlestick(twii), use_container_width=True, config={"displayModeBar": False})
+            st.caption("📊 加權指數日 K 線與成交量走勢 (含 5/20/60MA 與 20 日均量)：")
+            st.plotly_chart(plot_candlestick_with_volume(twii), use_container_width=True, config={"displayModeBar": False})
 
             if market_allow:
                 st.success(f"🟢 **大盤准入**：{allow_desc}")
@@ -250,71 +282,62 @@ with tab_diag:
 
     st.divider()
 
-    # 2. 診斷分頁：防呆連動權重調節器 (保證總和剛好 100%)
+    # 2. 診斷分頁：連動保證 100% 權重調節器
     st.subheader("⚙️ 自訂三段進場資金權重")
     
     b1, b2, b3 = st.columns(3)
-    b1.button("平衡 30/40/30", use_container_width=True, on_click=set_diag_preset, args=(30, 40))
-    b2.button("重壓 30/50/20", use_container_width=True, on_click=set_diag_preset, args=(30, 50))
-    b3.button("右側 20/50/30", use_container_width=True, on_click=set_diag_preset, args=(20, 50))
+    b1.button("平衡 30/40/30", use_container_width=True, on_click=apply_diag_preset, args=(30, 40), key="btn_diag_p1")
+    b2.button("重壓 30/50/20", use_container_width=True, on_click=apply_diag_preset, args=(30, 50), key="btn_diag_p2")
+    b3.button("右側 20/50/30", use_container_width=True, on_click=apply_diag_preset, args=(20, 50), key="btn_diag_p3")
 
     cw1, cw2, cw3 = st.columns(3)
-    val_w1 = cw1.number_input("第 1 筆 (%)", 0, 90, st.session_state.w1, step=5, key="diag_input_w1")
+    val_w1 = cw1.number_input("第 1 筆 (%)", 0, 90, step=5, key="diag_w1")
     max_w2 = max(0, 100 - val_w1)
-    val_w2_adj = min(st.session_state.w2, max_w2)
-    val_w2 = cw2.number_input("第 2 筆 (%)", 0, max_w2, val_w2_adj, step=5, key="diag_input_w2")
+    val_w2 = cw2.number_input("第 2 筆 (%)", 0, max_w2, step=5, key="diag_w2")
     
     val_w3 = max(0, 100 - val_w1 - val_w2)
     cw3.metric("第 3 筆打滿 (%)", f"{val_w3}%")
-
-    st.session_state.w1 = val_w1
-    st.session_state.w2 = val_w2
     st.caption(f"🔒 **資金鎖定**：第1筆 `{val_w1}%` ＋ 第2筆 `{val_w2}%` ＋ 第3筆 `{val_w3}%` ＝ **100% (1.0)**")
 
     st.divider()
 
-    # 3. 個股代號查詢 (100% 官方正體中文名稱與細分族群)
+    # 3. 個股代號查詢 + 中文名稱 + 細分族群 + 題材關鍵字 + 附量 K 線圖
     st.subheader("🔍 個股即時診斷與點位試算")
-    code_input = st.text_input("輸入 4 位台股代號（支援全市場上市櫃例如：3406、6274、8054、2330）：", "3406").strip()
+    code_input = st.text_input("輸入 4 位台股代號（例如：3406、6274、8054、2330、3017）：", "3406").strip()
 
     if st.button("🚀 開始即時診斷", use_container_width=True):
         code = code_input.upper().replace(".TW", "").replace(".TWO", "")
         if not (code.isdigit() and len(code) == 4):
             st.error("⚠️ 請輸入正確的 4 碼數字股票代號！")
         else:
-            with st.spinner(f"正在連線分析代號 {code}..."):
+            with st.spinner(f"正在連線分析代號 {code} 與族群題材..."):
                 try:
-                    # 優先從官方全台股名冊提取正體中文與產業
-                    stock_meta = TW_DIR.get(code, {})
-                    stock_name = stock_meta.get("name", code)
-                    stock_sector = stock_meta.get("sector", "上市櫃一般")
-                    official_suffix = stock_meta.get("suffix", ".TW")
-
-                    # 下載行情資料
-                    ticker = f"{code}{official_suffix}"
+                    ticker = f"{code}.TW"
                     tk = yf.Ticker(ticker)
                     df = tk.history(period="6mo")
-                    
-                    # 容錯：若官方後綴查不到，嘗試另一市場
                     if df.empty or len(df) < 10:
-                        alt_suffix = ".TWO" if official_suffix == ".TW" else ".TW"
-                        ticker = f"{code}{alt_suffix}"
+                        ticker = f"{code}.TWO"
                         tk = yf.Ticker(ticker)
                         df = tk.history(period="6mo")
 
                     if df.empty or len(df) < 10:
-                        st.error(f"❌ 查無代號【{code}】的歷史報價，請確認該標的目前是否正常掛牌交易。")
+                        st.error(f"❌ 查無代號【{code}】的歷史資料，請確認是否為有效上市櫃股票。")
                     else:
+                        stock_name, stock_sector, stock_tags = resolve_stock_info(code)
                         close = float(df["Close"].iloc[-1])
                         prev_c = float(df["Close"].iloc[-2])
                         diff_pct = (close - prev_c) / prev_c * 100
                         icon = "🔴" if diff_pct > 0 else "🟢"
 
-                        # 抬頭：100% 正體中文名稱 + 代號 + 細分產業
+                        # 抬頭：中文名稱 + 代號 + 細分族群
                         st.markdown(f"### {icon} **{code} {stock_name}** ｜ 現價：`{close:.2f}` 元 ({diff_pct:+.2f}%)")
                         st.markdown(f"🧩 **所屬產業族群**：`{stock_sector}`")
+                        
+                        # 題材關鍵字標籤
+                        tags_display = " ".join([f"`{t}`" for t in stock_tags])
+                        st.markdown(f"🔥 **核心題材概念**：{tags_display}")
 
-                        # 神秘金字塔大戶籌碼分析
+                        # 神秘金字塔大戶籌碼
                         tdcc_ratio, tdcc_trend = fetch_tdcc_trend(code)
                         c_tdcc1, c_tdcc2 = st.columns([1, 2])
                         if tdcc_ratio:
@@ -323,9 +346,9 @@ with tab_diag:
                             c_tdcc1.metric("400張大戶持股比", "最新更新中")
                         c_tdcc2.info(f"📊 **神秘金字塔籌碼走向**：\n{tdcc_trend}")
 
-                        # 個股日 K 線圖
-                        st.caption(f"📈 {code} {stock_name} 日 K 線圖 (黃: 5MA ｜ 紫: 20MA ｜ 藍: 60MA)：")
-                        st.plotly_chart(plot_clean_candlestick(df), use_container_width=True, config={"displayModeBar": False})
+                        # 帶成交量之個股日 K 線圖
+                        st.caption(f"📈 {code} {stock_name} 日 K 線與成交量走勢 (含 5/20/60MA 與 20 日均量)：")
+                        st.plotly_chart(plot_candlestick_with_volume(df), use_container_width=True, config={"displayModeBar": False})
 
                         # 大盤聯動決策指引
                         st.markdown("#### 🎯 進場適宜度評估")
@@ -371,21 +394,17 @@ with tab_backtest:
 
     st.markdown("##### ⚙️ 調整回測測試權重：")
     bt_b1, bt_b2, bt_b3 = st.columns(3)
-    bt_b1.button("平衡 30/40/30", use_container_width=True, on_click=set_bt_preset, args=(30, 40), key="btn_p1")
-    bt_b2.button("重壓 30/50/20", use_container_width=True, on_click=set_bt_preset, args=(30, 50), key="btn_p2")
-    bt_b3.button("右側 20/50/30", use_container_width=True, on_click=set_bt_preset, args=(20, 50), key="btn_p3")
+    bt_b1.button("平衡 30/40/30", use_container_width=True, on_click=apply_bt_preset, args=(30, 40), key="btn_bt_p1")
+    bt_b2.button("重壓 30/50/20", use_container_width=True, on_click=apply_bt_preset, args=(30, 50), key="btn_bt_p2")
+    bt_b3.button("右側 20/50/30", use_container_width=True, on_click=apply_bt_preset, args=(20, 50), key="btn_bt_p3")
 
     bcw1, bcw2, bcw3 = st.columns(3)
-    bt_val_w1 = bcw1.number_input("第 1 筆 (%)", 0, 90, st.session_state.bt_w1, step=5, key="bt_input_w1")
+    bt_val_w1 = bcw1.number_input("第 1 筆 (%)", 0, 90, step=5, key="bt_w1")
     bt_max_w2 = max(0, 100 - bt_val_w1)
-    bt_val_w2_adj = min(st.session_state.bt_w2, bt_max_w2)
-    bt_val_w2 = bcw2.number_input("第 2 筆 (%)", 0, bt_max_w2, bt_val_w2_adj, step=5, key="bt_input_w2")
+    bt_val_w2 = bcw2.number_input("第 2 筆 (%)", 0, bt_max_w2, step=5, key="bt_w2")
     
     bt_val_w3 = max(0, 100 - bt_val_w1 - bt_val_w2)
     bcw3.metric("第 3 筆打滿 (%)", f"{bt_val_w3}%")
-
-    st.session_state.bt_w1 = bt_val_w1
-    st.session_state.bt_w2 = bt_val_w2
 
     rbw1, rbw2, rbw3 = bt_val_w1 / 100.0, bt_val_w2 / 100.0, bt_val_w3 / 100.0
     st.info(f"當前套用權重：**第1筆試單 {int(rbw1*100)}%** ｜ **第2筆突破 {int(rbw2*100)}%** ｜ **第3筆打滿 {int(rbw3*100)}%** ＝ **100%**")
