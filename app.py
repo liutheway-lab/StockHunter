@@ -2,12 +2,13 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from core.indicators import to_tw_tick
 
 # ==========================================
-# 頁面與風格配置
+# 頁面配置 (專為手機介面最佳化)
 # ==========================================
 st.set_page_config(page_title="StockHunter 智能戰情室", page_icon="📈", layout="centered")
 
@@ -16,7 +17,48 @@ now = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
 st.caption(f"台灣時間：`{now}` ｜ 多策略動態部位操盤系統")
 
 # ==========================================
-# 策略規則說明指南
+# 輔助函式：繪製標準紅黑 K 線與均線圖 (Plotly)
+# ==========================================
+def plot_candlestick_chart(df: pd.DataFrame, title: str):
+    """繪製手機端友善之台股紅黑 K 線圖 (紅漲、綠跌) 與 5/20/60MA"""
+    plot_df = df.iloc[-75:].copy()  # 取近 75 個交易日，手機版面最舒服
+    plot_df["5MA"] = plot_df["Close"].rolling(5).mean()
+    plot_df["20MA"] = plot_df["Close"].rolling(20).mean()
+    plot_df["60MA"] = plot_df["Close"].rolling(60).mean()
+
+    fig = go.Figure()
+
+    # 1. 主 K 線 (台股規格：紅漲、綠/黑跌)
+    fig.add_trace(go.Candlestick(
+        x=plot_df.index.strftime('%m/%d'),
+        open=plot_df["Open"],
+        high=plot_df["High"],
+        low=plot_df["Low"],
+        close=plot_df["Close"],
+        name="K線",
+        increasing_line_color='#e04a4a', # 漲 (紅)
+        decreasing_line_color='#2e9e4f'  # 跌 (綠)
+    ))
+
+    # 2. 均線覆蓋
+    fig.add_trace(go.Scatter(x=plot_df.index.strftime('%m/%d'), y=plot_df["5MA"], line=dict(color='#f1c40f', width=1.2), name="5MA"))
+    fig.add_trace(go.Scatter(x=plot_df.index.strftime('%m/%d'), y=plot_df["20MA"], line=dict(color='#9b59b6', width=1.4), name="20MA (月)"))
+    fig.add_trace(go.Scatter(x=plot_df.index.strftime('%m/%d'), y=plot_df["60MA"], line=dict(color='#3498db', width=1.6), name="60MA (季)"))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=14)),
+        xaxis_rangeslider_visible=False, # 隱藏底部微型拉桿，節省手機螢幕高度
+        margin=dict(l=10, r=10, t=35, b=10),
+        height=320,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
+        template="plotly_dark",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
+    return fig
+
+# ==========================================
+# 策略規則說明指南 (折疊式面板)
 # ==========================================
 with st.expander("📖 點此查看【四大策略進出場與風控規格書】"):
     st.markdown("""
@@ -40,16 +82,22 @@ tab_diag, tab_backtest = st.tabs(["📱 即時診斷與部位試算", "🧪 歷�
 # 分頁一：即時診斷與部位試算
 # ==========================================
 with tab_diag:
-    st.subheader("🌐 大盤多空位階與准入狀態")
+    # --------------------------------------
+    # 1. 大盤狀態分析與大盤 K 線圖
+    # --------------------------------------
+    st.subheader("🌐 大盤位階與加權指數 K 線走勢")
     market_level, market_allow, is_rebounded = 3, False, False
-    with st.spinner("評估大盤位階中..."):
+    with st.spinner("載入加權指數技術面中..."):
         try:
-            twii = yf.download("^TWII", period="4mo", interval="1d", progress=False, auto_adjust=True)
+            twii = yf.download("^TWII", period="6mo", interval="1d", progress=False, auto_adjust=True)
             if isinstance(twii.columns, pd.MultiIndex):
                 twii = twii.xs("^TWII", axis=1, level=1)
             twii = twii.dropna(subset=["Close"])
             
             c_twii = float(twii["Close"].iloc[-1])
+            prev_twii = float(twii["Close"].iloc[-2])
+            diff_twii = (c_twii - prev_twii) / prev_twii * 100
+
             ma5 = float(twii["Close"].rolling(5).mean().iloc[-1])
             ma10 = float(twii["Close"].rolling(10).mean().iloc[-1])
             ma20 = float(twii["Close"].rolling(20).mean().iloc[-1])
@@ -74,9 +122,12 @@ with tab_diag:
                 market_level, lvl_name, market_allow = 5, "第 5 層：強烈空頭", is_rebounded
 
             m1, m2 = st.columns(2)
-            m1.metric("加權指數", f"{c_twii:,.1f}")
-            m2.metric("位階判定", lvl_name, f"止跌量能：{'達標 ✅' if is_rebounded else '不足 ❌'}")
+            m1.metric("加權指數現價", f"{c_twii:,.1f}", f"{diff_twii:+.2f}%")
+            m2.metric("大盤位階判定", lvl_name, f"止跌量能：{'達標 ✅' if is_rebounded else '不足 ❌'}")
             
+            # 大盤專屬 K 線圖
+            st.plotly_chart(plot_candlestick_chart(twii, "加權指數 (^TWII) 日K與均線"), use_container_width=True)
+
             if market_allow:
                 st.success(f"🟢 **大盤准入**：允許進場（位階：{lvl_name}）")
             else:
@@ -86,9 +137,10 @@ with tab_diag:
 
     st.divider()
 
-    # 權重調整 (點擊按鈕直接切換 + 步進微調)
+    # --------------------------------------
+    # 2. 權重調整 (快捷按鈕 + 步進器)
+    # --------------------------------------
     st.subheader("⚙️ 自訂三段進場資金權重")
-    
     if "w_list" not in st.session_state:
         st.session_state.w_list = [30, 40, 30]
 
@@ -113,18 +165,20 @@ with tab_diag:
 
     st.divider()
 
-    # 純 4 碼股票代號查詢 (全台股通吃、零網路卡頓)
+    # --------------------------------------
+    # 3. 個股代號查詢 + 中文解析 + 個股 K 線圖
+    # --------------------------------------
     st.subheader("🔍 個股即時診斷與點位試算")
-    code_input = st.text_input("輸入 4 位台股代號（例如：2330、3406、2454、6274、8054）：", "3406").strip()
+    code_input = st.text_input("輸入 4 位台股代號（例如：3406、2330、2454、6274、8054）：", "3406").strip()
 
     if st.button("🚀 開始即時診斷", use_container_width=True):
         code = code_input.upper().replace(".TW", "").replace(".TWO", "")
         if not (code.isdigit() and len(code) == 4):
             st.error("⚠️ 請輸入正確的 4 碼數字股票代號！")
         else:
-            with st.spinner(f"正在連線分析 {code}..."):
+            with st.spinner(f"正在連線分析代號 {code}..."):
                 try:
-                    # 先查上市 (.TW)，若無資料自動改查上櫃 (.TWO)
+                    # 先查上市 (.TW)，若無歷史改查上櫃 (.TWO)
                     ticker = f"{code}.TW"
                     tk = yf.Ticker(ticker)
                     df = tk.history(period="6mo")
@@ -136,21 +190,18 @@ with tab_diag:
                     if df.empty or len(df) < 20:
                         st.error(f"❌ 查無代號【{code}】的歷史資料，請確認是否為有效上市櫃股票。")
                     else:
-                        # 自動嘗試從 yfinance 取得公司名稱
-                        short_name = tk.info.get("shortName", code)
+                        # 自動取得中文公司名稱
+                        stock_name = tk.info.get("shortName") or tk.info.get("longName") or code
+                        
                         close = float(df["Close"].iloc[-1])
                         prev_c = float(df["Close"].iloc[-2])
                         diff_pct = (close - prev_c) / prev_c * 100
                         icon = "🔴" if diff_pct > 0 else "🟢"
 
-                        st.markdown(f"### {icon} **{code} {short_name}** ｜ 現價：`{close:.2f}` 元 ({diff_pct:+.2f}%)")
+                        st.markdown(f"### {icon} **{code} {stock_name}** ｜ 現價：`{close:.2f}` 元 ({diff_pct:+.2f}%)")
 
-                        # 即時線圖
-                        st.caption("📈 近 6 個月走勢圖與均線結構 (5MA / 20MA / 60MA)：")
-                        df["5MA"] = df["Close"].rolling(5).mean()
-                        df["20MA"] = df["Close"].rolling(20).mean()
-                        df["60MA"] = df["Close"].rolling(60).mean()
-                        st.line_chart(df[["Close", "5MA", "20MA", "60MA"]].iloc[-90:])
+                        # 個股專屬紅黑 K 線圖 (疊加 5/20/60MA)
+                        st.plotly_chart(plot_candlestick_chart(df, f"{code} {stock_name} 日K線與均線走勢"), use_container_width=True)
 
                         # 大盤聯動決策指引
                         st.markdown("#### 🎯 進場適宜度評估")
