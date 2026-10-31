@@ -167,12 +167,12 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                           x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.18)",
                           line_width=0, layer="above")
 
-        def mark(day, val, text, color, ax, ay, row=1, xanchor="right"):
+        def mark(day, val, text, color, ax, ay, row=1, xanchor="right", yanchor="middle"):
             if day in dates:
                 # 細箭頭 + 靠右對齊的文字，沒有底色；文字放在圖上空白的位置，避免壓到 K 線
                 fig.add_annotation(x=day, y=val, text=text, showarrow=True, row=row, col=1,
                                    arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
-                                   ax=ax, ay=ay, xanchor=xanchor, font=dict(color=color, size=11))
+                                   ax=ax, ay=ay, xanchor=xanchor, yanchor=yanchor, font=dict(color=color, size=11))
 
         # 前低：細虛線橫跨整張圖 + 箭頭，文字放在 K 線下方的空白處
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
@@ -181,13 +181,13 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
              f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff8c00", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#ff8c00", -4, 108)
+                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00a8d6", -4, 108)
 
         # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
         dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
         if dd is not None and dv:
             dv_b = dv / 1e8
-            fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 1.75], row=2, col=1)
+            fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 2.3], row=2, col=1)
             fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dot"))
             dkey = f"{dd:%m/%d}"
             if dkey in dates:
@@ -195,11 +195,11 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                 fig.add_shape(type="rect", x0=i - 0.5, x1=i + 0.5, y0=0, y1=dv_b, row=2, col=1,
                               line=dict(color="#ff8c00", width=2), fillcolor="rgba(0,0,0,0)")
                 # 文字往左移開，用細箭頭指到橘框，避免跟右邊「近3日最大量」重疊
-                mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -14, row=2)
+                mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -6, row=2)
             if rv:
                 # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
                 mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量<br>為爆量日 {rv / dv * 100:.0f}%",
-                     "#7048e8", -4, -30, row=2)
+                     "#00a8d6", -4, -40, row=2, yanchor="bottom")
 
     # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
     hi_i = int(p["High"].to_numpy().argmax())
@@ -218,32 +218,77 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     lo_pad = float(p["Low"].min())
     rng_p = max(hi_v - lo_pad, 1e-9)
     # 個股圖：下方多留一條空白帶，專門放「大量低點」的文字，這樣文字不會蓋到 K 線或成交量
-    extra = (0.38 if not is_market else (0.40 if stab and stab.get('prior_low') is not None else 0))
-    y_lo, y_hi = lo_pad - rng_p * (0.04 + extra), hi_v + rng_p * 0.10
+    H = 280.0                                   # 價格圖大約的像素高度
+    info = None if is_market else vol_low_info(df)
+    band_px = 0.0
+    if not is_market and info:
+        band_px = 100.0 if info["sup"] else 56.0   # 下方空白帶：放「大量低點」文字的空間
+    elif is_market and stab and stab.get("prior_low") is not None:
+        band_px = 112.0
+    # 總範圍 T：上方留 10%、下方留 4%，其餘 band_px 像素給文字
+    T = rng_p * 1.14 / (1 - band_px / H)
+    y_hi = hi_v + rng_p * 0.10
+    y_lo = y_hi - T
+    ppu = H / T                                  # 每 1 元約幾像素
+    band_top = lo_pad - rng_p * 0.04
     fig.update_yaxes(range=[y_lo, y_hi], row=1, col=1)
 
-    if not is_market:
-        info = vol_low_info(df)
-        if info:
-            ppu = 280.0 / (y_hi - y_lo)          # 價格圖大約 280 像素高：每 1 元約幾像素
-            items = [(info["main"], RED if info["main"]["pressure"] else GREEN,
-                      f"近30日最大量（{info['main']['key']}）<br>當天最低點 {px(info['main']['low'])}"
-                      + ("　壓力" if info["main"]["pressure"] else "　支撐"), 0.08)]
-            if info["sup"]:
-                items.append((info["sup"], GREEN,
-                              f"短線支撐（近60日，{info['sup']['key']}）<br>當天最低點 {px(info['sup']['low'])}", 0.28))
-            for it, color, text, depth in items:
-                if it["key"] not in dates:
-                    continue
-                i = dates.index(it["key"])
-                text_y = lo_pad - rng_p * depth
-                fig.add_annotation(x=it["key"], y=it["low"], row=1, col=1, text=text,
-                                   showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
-                                   ax=-4 if i > n_bar * 0.55 else 4, ay=max(18.0, (it["low"] - text_y) * ppu),
-                                   xanchor="right" if i > n_bar * 0.55 else "left",
-                                   font=dict(color=color, size=12))
-                fig.add_hline(y=it["low"], row=1, col=1,
-                              line=dict(color=color, width=1, dash="dot"))
+    if not is_market and info:
+        def tw(text):                       # 估計文字寬度（像素）：中文約 12，數字符號約 6.5
+            return max(sum(12 if ord(ch) > 255 else 6.5 for ch in ln) for ln in text.split("<br>"))
+
+        main, sup = info["main"], info["sup"]
+        labels = [(main, RED if main["pressure"] else GREEN,
+                   f"近30日最大量（{main['key']}）<br>當天最低點 {px(main['low'])}　{'壓力' if main['pressure'] else '支撐'}")]
+        if sup:
+            labels.append((sup, GREEN, f"短線支撐（近60日，{sup['key']}）<br>當天最低點 {px(sup['low'])}"))
+        W, bar_px = 318.0, 318.0 / max(n_bar, 1)
+        xs = [dates.index(it["key"]) * bar_px if it["key"] in dates else None for it, _, _ in labels]
+
+        def span(x, w, anchor):
+            return {"right": (x - w, x), "left": (x, x + w), "center": (x - w / 2, x + w / 2)}[anchor]
+
+        # 兩個文字上下錯開成兩排，並挑選對齊方式，讓文字不超出圖、也不會被另一條箭頭穿過
+        plan = None
+        orders = [(0,), (0, 1), (1, 0)] if len(labels) == 2 else [(0,)]
+        for order in ([o for o in orders if len(o) == len(labels)]):
+            for ancs in (("right", "right"), ("right", "left"), ("left", "right"), ("left", "left"),
+                         ("center", "right"), ("right", "center"), ("center", "left"), ("left", "center"),
+                         ("center", "center")):
+                ok = True
+                spans = {}
+                for row_i, li in enumerate(order):
+                    x = xs[li]
+                    if x is None:
+                        continue
+                    a_ = ancs[row_i]
+                    x0, x1 = span(x, tw(labels[li][2]), a_)
+                    if x0 < -4 or x1 > W + 4:
+                        ok = False
+                    spans[row_i] = (x0, x1)
+                if ok and len(order) == 2 and xs[order[0]] is not None and xs[order[1]] is not None:
+                    # 上排文字不能蓋住下排那條箭頭
+                    if spans[0][0] - 6 <= xs[order[1]] <= spans[0][1] + 6:
+                        ok = False
+                if ok:
+                    plan = (order, ancs)
+                    break
+            if plan:
+                break
+        if plan is None:
+            plan = (tuple(range(len(labels))), ("right",) * 2)
+        order, ancs = plan
+        for row_i, li in enumerate(order):
+            it, color, text = labels[li]
+            if it["key"] not in dates:
+                continue
+            text_y = band_top - (24 + 46 * row_i) / ppu          # 兩排文字各自固定高度
+            anc = ancs[row_i]
+            fig.add_annotation(x=it["key"], y=it["low"], row=1, col=1, text=text,
+                               showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
+                               ax={"right": -4, "left": 4, "center": 0}[anc], ay=max(18.0, (it["low"] - text_y) * ppu),
+                               xanchor=anc, font=dict(color=color, size=12))
+            fig.add_hline(y=it["low"], row=1, col=1, line=dict(color=color, width=1, dash="dot"))
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
