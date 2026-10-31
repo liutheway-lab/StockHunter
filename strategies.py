@@ -215,10 +215,13 @@ def describe_market(mk):
         elif s["vol_missing"]:
             lines.append("🧱 止跌確認：❌ 大盤成交量資料取不到，無法確認")
         else:
+            ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             lines.append(
-                f"🧱 止跌確認：{'✅ 通過' if s['ok'] else '❌ 未通過'}\n"
-                f"　{'✅' if s['no_break'] else '❌'} 近3日最低 {s['recent_low']:,.0f}，前低 {s['prior_low']:,.0f}\n"
-                f"　{'✅' if s['vol_ok'] else '❌'} 近3日最大量 {s['recent_vol'] / 1e8:.2f} 億股，爆量下跌日 {s['dump_vol'] / 1e8:.2f} 億股"
+                f"🧱 止跌確認：{'✅ 通過' if s['ok'] else '❌ 未通過'}（兩項都要通過）\n"
+                f"　{'✅' if s['no_break'] else '❌'} 近 {cfg.STAB_DAYS} 日最低 {s['recent_low']:,.0f}"
+                f"（{s['recent_low_date']:%m/%d}），前低 {s['prior_low']:,.0f}（{s['prior_low_date']:%m/%d}）\n"
+                f"　{'✅' if s['vol_ok'] else '❌'} 近 {cfg.STAB_DAYS} 日最大量是爆量下跌日"
+                f"（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上"
             )
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
