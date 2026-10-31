@@ -1,112 +1,61 @@
-"""guide.py — 策略說明書（手動執行時，傳一則獨立訊息到 Telegram）
-數字全部讀 config.py，改了參數再執行一次，說明就會跟著更新。
-每行都刻意寫短，手機上才不會被切成兩段。
-"""
-import config as cfg
-import strategies as st
-from notify import send_telegram
+"""config.py — 所有可調參數（想改策略數字，只要改這個小檔案）"""
 
+# ---------- 名稱 ----------
+LAYER_NAMES = {0: "資料不足", 1: "強多頭", 2: "多頭", 3: "盤整／轉折", 4: "空頭", 5: "強空頭"}
+STRATEGY_NAMES = {
+    "pullback": "創高拉回",
+    "breakout": "盤整後噴出",
+    "dry": "量縮抗跌",
+    "flag": "噴出後整理再攻",
+}
 
-def pct(x):
-    return f"{x * 100:.0f}%"
+# ---------- 流動性 ----------
+MIN_LOTS = 1000            # 5 日均量 >= 1000 張
+MIN_AVG_TURNOVER = 5e7     # 20 日均成交金額 >= 5000 萬
 
+# ---------- 通用分批（四套策略共用）----------
+TRANCHES = (0.30, 0.40, 0.30)   # 第 1/2/3 筆投入資金比例
+EXT_RATIO = 1.08                # 第 3 筆：突破價 x 1.08
+STOP_ADD_PCT = 0.05             # 第 2 筆防守：突破價下方 5%
+COST_BY_MONEY = True            # True: 比例=資金比例（平均成本用金額加權）；False: 比例=股數比例
+FEE_RT = 0.006                  # 回測用：來回手續費+證交稅約 0.6%
 
-def build():
-    t = cfg.TRANCHES
-    max_ratio = st.solve_max_entry_ratio(*st.norm_ratios(t)[:2])
-    pb_lo = (1 - max_ratio) * 100
-    k, n = cfg.STAB_DAYS, cfg.STAB_LOOKBACK
+# ---------- 大盤分層與止跌確認 ----------
+USE_REGIME = True               # 依大盤階段決定啟用哪些策略
+STAB_LOOKBACK = 20              # 找前低、爆量下跌日的天數（不含最近 3 天）
+STAB_DAYS = 3                   # 盤整幾天不破前低
 
-    text = f"""📖 *台股選股系統說明書*
-━━━━━━━━━━━━━━
-*一、大盤五層*
-看加權指數收盤與均線的位置
-🟢 第 1 層　強多頭
-　收盤 > MA5 > MA10 > MA20
-　且收盤在 MA60 之上
-🟢 第 2 層　多頭
-　收盤在 MA20、MA60 之上
-🟡 第 3 層　盤整／轉折
-　收盤站上 MA20、MA60 其中一條
-　同時跌破另一條
-🔴 第 4 層　空頭
-　收盤在 MA20、MA60 之下
-🔴 第 5 層　強空頭
-　收盤 < MA5 < MA10 < MA20
-　且收盤在 MA60 之下
+# ---------- 策略 1：創高拉回 ----------
+PB_LOOKBACK = 30
+PB_MAX_AVG_RATIO = 0.94         # 前兩筆平均成本不高於前高的 94%
+PB_PULLBACK_MAX = 0.20          # 回檔超過 20% 視為轉弱
+PB_VOL_RATIO = 0.60             # 今日量 <= 高點日成交量的 60%
+PB_STOP_PCT = 0.10              # 第 1 筆停損：進場價下方 10%
+PB_RRR = 2.5                    # 目標 = 平均成本 x (1 + 停損% x 風報比)
 
-*二、各層啟用的策略*
-第 1、2 層：創高拉回、噴出後整理再攻
-第 3 層：同上，標示風險、縮小部位
-第 4、5 層：預設不進場
-　止跌確認通過才啟用
-　盤整後噴出、量縮抗跌
+# ---------- 策略 2：盤整後噴出（低檔爆量起漲）----------
+BO_PLATFORM = 30                # 頸線天數
+BO_MAX_RISE = 0.18              # 離 60 日低點不超過 18%
+BO_VOL_MULT = 2.0               # 今日量 >= 20 日均量 2 倍
+BO_STOP_PCT = 0.07              # 停損：頸線下 2% 或買價下 7%，取較低
+BO_TARGET_PCT = 0.20            # 目標 +20%
 
-*三、止跌確認（空頭時看）*
-兩項都要通過：
-① 不破低
-　近 {k} 日最低點
-　高於前 {n} 日的最低點
-② 量承接
-　近 {k} 日最大量
-　不小於前 {n} 日下跌日的最大量
-　（即「爆量下跌日」）
-成交額採用證交所數據，
-看相對比例，100% 以上才算過。
+# ---------- 策略 3：量縮抗跌 ----------
+DRY_VOL_RATIO = 0.50            # 3 日平均量 <= 20 日均量的 50%
+DRY_RS_RATIO = 0.50             # 個股跌幅 <= 大盤跌幅的 50%（從大盤 20 日高點起算）
+DRY_RRR = 2.5                   # 目標 = 買價 + 風報比 x (買價 - 前低)
+DRY_KEY_LOOKBACK = 20           # 突破價 = 近 20 日高點
 
-*四、四套個股策略*
-先過流動性：
-　5 日均量 ≥ {cfg.MIN_LOTS} 張
-　20 日均成交金額 ≥ {cfg.MIN_AVG_TURNOVER / 1e4:,.0f} 萬
+# ---------- 策略 4：噴出後整理再攻 ----------
+FLAG_WINDOW = 20                # 近 20 日內要有噴出
+FLAG_BURST_3D = 0.15            # 3 日漲幅 >= 15%
+FLAG_BURST_1D = 0.04            # 或單日漲幅 >= 4%
+FLAG_BURST_VOL = 1.5            # 噴出日量 >= 20 日均量 1.5 倍
+FLAG_MIN_CONSOL = 4             # 噴出高點後至少整理 4 天
+FLAG_MAX_PULLBACK = 0.50        # 回檔不超過噴出漲幅的 1/2
+FLAG_VOL_RATIO = 0.70           # 整理期均量 <= 噴出期均量的 70%
+FLAG_NEAR = 0.04                # 距前波高點 4% 以內就通知（含已突破）
+FLAG_STOP_MIN_PCT = 0.05        # 停損：噴出高度一半 與 買價下 5%，取較低
 
-📈 *創高拉回*
-① 前高是近 {cfg.PB_LOOKBACK} 日的新高
-② 回檔 {pb_lo:.1f}%～{cfg.PB_PULLBACK_MAX * 100:.0f}%
-③ 今日量 ≤ 前高日量的 {pct(cfg.PB_VOL_RATIO)}
-④ EMA20 > EMA60
-停損：進場價下 {pct(cfg.PB_STOP_PCT)}
-目標：風報比 {cfg.PB_RRR}
-
-🚀 *噴出後整理再攻*
-① 近 {cfg.FLAG_WINDOW} 日內有噴出
-　3 日漲 ≥ {pct(cfg.FLAG_BURST_3D)}，或單日漲 ≥ {pct(cfg.FLAG_BURST_1D)}
-　且量 ≥ 均量 {cfg.FLAG_BURST_VOL} 倍
-② 整理至少 {cfg.FLAG_MIN_CONSOL} 天
-③ 回檔不超過噴出漲幅的一半
-④ 守住月線，整理期量縮
-⑤ 現價距前波高點 {pct(cfg.FLAG_NEAR)} 內
-　（已突破者標 ↑）
-
-🌱 *盤整後噴出*
-① 離 60 日低點漲幅 ≤ {pct(cfg.BO_MAX_RISE)}
-② 突破 {cfg.BO_PLATFORM} 日頸線
-③ 量 ≥ 20 日均量 {cfg.BO_VOL_MULT:.0f} 倍
-④ 站上季線、月線翻揚
-停損：頸線下 2% 或買價下 {pct(cfg.BO_STOP_PCT)}，取低
-目標：+{pct(cfg.BO_TARGET_PCT)}
-
-🛡 *量縮抗跌*
-① 3 日均量 ≤ 20 日均量的 {pct(cfg.DRY_VOL_RATIO)}
-② {k} 日不破前低
-③ 個股跌幅 ≤ 大盤的 {pct(cfg.DRY_RS_RATIO)}
-　（從大盤 20 日高點起算）
-停損：跌破個股前低
-目標：風報比 {cfg.DRY_RRR}
-
-*五、清單怎麼看*
-```
-現價　　今天收盤
-突破價　突破才加碼的價位
-停損價　第 1 筆的停損
-目標價　第 1 個停利點
-分批　　{pct(t[0])}／{pct(t[1])}／{pct(t[2])}
-第三筆　突破價 × {cfg.EXT_RATIO}
-```
-↑ 代表已突破前波高點
-
-⚠️ 規則篩選，非買賣建議"""
-    return [text]
-
-
-if __name__ == "__main__":
-    send_telegram(build())
+BATCH = 60
+FALLBACK = ["2330.TW", "2317.TW", "2454.TW", "2382.TW", "3231.TW", "2603.TW"]
