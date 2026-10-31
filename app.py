@@ -203,6 +203,11 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                 i = dates.index(dkey)
                 fig.add_shape(type="rect", x0=i - 0.5, x1=i + 0.5, y0=0, y1=dv_b, row=2, col=1,
                               line=dict(color="#ff8c00", width=2), fillcolor="rgba(0,0,0,0)")
+                # 價格圖上也把爆量日那根 K 線框起來
+                lo_k, hi_k = float(p["Low"].iloc[i]), float(p["High"].iloc[i])
+                pad_k = (hi_k - lo_k) * 0.15 + 1e-9
+                fig.add_shape(type="rect", x0=i - 0.55, x1=i + 0.55, y0=lo_k - pad_k, y1=hi_k + pad_k, row=1, col=1,
+                              line=dict(color="#ff8c00", width=1.5), fillcolor="rgba(0,0,0,0)", layer="above")
                 # 文字往左移開，用細箭頭指到橘框，避免跟右邊「近3日最大量」重疊
                 mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -6, row=2)
             if rv:
@@ -311,6 +316,8 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
         template="plotly_dark", dragmode=False, hovermode=False,
     )
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(fixedrange=True)
     fig.update_xaxes(type="category", tickangle=-45, showgrid=False, nticks=10, range=[-0.5, len(dates) - 0.5])
     fig.update_yaxes(side="right", gridcolor="rgba(255,255,255,0.08)")
     fig.update_yaxes(title_text=vol_label, title_font_size=10, row=2, col=1)
@@ -331,8 +338,8 @@ def load_stock(code, suffix):
 
 @st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
 def load_stock_long(code, suffix):
-    """回測用：抓 7 年（前 2 年給均線暖身，回測看近 5 年）"""
-    return data._clean(yf.Ticker(code + suffix).history(period="7y", auto_adjust=False))
+    """回測用：抓 8 年（涵蓋 2020 疫情崩盤，前幾個月給均線暖身）"""
+    return data._clean(yf.Ticker(code + suffix).history(period="8y", auto_adjust=False))
 
 
 def _twse_month(y, m):
@@ -354,10 +361,10 @@ def _twse_month(y, m):
 
 @st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
 def load_market_hist():
-    """回測用的大盤：7 年加權指數 + 每天的層級與啟用策略。
+    """回測用的大盤：8 年加權指數 + 每天的層級與啟用策略。
     成交金額只在空頭層級時才需要（止跌確認），所以只抓那些月份，省時間"""
     import backtest as BT
-    mkt = data._clean(yf.download("^TWII", period="7y", interval="1d", progress=False, auto_adjust=False))
+    mkt = data._clean(yf.download("^TWII", period="8y", interval="1d", progress=False, auto_adjust=False))
     layers = S.layer_series(mkt)
     months = set()
     for d in mkt.index[layers.isin([4, 5]).to_numpy()]:
@@ -379,8 +386,7 @@ def stock_backtest(code, suffix, ratios, mode, only_active):
     mkt, mstate = load_market_hist()
     if raw is None or len(raw) < 120:
         return None
-    start = raw.index[-1] - pd.DateOffset(years=5)
-    return BT.run_stock(raw, mkt, mstate, ratios, mode=mode, start=start, only_active=only_active)
+    return BT.run_stock(raw, mkt, mstate, ratios, mode=mode, only_active=only_active)
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner="載入證交所官方股票清單...")
@@ -525,14 +531,14 @@ if mk:
             ])
 
     st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
-                    use_container_width=True, config={"displayModeBar": False})
+                    use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
     if show_stab:
         st.caption(L("黃色底＝近 3 日　虛線＝止跌確認的門檻", "成交金額採用證交所數據，看相對比例"))
     if mk["active"]:
         (st.warning if mk["risk"] else st.success)(
             "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
     else:
-        st.error("🔴 尚未止跌，不建立多頭部位")
+        st.error("🔴 尚未止跌，不建議建立多頭部位")
 
 # ==================== 今日推薦 ====================
 RESULT_PATH = Path(__file__).parent / "scan_results.json"
@@ -595,7 +601,7 @@ else:
                         st.caption("今天沒有符合的股票。")
                 foldable(f"recfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔", rec_body, default=bool(items))
     else:
-        st.error(L("🔴 尚未止跌，不建立多頭部位", f"已讀取 {scan['data_date']} 夜間掃描：今日無推薦"))
+        st.error(L("🔴 尚未止跌，不建議建立多頭部位", f"已讀取 {scan['data_date']} 夜間掃描：今日無推薦"))
 
     watch = [(n, hits.get(n, [])) for n in ORDER if n not in active and hits.get(n)]
     n_active = sum(len(hits.get(a_, [])) for a_ in active)
@@ -648,34 +654,78 @@ BT_MODE = {"ladder_avg": "A 三段，買第 2 筆後出場價拉到均價",
            "single": "D 一次買進"}
 BT_SHORT = {"pullback": "創高拉回", "flag": "噴後整理", "breakout": "盤整噴出", "dry": "量縮抗跌"}
 BT_REASON = {"target": "🎯", "stop": "🛑", "time": "⏰"}
+CRASHES = {                      # 崩盤期（訊號出現在這段期間的交易）
+    "2020 疫情崩盤": ("2020-02-15", "2020-04-30"),
+    "2022 全年空頭": ("2022-01-01", "2022-12-31"),
+    "2024/08 急殺": ("2024-07-15", "2024-09-15"),
+    "2025/04 關稅急跌": ("2025-03-25", "2025-05-31"),
+}
+
+
+def _stat_row(label, s_):
+    if not s_.get("n"):
+        return (label, "0", "—", "—", "—", "—")
+    return (label, f"{s_['n']}", f"{s_['win'] * 100:.0f}%", f"{s_['mean'] * 100:+.1f}%",
+            f"{s_['avg_win'] * 100:+.1f}／{s_['avg_loss'] * 100:.1f}%", f"{s_['worst'] * 100:+.1f}%")
 
 
 def stock_bt_body(code, suffix, capital):
     import backtest as BT
     mode = st.radio("出場方式", list(BT_MODE), format_func=lambda m: BT_MODE[m], key="sbt_mode")
     only_active = st.toggle("只在大盤啟用該策略時進場（照目前規則）", value=True, key="sbt_active")
-    with st.spinner("回測中…第一次要載入 7 年的大盤資料，約需 30 秒"):
-        T = stock_backtest(code, suffix, tuple(ratios), mode, only_active)
-    if T is None:
+    periods = {"近 5 年": None, **{k: v for k, v in CRASHES.items()}}
+    period = st.selectbox("期間", list(periods), key="sbt_period")
+    with st.spinner("回測中…第一次要載入 8 年的大盤資料，約需 30 秒"):
+        T_all = stock_backtest(code, suffix, tuple(ratios), mode, only_active)
+    if T_all is None:
         st.info("這檔的歷史資料不足，無法回測")
         return
-    if T.empty:
-        st.info(L("近 5 年這檔沒有出現符合條件的訊號", "（或訊號都出現在大盤不啟用的時候）"))
-        return
+    raw = load_stock_long(code, suffix)
+    end = raw.index[-1]
+    if periods[period] is None:
+        a_, b_ = end - pd.DateOffset(years=5), end
+    else:
+        a_, b_ = (pd.Timestamp(x) for x in periods[period])
+    T = T_all[(T_all["date"] >= a_) & (T_all["date"] <= b_)] if not T_all.empty else T_all
+
+    if raw.index[0] > a_ + pd.Timedelta(days=100):
+        st.info(L(f"這檔的資料從 {raw.index[0]:%Y/%m} 才開始", "這段期間無法回測"))
+    elif T.empty:
+        st.info(L(f"{period}這檔沒有任何交易",
+                  "大盤規則在這段期間沒有啟用策略" if only_active else "這段期間沒有出現符合條件的訊號"))
+    else:
+        rows = [_stat_row(BT_SHORT[n], BT.trade_stats(T[T["strat"] == n])) for n in BT.STRATS
+                if (T["strat"] == n).any()]
+        rows.append(_stat_row("合計", BT.trade_stats(T)))
+        show_table(["策略", "筆數", "勝率", "期望值", "平均賺／賠", "最差"], rows)
+        pnl = T["ret_plan"] * capital
+        st.markdown(L(f"**每次都投入可用資金 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
+        if len(T) < 10:
+            st.warning(L(f"只有 {len(T)} 筆交易，樣本很少", "勝率容易被運氣影響，參考就好"))
+
+    # 崩盤期總覽：這檔股票本身跌多少 vs 照策略操作的結果
+    st.markdown("**崩盤期總覽**")
     rows = []
-    for name in BT.STRATS:
-        s_ = BT.trade_stats(T[T["strat"] == name])
-        if s_.get("n"):
-            rows.append((BT_SHORT[name], f"{s_['n']}", f"{s_['win'] * 100:.0f}%", f"{s_['mean'] * 100:+.1f}%",
-                         f"{s_['avg_win'] * 100:+.1f}／{s_['avg_loss'] * 100:.1f}%", f"{s_['worst'] * 100:+.1f}%"))
-    s_ = BT.trade_stats(T)
-    rows.append(("合計", f"{s_['n']}", f"{s_['win'] * 100:.0f}%", f"{s_['mean'] * 100:+.1f}%",
-                 f"{s_['avg_win'] * 100:+.1f}／{s_['avg_loss'] * 100:.1f}%", f"{s_['worst'] * 100:+.1f}%"))
-    show_table(["策略", "筆數", "勝率", "期望值", "平均賺／賠", "最差"], rows)
-    pnl = T["ret_plan"] * capital
-    st.markdown(L(f"**每次都投入可用資金 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
-    if len(T) < 10:
-        st.warning(L(f"只有 {len(T)} 筆交易，樣本很少", "勝率容易被運氣影響，參考就好"))
+    short = {"2020 疫情崩盤": "2020 疫情", "2022 全年空頭": "2022 空頭", "2024/08 急殺": "2024/08", "2025/04 關稅急跌": "2025/04"}
+    for label_full, (ca, cb) in CRASHES.items():
+        label = short.get(label_full, label_full)
+        seg = raw.loc[ca:cb, "Close"]
+        if len(seg) < 5 or raw.index[0] > pd.Timestamp(ca) - pd.Timedelta(days=100):
+            rows.append((label, "—", "—", "—", "—"))
+            continue
+        hold = seg.iloc[-1] / seg.iloc[0] - 1
+        x = T_all[(T_all["date"] >= ca) & (T_all["date"] <= cb)] if not T_all.empty else T_all
+        if x.empty:
+            rows.append((label, f"{hold * 100:+.1f}%", "0", "—", "未進場"))
+        else:
+            s_ = BT.trade_stats(x)
+            rows.append((label, f"{hold * 100:+.1f}%", f"{s_['n']}", f"{s_['win'] * 100:.0f}%",
+                         f"{(x['ret_plan'] * capital).sum():+,.0f}"))
+    show_table(["期間", "股價漲跌", "筆數", "勝率", "損益（元）"], rows)
+    st.caption(L("股價漲跌＝這段期間一直抱著這檔的漲跌", "筆數、損益＝照策略操作（訊號出現在這段期間的交易）",
+                 "未進場＝策略沒有出手，也就沒有虧損"))
+    if T.empty:
+        return
     st.markdown("**每一筆交易**（新的在上面）")
     lst = T.sort_values("date", ascending=False).head(20)
     show_table(["進場日", "策略", "進場", "出場", "結果", "損益"], [
@@ -763,7 +813,7 @@ if target:
             level, text = S.verdict(ev)
             {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](brk(text))
             st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
-                            config={"displayModeBar": False})
+                            config={"displayModeBar": False, "staticPlot": True})
 
             vi = vol_low_info(df)
             if vi:
@@ -828,4 +878,4 @@ if target:
                      status="用你的資金比例，模擬這檔過去每一次訊號")
 
 
-st.caption("最後更新：2026 年 10 月")
+st.caption("最後更新：2026 年 10 月 31 日")
