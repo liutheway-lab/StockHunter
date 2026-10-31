@@ -3,7 +3,6 @@
 沒有符合的股票也會發訊息（確認系統有在跑）。
 所有策略數字都在 config.py。
 """
-import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -110,19 +109,19 @@ def scan(prices, mk, ratios):
 
 def strategy_block(name, items, names, risk):
     title = f"*{TITLES[name]}*　{len(items)} 檔" + ("　⚠️標示風險" if risk else "")
-    lines = []
+    # 數字欄位全部是半形，所以一定對齊；中文名稱放最後一欄，長短不影響對齊
+    lines = [f"{'Code':<4} {'Now':>5} {'Brk':>5} {'Stop':>5} {'Goal':>5} 名稱"]
     for h in items[:MAX_LIST]:
         code = h["sym"].split(".")[0]
-        mark = "↑" if (name == "flag" and h["r"].get("status", "").startswith("已突破")) else " "
         p = h["plan"]
-        lines.append(f"{mark}{code:<4} {pad(names.get(h['sym'], code))} "
-                     f"{fp(h['r']['close']):>5} {fp(p['key']):>5} {fp(p['stop1']):>5} {fp(p['targets'][0][1]):>5}")
+        broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
+        lines.append(f"{code:<4} {fp(h['r']['close']):>5} {fp(p['key']):>5} {fp(p['stop1']):>5} "
+                     f"{fp(p['targets'][0][1]):>5} {names.get(h['sym'], code)[:4]}" + (" ↑" if broke else ""))
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
     return title + "\n" + code_block(lines) + more
 
 
 def run():
-    t0 = time.time()
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     ratios = cfg.TRANCHES
 
@@ -145,34 +144,31 @@ def run():
         f"{now:%m/%d}（{WEEKDAY[now.weekday()]}）{now:%H:%M}　資料日 {data_date:%m/%d}",
     ]
     if data_date.date() != now.date():
-        head.append("📌 資料日不是今天（可能休市或資料尚未更新），以下為最近交易日")
+        head.append("📌 今天沒有新資料（休市或尚未更新），以下為最近交易日")
 
     parts = ["\n".join(head) + "\n" + LINE, market_block(mk) + "\n" + LINE]
 
     active = mk["active"]
     shown = False
     if active:
-        parts.append("欄位：代號 名稱 現價 突破價 停損 目標（↑＝已突破）")
+        parts.append("Now 現價｜Brk 突破價｜Stop 停損｜Goal 目標｜↑ 已突破")
         for name in ORDER:
             if name in active and hits[name]:
                 parts.append(strategy_block(name, hits[name], names, mk["risk"]))
                 shown = True
         if not shown:
             parts.append("今晚沒有符合的股票。")
-    extra = [f"{cfg.STRATEGY_NAMES[n]} {len(hits[n])} 檔" for n in ORDER if n not in active and hits[n]]
-    if extra:
-        parts.append("型態符合但大盤層級不適用（不列出）：" + "、".join(extra))
-
-    mins = (time.time() - t0) / 60
-    foot = f"掃描 {len(prices)} 檔｜流動性合格 {liquid} 檔｜耗時 {mins:.1f} 分"
+    # 只有出問題時才顯示提醒
+    warn = []
     if directory.attrs.get("fallback"):
-        foot += "\n⚠️ 官方股票清單抓取失敗，只掃描備用的幾檔"
+        warn.append("⚠️ 官方股票清單抓取失敗，只掃描備用的幾檔")
     elif failed and len(failed) > 0.15 * len(directory):
-        foot += f"\n⚠️ 有 {len(failed)} 檔沒抓到資料，結果可能不完整"
-    if stale:
-        foot += f"\n略過 {stale} 檔（停牌或資料未更新）"
-    parts.append(LINE + "\n" + foot)
+        warn.append(f"⚠️ 有 {len(failed)} 檔沒抓到資料，結果可能不完整")
+    if warn:
+        parts.append("\n".join(warn))
 
+    if parts[-1].endswith(LINE):       # 後面沒有內容時，不要留一條多餘的分隔線
+        parts[-1] = parts[-1][:-len(LINE)].rstrip()
     send_telegram(parts)
 
 
