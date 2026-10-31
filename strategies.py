@@ -137,27 +137,36 @@ def layer_series(df):
 
 
 def stabilization(df, i):
-    """止跌確認：最近 3 天最低點都沒破前低，且這 3 天任一天的量 >= 近 20 日（不含最近 3 天）量最大的下跌日"""
+    """止跌確認：最近 3 天最低點都沒破前低，且這 3 天任一天的量 >= 近 20 日（不含最近 3 天）量最大的下跌日
+    回傳的字典也包含「前低是哪天、爆量下跌日是哪天」，方便畫圖對照。"""
     n, k = cfg.STAB_LOOKBACK, cfg.STAB_DAYS
     if i < n + k + 1 or i >= len(df):
         return None
     lo, hi = i - k - n + 1, i - k + 1
-    L = float(df["Low"].iloc[lo:hi].min())
-    low_recent = float(df["Low"].iloc[hi:i + 1].min())
+    low_win = df["Low"].iloc[lo:hi]
+    L = float(low_win.min())
+    low_recent_win = df["Low"].iloc[hi:i + 1]
+    low_recent = float(low_recent_win.min())
     no_break = low_recent > L
+    dates = {"prior_low_date": low_win.idxmin(), "recent_low_date": low_recent_win.idxmin(),
+             "recent_start": df.index[hi], "recent_end": df.index[i], "dump_date": None}
 
     close = df["Close"]
     down = (close < close.shift(1)).iloc[lo:hi].to_numpy()
-    vols = df["Volume"].iloc[lo:hi].to_numpy(float)[down]
-    vols = vols[~np.isnan(vols)]
+    vol_win = df["Volume"].iloc[lo:hi].to_numpy(float)
+    idx_win = df.index[lo:hi]
+    vols, vdates = vol_win[down], idx_win[down]
+    valid = ~np.isnan(vols)
+    vols, vdates = vols[valid], vdates[valid]
     recent_v = float(df["Volume"].iloc[hi:i + 1].max())
     if len(vols) == 0 or vols.max() <= 0 or recent_v != recent_v:
         return {"ok": False, "no_break": no_break, "vol_ok": None, "vol_missing": True,
-                "prior_low": L, "recent_low": low_recent, "dump_vol": None, "recent_vol": None}
+                "prior_low": L, "recent_low": low_recent, "dump_vol": None, "recent_vol": None, **dates}
     dump = float(vols.max())
+    dates["dump_date"] = vdates[int(vols.argmax())]
     vol_ok = recent_v >= dump
     return {"ok": bool(no_break and vol_ok), "no_break": no_break, "vol_ok": vol_ok, "vol_missing": False,
-            "prior_low": L, "recent_low": low_recent, "dump_vol": dump, "recent_vol": recent_v}
+            "prior_low": L, "recent_low": low_recent, "dump_vol": dump, "recent_vol": recent_v, **dates}
 
 
 def active_strategies(layer, stab_ok):
