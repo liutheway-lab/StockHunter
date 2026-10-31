@@ -45,40 +45,33 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                   row=2, col=1)
 
     if stab and stab.get("prior_low") is not None:
-        pl = stab["prior_low"]
         s0, s1 = f"{stab['recent_start']:%m/%d}", f"{stab['recent_end']:%m/%d}"
         if s0 in dates and s1 in dates:
-            # 近 3 日：整張圖高度的亮黃色帶（layer=above 才不會被深色背景蓋住）
+            # 近 3 日：整張圖高度的黃色底（不加外框；layer=above 才不會被深色背景蓋住）
             fig.add_shape(type="rect", xref="x", yref="paper", x0=dates.index(s0) - 0.5,
-                          x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.38)",
-                          line=dict(color="#ffdd00", width=3), layer="above")
-            fig.add_annotation(x=(dates.index(s0) + dates.index(s1)) / 2, y=1.0, xref="x", yref="paper",
-                               text="近 3 日", showarrow=False, yanchor="bottom",
-                               font=dict(color="#000", size=12), bgcolor="#ffdd00", borderpad=3)
-        # 前低：大菱形標記 + 橘底箭頭標籤（不畫橫線）
-        pld = f"{stab['prior_low_date']:%m/%d}"
-        if pld in dates:
-            fig.add_trace(go.Scatter(x=[pld], y=[pl], mode="markers", showlegend=False, hoverinfo="skip",
-                                     marker=dict(symbol="diamond", size=15, color="#ff7a00",
-                                                 line=dict(color="#fff", width=2))), row=1, col=1)
-            fig.add_annotation(x=pld, y=pl, xref="x", yref="y", text=f"前低 {pl:,.0f}（{pld}）",
-                               showarrow=True, arrowhead=2, arrowsize=1.3, arrowwidth=2, arrowcolor="#ff7a00",
-                               ax=0, ay=45, font=dict(color="#000", size=13), bgcolor="#ff7a00", borderpad=4)
-        rl, rld = stab.get("recent_low"), f"{stab['recent_low_date']:%m/%d}" if stab.get("recent_low_date") is not None else None
-        if rl is not None and rld in dates:
-            fig.add_trace(go.Scatter(x=[rld], y=[rl], mode="markers", showlegend=False, hoverinfo="skip",
-                                     marker=dict(symbol="diamond", size=15, color="#00e5ff",
-                                                 line=dict(color="#fff", width=2))), row=1, col=1)
-            fig.add_annotation(x=rld, y=rl, xref="x", yref="y", text=f"近3日最低 {rl:,.0f}（{rld}）",
-                               showarrow=True, arrowhead=2, arrowsize=1.3, arrowwidth=2, arrowcolor="#00e5ff",
-                               ax=-70, ay=60, font=dict(color="#000", size=13), bgcolor="#00e5ff", borderpad=4)
+                          x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.22)",
+                          line_width=0, layer="above")
+
+        def mark(day, val, text, color, pos):
+            if day in dates:
+                fig.add_trace(go.Scatter(x=[day], y=[val], mode="markers+text", showlegend=False,
+                                         hoverinfo="skip", text=[text], textposition=pos,
+                                         textfont=dict(color=color, size=12),
+                                         marker=dict(symbol="diamond", size=10, color=color,
+                                                     line=dict(color="#ffffff", width=1))), row=1, col=1)
+
+        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"], f"前低 {stab['prior_low']:,.0f}",
+             "#ff9f1a", "middle left")
+        if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
+            mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"], f"近3日低 {stab['recent_low']:,.0f}",
+                 "#00e5ff", "bottom left")
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
         template="plotly_dark", dragmode=False, hovermode=False,
     )
-    fig.update_xaxes(type="category", tickangle=-45, showgrid=False, nticks=10)
+    fig.update_xaxes(type="category", tickangle=-45, showgrid=False, nticks=10, range=[-0.5, len(dates) - 0.5])
     fig.update_yaxes(side="right", gridcolor="rgba(255,255,255,0.08)")
     fig.update_yaxes(title_text=vol_label, title_font_size=10, row=2, col=1)
     return fig
