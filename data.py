@@ -5,8 +5,12 @@
 價格用「不還原股利」的收盤價（只還原分割），這樣前高、進場價才跟看盤軟體上看到的一樣。
 """
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 
 import config as cfg
@@ -45,14 +49,53 @@ def _clean(df):
     return df if len(df) else None
 
 
+def fetch_twse_turnover(months=4):
+    """證交所官方：加權市場每日成交金額（元）。回傳 Series（索引是日期）。
+    Yahoo 的加權指數成交量不可靠，所以止跌確認的量能改用這份。"""
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    y, m = now.year, now.month
+    out = {}
+    for _ in range(months):
+        url = f"https://www.twse.com.tw/exchangeReport/FMTQIK?response=json&date={y}{m:02d}01"
+        for k in range(3):
+            try:
+                r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                j = r.json()
+                if j.get("stat") == "OK" and j.get("data"):
+                    col = j["fields"].index("成交金額")
+                    for row in j["data"]:
+                        yy, mm, dd = (int(x) for x in row[0].strip().split("/"))
+                        out[pd.Timestamp(yy + 1911, mm, dd)] = float(str(row[col]).replace(",", ""))
+                break
+            except Exception as e:
+                print(f"證交所成交金額 {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
+                time.sleep(2)
+        time.sleep(0.5)
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    if not out:
+        raise RuntimeError("證交所成交金額抓不到")
+    return pd.Series(out).sort_index()
+
+
 def fetch_market(period="2y", retries=3):
-    """加權指數日線（^TWII）。失敗會重試，最後仍失敗就丟出例外"""
+    """加權指數日線（^TWII）。價格來自 Yahoo；Volume 欄位換成證交所官方的「成交金額」。
+    成交金額抓不到時 Volume 全部留空，止跌確認會顯示『無法確認』，而不是用錯的數字。"""
     last = None
     for k in range(retries):
         try:
             raw = yf.download("^TWII", period=period, interval="1d", progress=False, auto_adjust=False)
             df = _clean(raw)
             if df is not None and len(df) >= 70:
+                try:
+                    s = fetch_twse_turnover()
+                    df["Volume"] = s.reindex(df.index)
+                    df.attrs["vol_source"] = "twse"
+                except Exception as e:
+                    print("大盤成交金額抓取失敗：", repr(e))
+                    df["Volume"] = np.nan
+                    df.attrs["vol_source"] = "none"
                 return df
             last = "資料不足"
         except Exception as e:
