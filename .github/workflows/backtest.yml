@@ -26,7 +26,7 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-        run: python backtest.py --sample ${{ inputs.sample }}
+        run: python backtest.py --sample ${{ inputs.sample }} --no-telegram   # 結果只放網頁 app；想同時收 Telegram 就拿掉 --no-telegram
       - name: 保存完整結果（可以下載）
         uses: actions/upload-artifact@v4
         with:
@@ -38,6 +38,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add bt_report.json || true
+          git add bt_report.json bt_signals.npz || true
           git diff --cached --quiet || git commit -m "更新回測結果"
           git push
