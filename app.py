@@ -329,6 +329,60 @@ def load_stock(code, suffix):
     return yf.Ticker(code + suffix).history(period="1y", auto_adjust=False)
 
 
+@st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
+def load_stock_long(code, suffix):
+    """回測用：抓 7 年（前 2 年給均線暖身，回測看近 5 年）"""
+    return data._clean(yf.Ticker(code + suffix).history(period="7y", auto_adjust=False))
+
+
+def _twse_month(y, m):
+    """證交所某個月的每日成交金額（元）"""
+    import requests
+    url = f"https://www.twse.com.tw/exchangeReport/FMTQIK?response=json&date={y}{m:02d}01"
+    out = {}
+    try:
+        j = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"}).json()
+        if j.get("stat") == "OK" and j.get("data"):
+            col = j["fields"].index("成交金額")
+            for row in j["data"]:
+                yy, mm, dd = (int(x) for x in row[0].strip().split("/"))
+                out[pd.Timestamp(yy + 1911, mm, dd)] = float(str(row[col]).replace(",", ""))
+    except Exception:
+        pass
+    return out
+
+
+@st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
+def load_market_hist():
+    """回測用的大盤：7 年加權指數 + 每天的層級與啟用策略。
+    成交金額只在空頭層級時才需要（止跌確認），所以只抓那些月份，省時間"""
+    import backtest as BT
+    mkt = data._clean(yf.download("^TWII", period="7y", interval="1d", progress=False, auto_adjust=False))
+    layers = S.layer_series(mkt)
+    months = set()
+    for d in mkt.index[layers.isin([4, 5]).to_numpy()]:
+        for back in (0, 1, 2):                       # 止跌確認要往回看約 33 個交易日
+            p_ = (d - pd.DateOffset(months=back))
+            months.add((p_.year, p_.month))
+    vol = {}
+    for y, m in sorted(months):
+        vol.update(_twse_month(y, m))
+        time.sleep(0.3)
+    mkt["Volume"] = pd.Series(vol).reindex(mkt.index) if vol else float("nan")
+    return mkt, BT.market_states(mkt)
+
+
+@st.cache_data(ttl=60 * 60 * 12, show_spinner=False, max_entries=50)
+def stock_backtest(code, suffix, ratios, mode, only_active):
+    import backtest as BT
+    raw = load_stock_long(code, suffix)
+    mkt, mstate = load_market_hist()
+    if raw is None or len(raw) < 120:
+        return None
+    start = raw.index[-1] - pd.DateOffset(years=5)
+    return BT.run_stock(raw, mkt, mstate, ratios, mode=mode, start=start, only_active=only_active)
+
+
 @st.cache_data(ttl=60 * 60 * 24, show_spinner="載入證交所官方股票清單...")
 def load_directory():
     return lookup.load_directory()
@@ -587,6 +641,53 @@ st.markdown(f"**各階段可投入**  \n"
             f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）")
 st.caption(L("比例會影響「創高拉回」的進場區間", "資金用來試算每一筆可以買幾股"))
 
+# ==================== 單檔回測 ====================
+BT_MODE = {"ladder_avg": "A 三段，買第 2 筆後出場價拉到均價",
+           "ladder_stop2": "B 三段，買第 2 筆後出場價拉到突破價下 5%",
+           "ladder_stop1": "C 三段，出場價不動",
+           "single": "D 一次買進"}
+BT_SHORT = {"pullback": "創高拉回", "flag": "噴後整理", "breakout": "盤整噴出", "dry": "量縮抗跌"}
+BT_REASON = {"target": "🎯", "stop": "🛑", "time": "⏰"}
+
+
+def stock_bt_body(code, suffix, capital):
+    import backtest as BT
+    mode = st.radio("出場方式", list(BT_MODE), format_func=lambda m: BT_MODE[m], key="sbt_mode")
+    only_active = st.toggle("只在大盤啟用該策略時進場（照目前規則）", value=True, key="sbt_active")
+    with st.spinner("回測中…第一次要載入 7 年的大盤資料，約需 30 秒"):
+        T = stock_backtest(code, suffix, tuple(ratios), mode, only_active)
+    if T is None:
+        st.info("這檔的歷史資料不足，無法回測")
+        return
+    if T.empty:
+        st.info(L("近 5 年這檔沒有出現符合條件的訊號", "（或訊號都出現在大盤不啟用的時候）"))
+        return
+    rows = []
+    for name in BT.STRATS:
+        s_ = BT.trade_stats(T[T["strat"] == name])
+        if s_.get("n"):
+            rows.append((BT_SHORT[name], f"{s_['n']}", f"{s_['win'] * 100:.0f}%", f"{s_['mean'] * 100:+.1f}%",
+                         f"{s_['avg_win'] * 100:+.1f}／{s_['avg_loss'] * 100:.1f}%", f"{s_['worst'] * 100:+.1f}%"))
+    s_ = BT.trade_stats(T)
+    rows.append(("合計", f"{s_['n']}", f"{s_['win'] * 100:.0f}%", f"{s_['mean'] * 100:+.1f}%",
+                 f"{s_['avg_win'] * 100:+.1f}／{s_['avg_loss'] * 100:.1f}%", f"{s_['worst'] * 100:+.1f}%"))
+    show_table(["策略", "筆數", "勝率", "期望值", "平均賺／賠", "最差"], rows)
+    pnl = T["ret_plan"] * capital
+    st.markdown(L(f"**每次都投入可用資金 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
+    if len(T) < 10:
+        st.warning(L(f"只有 {len(T)} 筆交易，樣本很少", "勝率容易被運氣影響，參考就好"))
+    st.markdown("**每一筆交易**（新的在上面）")
+    lst = T.sort_values("date", ascending=False).head(20)
+    show_table(["進場日", "策略", "進場", "出場", "結果", "損益"], [
+        (f"{r.entry_date:%y/%m/%d}", BT_SHORT[r.strat], px(r.entry_px), px(r.exit_px), BT_REASON[r.reason],
+         f"{r.ret_plan * capital:+,.0f}") for r in lst.itertuples()])
+    st.caption("損益單位：元　🎯 碰到目標價　🛑 碰到出場價　⏰ 持有到期" + (f"　｜只列最近 20 筆，共 {len(T)} 筆" if len(T) > 20 else ""))
+    st.caption(L("規則：訊號隔天開盤進場；同一天碰到出場價和目標價先算出場",
+                 f"持有超過 {BT.MAX_HOLD} 個交易日用收盤價出場；已扣來回成本 {cfg.FEE_RT * 100:.1f}%",
+                 "期望值＝平均每筆報酬（以實際投入的錢計）",
+                 "回測是過去的表現，不代表未來"))
+
+
 # ==================== 個股診斷 ====================
 st.divider()
 st.subheader("🔍 個股診斷")
@@ -721,196 +822,10 @@ if target:
                 foldable(f"{code}_{sname}", label, body, default=r["ok"],
                          status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
 
-# ==================== 策略回測 ====================
-st.divider()
-st.subheader("🧪 策略回測")
-BT_SIGNALS = Path(__file__).parent / "bt_signals.npz"
-BT_REPORT = Path(__file__).parent / "bt_report.json"
-MODE_LABEL = {"ladder_avg": "A 三段，買第 2 筆後出場價拉到均價",
-              "ladder_stop2": "B 三段，買第 2 筆後出場價拉到突破價下 5%",
-              "ladder_stop1": "C 三段，出場價不動",
-              "single": "D 一次買進"}
-BT_SHORT = {"pullback": "創高拉回", "flag": "噴後整理", "breakout": "盤整噴出", "dry": "量縮抗跌"}
+            sfx_bt = sfx                     # 上面實際抓到資料的市場別（.TW 或 .TWO）
+            foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
+                     lambda: stock_bt_body(code, sfx_bt, capital), default=False,
+                     status="用你的資金比例，模擬這檔過去每一次訊號")
 
-
-@st.cache_data(show_spinner=False)
-def bt_load(mtime):
-    import numpy as np
-    z = np.load(BT_SIGNALS, allow_pickle=False)
-    d = {k: z[k] for k in z.files}
-    d["meta"] = json.loads(str(d["meta"]))
-    return d
-
-
-@st.cache_data(show_spinner="依你的資金比例重新模擬中…", max_entries=8)
-def bt_trades(mtime, ratios, mode, max_hold):
-    """用夜間回測存下的訊號與之後 60 天 K 線，依你的比例重新算計畫並模擬每一筆交易"""
-    import numpy as np
-    import backtest as BT
-    D = bt_load(mtime)
-    t = S.norm_ratios(ratios)
-    max_ratio = S.solve_max_entry_ratio(t[0], t[1])
-    order = np.lexsort((D["i"], D["strat"], D["sym"]))
-    busy, rows = {}, []
-    for k in order:
-        strat, sym, i = str(D["strat"][k]), str(D["sym"][k]), int(D["i"][k])
-        close, key = float(D["close"][k]), float(D["key"][k])
-        if strat == "pullback":
-            if float(D["ratio"][k]) > max_ratio:
-                continue
-            plan = S.build_plan(close, key, t)
-        else:
-            plan = S.ladder_plan(close, key, float(D["stop1"][k]), float(D["target"][k]), t)
-        if busy.get((sym, strat), -1) >= i:
-            continue
-        P = D["path"][k]
-        ok = ~np.isnan(P[:, 3])
-        if not ok.any():
-            continue
-        P = P[ok]
-        nan = np.array([np.nan])
-        O, H, L, C = (np.concatenate([nan, P[:, c]]) for c in range(4))
-        tr = BT.simulate(O, H, L, C, 0, plan, mode, max_hold=max_hold)
-        if tr is None:
-            continue
-        busy[(sym, strat)] = i + tr["exit_idx"]
-        rows.append({"sym": sym, "strat": strat, "date": pd.Timestamp(D["date"][k]), "layer": int(D["layer"][k]),
-                     "active": bool(D["active"][k]), "side": str(D["side"][k]), "turn": float(D["turn"][k]),
-                     "hold": tr["hold"], "tranches": tr["tranches"], "reason": tr["reason"],
-                     "ret_inv": tr["ret_inv"], "ret_plan": tr["ret_plan"]})
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        cal = pd.DatetimeIndex(D["cal"])
-        pos = cal.searchsorted(df["date"])
-        df["entry_date"] = cal[np.minimum(pos + 1, len(cal) - 1)]
-        df["exit_date"] = cal[np.minimum(pos + df["hold"].to_numpy(), len(cal) - 1)]
-    return df
-
-
-def bt_stats(df):
-    import backtest as BT
-    return BT.trade_stats(df)
-
-
-def bt_row(label, s):
-    if not s.get("n"):
-        return (label, "0", "—", "—", "—", "—")
-    return (label, f"{s['n']:,}", f"{s['win'] * 100:.0f}%", f"{s['mean'] * 100:+.1f}%",
-            f"{s['avg_win'] * 100:+.1f}／{s['avg_loss'] * 100:.1f}%", f"{s['max_streak']}")
-
-
-def bt_portfolio(df, capital, max_pos):
-    """模擬一個真實帳戶：資金分成 max_pos 份，同一天訊號太多時成交金額大的優先；
-    同一檔股票不重複持有；賣出的錢隔天才能再用。報酬以每份資金的「整筆計畫」計算（沒買到的分批留在現金）"""
-    if df.empty:
-        return None
-    df = df.sort_values(["entry_date", "turn"], ascending=[True, False])
-    cash, open_, curve = float(capital), [], []
-    taken = skipped = 0
-    for d, g in df.groupby("entry_date", sort=True):
-        still = []
-        for ex, sym, money, r in open_:
-            if ex < d:
-                cash += money * (1 + r)
-            else:
-                still.append((ex, sym, money, r))
-        open_ = still
-        for _, row in g.iterrows():
-            held = {o[1] for o in open_}
-            if len(open_) >= max_pos or row["sym"] in held:
-                skipped += 1
-                continue
-            equity = cash + sum(o[2] for o in open_)
-            money = min(cash, equity / max_pos)
-            if money <= 0:
-                skipped += 1
-                continue
-            cash -= money
-            open_.append((row["exit_date"], row["sym"], money, row["ret_plan"]))
-            taken += 1
-        curve.append((d, cash + sum(o[2] for o in open_)))
-    for ex, sym, money, r in sorted(open_):
-        cash += money * (1 + r)
-        curve.append((ex, cash + sum(o[2] for o in open_ if o[0] > ex)))
-    c = pd.Series([v for _, v in curve], index=[k for k, _ in curve]).groupby(level=0).last().sort_index()
-    years = max((c.index[-1] - c.index[0]).days / 365.25, 0.1)
-    final = float(c.iloc[-1])
-    dd = float(((c.cummax() - c) / c.cummax()).max())
-    return {"curve": c, "final": final, "ret": final / capital - 1, "cagr": (final / capital) ** (1 / years) - 1,
-            "maxdd": dd, "taken": taken, "skipped": skipped, "years": years}
-
-
-def backtest_body():
-    if not BT_SIGNALS.exists():
-        st.info(L("還沒有回測資料", "到 GitHub 的 Actions → backtest → Run workflow 執行一次，完成後這裡就會出現"))
-        return
-    mtime = BT_SIGNALS.stat().st_mtime
-    D = bt_load(mtime)
-    meta = D["meta"]
-    st.caption(L(f"資料到 {meta.get('end')}｜{meta.get('universe')} 檔股票｜回測於 {meta.get('generated_at')}",
-                 f"依你上面設定的比例 {w1}/{w2}/{w3} 重新計算進場價、目標價"))
-    mode = st.radio("出場方式", list(MODE_LABEL), format_func=lambda m: MODE_LABEL[m], key="bt_mode")
-    end = pd.Timestamp(meta.get("end"))
-    periods = {"近 5 年": (end - pd.DateOffset(years=5), end), "全部期間": (pd.Timestamp("1990-01-01"), end)}
-    import backtest as BT
-    for label, (a, b) in BT.CRASHES.items():
-        periods[label] = (pd.Timestamp(a), pd.Timestamp(b))
-    period = st.selectbox("期間", list(periods), key="bt_period")
-    only_active = st.toggle("只在大盤啟用該策略時進場（照目前規則）", value=True, key="bt_active")
-
-    T = bt_trades(mtime, tuple(ratios), mode, int(meta.get("max_hold", 60)))
-    if T.empty:
-        st.warning("這段期間沒有任何交易")
-        return
-    a, b = periods[period]
-    Tp = T[(T["date"] >= a) & (T["date"] <= b)]
-    Tu = Tp[Tp["active"]] if only_active else Tp
-
-    st.markdown("**① 四套策略**")
-    head = ["策略", "筆數", "勝率", "期望值", "平均賺／賠", "連虧"]
-    rows = [bt_row(BT_SHORT[n], bt_stats(Tu[Tu["strat"] == n])) for n in ("pullback", "flag", "breakout", "dry")]
-    rows.append(bt_row("合計", bt_stats(Tu)))
-    show_table(head, rows)
-    st.caption(L("期望值＝平均每筆報酬（以實際投入的錢計）", f"已扣來回成本 {cfg.FEE_RT * 100:.1f}%；訊號隔天開盤進場"))
-
-    st.markdown("**② 大盤五層**（四套策略合計，不管有沒有啟用）")
-    rows = [bt_row(f"第{l}層 {cfg.LAYER_NAMES[l]}", bt_stats(Tp[Tp["layer"] == l])) for l in range(1, 6)]
-    show_table(["層級", "筆數", "勝率", "期望值", "平均賺／賠", "連虧"], rows)
-
-    st.markdown("**③ 模擬真實帳戶**")
-    max_pos = st.number_input("同時最多持有幾檔", 1, 30, 5, key="bt_maxpos")
-    pf = bt_portfolio(Tu, capital, int(max_pos))
-    if pf:
-        show_table(["項目", "結果"], [
-            ("起始資金", f"{capital:,.0f} 元"), ("期末資金", f"{pf['final']:,.0f} 元"),
-            ("總報酬", f"{pf['ret'] * 100:+.1f}%"), ("年化報酬", f"{pf['cagr'] * 100:+.1f}%"),
-            ("最大回檔", f"{pf['maxdd'] * 100:.1f}%"),
-            ("實際成交", f"{pf['taken']:,} 筆"), ("滿倉略過", f"{pf['skipped']:,} 筆"),
-        ])
-        import plotly.graph_objects as go
-        c = pf["curve"]
-        fig = go.Figure(go.Scatter(x=c.index, y=c.values, line=dict(color="#1971c2", width=1.6)))
-        fig.update_layout(height=260, margin=dict(l=5, r=5, t=10, b=5), hovermode=False, dragmode=False,
-                          showlegend=False)
-        fig.update_yaxes(side="right", tickformat=",.0f")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-        st.caption(L(f"資金分成 {int(max_pos)} 份，每份依你的比例分三筆", "同一天訊號太多時，成交金額大的優先",
-                     "沒買到的分批留在現金，不另外計息"))
-
-    if BT_REPORT.exists():
-        try:
-            rep = json.loads(BT_REPORT.read_text(encoding="utf-8"))
-            sd = rep.get("side_samples", {})
-            if sd:
-                st.markdown("**④ 第 1 大量「壓／撐」之後的平均報酬**（近 5 年）")
-                show_table(["分組", "樣本數", "5 日", "10 日", "20 日"], [
-                    (f"{'🔴' if k == '壓' else '🟢'}{k}", f"{v['n']:,}", *(f"{(v.get(f'f{h}') or 0) * 100:+.2f}%" for h in (5, 10, 20)))
-                    for k, v in sd.items()])
-        except Exception:
-            pass
-    st.caption(L("⚠️ 看不到已下市的股票，結果會偏樂觀", "回測是過去的表現，不代表未來"))
-
-
-foldable("backtest", "🧪 打開策略回測", backtest_body, default=False)
 
 st.caption("最後更新：2026 年 10 月")
