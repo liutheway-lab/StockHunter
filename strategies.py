@@ -227,7 +227,7 @@ def describe_market(mk):
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
         lines.append(f"✅ 目前啟用的策略：{names}" + ("\n⚠️ 第 3 層方向未明，請標示風險、縮小部位" if mk["risk"] else ""))
     else:
-        lines.append("🛑 目前沒有啟用的策略：空頭尚未止跌確認，不新進場")
+        lines.append("🔴 尚未止跌，不建立多頭部位")
     return lines
 
 
@@ -527,5 +527,5 @@ def verdict(ev):
         names = "、".join(cfg.STRATEGY_NAMES[n] for n in ok_names)
         return "watch", f"⚠️ 型態符合【{names}】，但目前大盤層級不適用這套策略，先觀察"
     if mk and not mk["active"]:
-        return "stop", "🛑 大盤尚未止跌確認，且這檔也沒有符合的策略，不進場"
+        return "stop", "🔴 大盤尚未止跌，不建立多頭部位；這檔也沒有符合的策略"
     return "wait", "⏳ 目前沒有符合的策略，可以先放進觀察名單，等條件成形"
