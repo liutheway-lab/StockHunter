@@ -1,7 +1,7 @@
 """chart_png.py — 畫成圖片（PNG）傳到 Telegram 的圖
 market_chart(mk)：加權指數近 45 日 K 線 + 四條均線 + 成交金額。
 空頭層級會再標出「前低」「爆量下跌日」「近 3 日」，讓止跌確認的數字可以直接對照到是哪一天。
-顏色跟通知一致：綠 = 上漲、紅 = 下跌（想改成台股習慣的紅漲綠跌，把 UP / DOWN 兩個顏色對調即可）。
+K 線顏色是台股習慣：紅 = 上漲、綠 = 下跌（跟看盤軟體一致）。通知裡的 🟢 利多／🔴 利空燈號是另一套規則，不受影響。
 """
 import io
 
@@ -10,7 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-UP, DOWN = "#2e9e4f", "#e04a4a"
+UP, DOWN = "#e04a4a", "#2e9e4f"
 MA20_C, MA60_C = "#8e44ad", "#2980b9"
 FONTS = ["Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK SC", "Microsoft JhengHei", "PingFang TC",
          "Arial Unicode MS", "DejaVu Sans"]
