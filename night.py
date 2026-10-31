@@ -76,7 +76,7 @@ def market_block(mk):
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
         out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明，請縮小部位" if mk["risk"] else ""))
     else:
-        out.append("🔴 尚未止跌，不建立多頭部位" if mk["layer"] in (4, 5) else "🔴 沒有啟用的策略")
+        out.append("🔴 尚未止跌，不建議建立多頭部位" if mk["layer"] in (4, 5) else "🔴 沒有啟用的策略")
     return "\n".join(out)
 
 
