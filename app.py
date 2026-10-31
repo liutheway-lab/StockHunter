@@ -112,6 +112,15 @@ def prepare_chart_data(df, is_market=False, bars=65):
     return d.iloc[-bars:], label
 
 
+def vol_low_info(df, days=30):
+    """近 30 個交易日成交量最大的那一天，以及當天的最低點"""
+    d = df[df["Volume"] > 0].iloc[-days:]
+    if d.empty:
+        return None
+    day = d["Volume"].idxmax()
+    return {"key": f"{day:%m/%d}", "low": float(d.loc[day, "Low"]), "vol": float(d.loc[day, "Volume"]) / 1000.0}
+
+
 def plot_k_vol(df, is_market=False, bars=65, stab=None):
     """stab：大盤空頭時傳入 stabilization 結果，會畫出前低虛線與近 3 日色塊"""
     import plotly.graph_objects as go
@@ -150,7 +159,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
 
         # 前低：細虛線橫跨整張圖 + 箭頭，文字放在 K 線下方的空白處
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
-                      line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dash"))
+                      line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dot"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
              f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff8c00", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
@@ -162,7 +171,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
         if dd is not None and dv:
             dv_b = dv / 1e8
             fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 1.75], row=2, col=1)
-            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dash"))
+            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dot"))
             dkey = f"{dd:%m/%d}"
             if dkey in dates:
                 i = dates.index(dkey)
@@ -170,11 +179,11 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                               line=dict(color="#ff8c00", width=2), fillcolor="rgba(0,0,0,0)")
                 # 文字放在橘框左邊、虛線上方（那一帶沒有其他長條）
                 fig.add_annotation(x=dkey, y=dv_b, row=2, col=1, text=f"爆量日 {dkey}", showarrow=False,
-                                   xanchor="right", xshift=-8, yshift=9, font=dict(color="#ff8c00", size=12))
+                                   xanchor="right", xshift=-8, yshift=9, font=dict(color="#ff8c00", size=11))
             if rv:
                 # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
-                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量<br>＝爆量日的 {rv / dv * 100:.0f}%",
-                     "#7048e8", -4, -34, row=2)
+                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量<br>為爆量日 {rv / dv * 100:.0f}%",
+                     "#7048e8", -4, -30, row=2)
 
     # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
     hi_i = int(p["High"].to_numpy().argmax())
@@ -193,30 +202,23 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     lo_pad = float(p["Low"].min())
     rng_p = max(hi_v - lo_pad, 1e-9)
     # 個股圖：下方多留一條空白帶，專門放「大量低點」的文字，這樣文字不會蓋到 K 線或成交量
-    extra = (0.30 if not is_market else (0.40 if stab and stab.get('prior_low') is not None else 0))
+    extra = (0.18 if not is_market else (0.40 if stab and stab.get('prior_low') is not None else 0))
     y_lo, y_hi = lo_pad - rng_p * (0.04 + extra), hi_v + rng_p * 0.10
     fig.update_yaxes(range=[y_lo, y_hi], row=1, col=1)
 
     if not is_market:
-        band = 0.10
-        cand = p[(p["Low"] >= last_c * (1 - band)) & (p["Low"] <= last_c * (1 + band)) & (p["Plot_Vol"] > 0)]
-        if len(cand) < 2:
-            cand = p[p["Plot_Vol"] > 0]
-        top2 = cand.nlargest(2, "Plot_Vol")
-        ppu = 280.0 / (y_hi - y_lo)          # 價格圖大約 280 像素高：每 1 元約幾像素
-        for rank, (day, row_) in enumerate(top2.iterrows()):
-            key = day.strftime("%m/%d")
-            if key not in dates:
-                continue
-            i = dates.index(key)
-            low = float(row_["Low"])
-            text_y = lo_pad - rng_p * (0.10 + 0.11 * rank)      # 兩個文字各占空白帶的一層，不會疊在一起
-            fig.add_annotation(x=key, y=low, row=1, col=1,
-                               text=f"{'量最大' if rank == 0 else '量次大'} 低 {px(low)}（{key}）",
+        info = vol_low_info(df)
+        if info and info["key"] in dates:
+            ppu = 280.0 / (y_hi - y_lo)          # 價格圖大約 280 像素高：每 1 元約幾像素
+            text_y = lo_pad - rng_p * 0.11
+            i = dates.index(info["key"])
+            fig.add_annotation(x=info["key"], y=info["low"], row=1, col=1,
+                               text=f"30日量最大 低 {px(info['low'])}（{info['key']}）",
                                showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#7048e8",
                                ax=-4 if side(i) == "right" else (4 if side(i) == "left" else 0),
-                               ay=max(18.0, (low - text_y) * ppu), xanchor=side(i),
+                               ay=max(18.0, (info["low"] - text_y) * ppu), xanchor=side(i),
                                font=dict(color="#7048e8", size=12))
+            fig.add_hline(y=info["low"], row=1, col=1, line=dict(color="rgba(112,72,232,0.7)", width=1, dash="dot"))
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
@@ -574,6 +576,16 @@ if target:
             st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
                             config={"displayModeBar": False})
 
+            vi = vol_low_info(df)
+            if vi:
+                if vi["low"] > close:
+                    st.markdown(L(f"**近 30 日最大量　{vi['key']}（{vi['vol']:,.0f} 張）**",
+                                  f"當天最低點 {px(vi['low'])}，高於現價 {px(close)}",
+                                  "🔴 很可能是短線壓力，不利上攻"))
+                else:
+                    st.markdown(L(f"**近 30 日最大量　{vi['key']}（{vi['vol']:,.0f} 張）**",
+                                  f"當天最低點 {px(vi['low'])}，低於現價 {px(close)}",
+                                  "🟢 可作為短期支撐，或出場價的參考"))
             st.caption(L(f"以下依可用資金 {capital:,.0f} 元", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
