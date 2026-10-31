@@ -1,8 +1,9 @@
-"""charts.py — 網頁 app 用的互動 K 線圖（plotly）
+"""webcharts.py — 網頁 app 用的互動 K 線圖（plotly）
 均線先用完整歷史算，再截取最近 N 根來畫。K 線顏色：紅漲綠跌（跟看盤軟體一致）。
 """
 import pandas as pd
 
+VERSION = "圖表 v4"
 UP, DOWN = "#e04a4a", "#2e9e4f"
 MA_STYLE = (("MA5", "#f1c40f", 1.2), ("MA10", "#1abc9c", 1.2), ("MA20", "#9b59b6", 1.4), ("MA60", "#3498db", 1.6))
 
@@ -75,7 +76,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
-        template="plotly_dark", dragmode=False,
+        template="plotly_dark", dragmode=False, hovermode=False,
     )
     fig.update_xaxes(type="category", tickangle=-45, showgrid=False, nticks=10)
     fig.update_yaxes(side="right", gridcolor="rgba(255,255,255,0.08)")
