@@ -1,317 +1,303 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import requests, io
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import io
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from core.indicators import to_tw_tick
+
+import pandas as pd
+import requests
+import streamlit as st
+import yfinance as yf
+
+import charts
+import config as cfg
+import lookup
+import strategies as S
 
 st.set_page_config(page_title="StockHunter 智能戰情室", page_icon="📈", layout="centered")
 st.title("📈 StockHunter 戰情室")
-st.caption(f"台灣時間：`{datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y-%m-%d %H:%M')}` ｜ 多策略動態部位系統")
+st.caption(f"台灣時間：`{datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y-%m-%d %H:%M')}` ｜ 大盤五層 × 四套策略")
+
 
 # ==========================================
-# 完整策略規則說明指南 (重新補回)
+# 規則說明（數字直接讀 config.py，不會和程式不一致）
 # ==========================================
-with st.expander("📖 點此查看【大盤五層濾網與四大策略進出場規則】"):
-    st.markdown("""
-    ### 🌐 大盤五層嚴格多空階梯濾網 (極簡均線版)
-    * **第 1 層（強烈多頭）**：`收盤價 > 5MA` 且 `收盤價 > 20MA` 且 `20MA > 60MA`
-      * 均線全走多，多頭攻擊波，開放所有多頭攻擊策略。
-    * **第 2 層（多頭拉回）**：`收盤價 > 20MA` 且 `20MA > 60MA` 且 `收盤價 < 5MA`
-      * 月季線之上強勢洗盤，只找拉回買點，允許【創高量縮回測】與【噴出後整理再攻】。
-    * **第 3 層（多空震盪）**：`20MA > 收盤價 > 60MA` 或 `60MA > 收盤價 > 20MA`
-      * 月季線糾結，方向未明。允許策略運作但強制標示高風險，建議縮減部位。
-    * **第 4 層（弱勢反彈）**：`收盤價 < 20MA` 且 `收盤價 < 60MA` 且 `收盤價 > 5MA`
-      * 逢反彈遇均線反壓，僅在滿足止跌爆量時放行防守型策略，否則嚴禁追價。
-    * **第 5 層（強烈空頭）**：`收盤價 < 5MA` 且 `收盤價 < 20MA < 60MA`
-      * 均線下彎破位主跌段，全面空手觀望，禁止任何買入操作。
+def rules_markdown():
+    return f"""
+### 🌐 大盤五層（MA5／MA10／MA20／MA60）
+1. **強多頭**：收盤 > MA5 > MA10 > MA20 > MA60
+2. **多頭**：MA20 > MA60，且收盤 > MA20
+3. **盤整／轉折**：其餘情況（多頭回檔或空頭反彈）。多頭策略可用，但會標示風險
+4. **空頭**：MA20 < MA60，且收盤 < MA20
+5. **強空頭**：收盤 < MA5 < MA10 < MA20 < MA60
 
-    ---
-    ### 🎯 四大選股策略進出場規格
-    1. **【創高量縮回測】**：自近30日高點回檔 8%~16%、量縮至突破日 60% 以下、收紅站上 5MA。停損守單筆 -10%。
-    2. **【低檔爆量起漲】**：距近60日低點不超 18%、量能 $\ge$ 2倍 20MAV 帶量突破 30 日頸線。
-    3. **【量縮抗跌強勢股】**：大盤重挫時個股跌幅 $\le$ 大盤一半，且量縮至 20MAV 50% 以下。停損守近 10 日前低。
-    4. **【噴出後整理再攻】**：近 15 日曾噴出，整理不破 1/2 高度，逼近前高 4% 或已突破。停損取噴出 1/2 與買價 -5% 孰低。
-    """)
+**空頭「止跌確認」**：最近 {cfg.STAB_DAYS} 天的最低點都沒跌破前低（前 {cfg.STAB_LOOKBACK} 日最低點），
+且這 {cfg.STAB_DAYS} 天任一天的量 ≥ 近 {cfg.STAB_LOOKBACK} 日量最大的下跌日。通過後才啟用「盤整後噴出」「量縮抗跌」。
 
-# --- 狀態與按鈕回呼 ---
-if "diag_w1" not in st.session_state: st.session_state.diag_w1 = 30
-if "diag_w2" not in st.session_state: st.session_state.diag_w2 = 40
-if "bt_w1" not in st.session_state: st.session_state.bt_w1 = 30
-if "bt_w2" not in st.session_state: st.session_state.bt_w2 = 40
+---
+### 🎯 四套策略
+1. **創高拉回**（第 1～3 層）：前高創新高後回檔、量縮（≤ 高點日 {cfg.PB_VOL_RATIO * 100:.0f}%），趨勢仍向上。
+   停損進場價下 {cfg.PB_STOP_PCT * 100:.0f}%，目標 = 平均成本 +{cfg.PB_STOP_PCT * cfg.PB_RRR * 100:.0f}%
+2. **盤整後噴出**（空頭止跌後）：帶量（≥ {cfg.BO_VOL_MULT:.0f} 倍）突破 {cfg.BO_PLATFORM} 日頸線，離 60 日低點 ≤ {cfg.BO_MAX_RISE * 100:.0f}%。
+   停損頸線下 2% 或買價下 {cfg.BO_STOP_PCT * 100:.0f}% 取低，目標 +{cfg.BO_TARGET_PCT * 100:.0f}%
+3. **量縮抗跌**（空頭止跌後）：3 日均量 ≤ 20 日均量 {cfg.DRY_VOL_RATIO * 100:.0f}%、不破個股前低、跌幅 ≤ 大盤 {cfg.DRY_RS_RATIO * 100:.0f}%。
+   停損跌破前低，目標風報比 {cfg.DRY_RRR}
+4. **噴出後整理再攻**（第 1～3 層）：近 {cfg.FLAG_WINDOW} 日有噴出（3 日 ≥ {cfg.FLAG_BURST_3D * 100:.0f}% 或單日 ≥ {cfg.FLAG_BURST_1D * 100:.0f}%，且爆量），
+   整理 ≥ {cfg.FLAG_MIN_CONSOL} 天、回檔 ≤ 噴出一半、守月線、量縮，距前波高點 {cfg.FLAG_NEAR * 100:.0f}% 內（含已突破）。
+   停損取「噴出一半」與「買價下 {cfg.FLAG_STOP_MIN_PCT * 100:.0f}%」較低者，目標等幅測量
 
-def set_dw(a, b): st.session_state.diag_w1, st.session_state.diag_w2 = a, b
-def set_bw(a, b): st.session_state.bt_w1, st.session_state.bt_w2 = a, b
+**分批**：第 1 筆訊號價、第 2 筆突破關鍵價、第 3 筆關鍵價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%；第 2 筆防守為關鍵價下 {cfg.STOP_ADD_PCT * 100:.0f}%。
+"""
 
-# --- 專業 K 線 + 量（大盤/個股獨立校準） ---
-def plot_k_vol(df, is_market=False):
-    p = df[df["Volume"] > 0].iloc[-65:].copy()
-    if is_market:
-        p["Plot_Vol"] = (p["Volume"] * p["Close"]) / 10000000.0
-        if p["Plot_Vol"].mean() < 500: p["Plot_Vol"] = p["Volume"] / 10000.0
-        vol_label = "估算成交額 (億元)"
-    else:
-        p["Plot_Vol"] = p["Volume"] / 1000.0
-        vol_label = "成交量 (張)"
 
-    p["5MA"] = p["Close"].rolling(5).mean()
-    p["20MA"] = p["Close"].rolling(20).mean()
-    p["60MA"] = p["Close"].rolling(60).mean()
-    p["20VMA"] = p["Plot_Vol"].rolling(20).mean()
-    dates = [d.strftime('%m/%d') for d in p.index]
-    v_colors = ['#e04a4a' if c >= o else '#2e9e4f' for c, o in zip(p["Close"], p["Open"])]
+with st.expander("📖 點此查看大盤五層與四套策略規則"):
+    st.markdown(rules_markdown())
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.74, 0.26])
-    fig.add_trace(go.Candlestick(x=dates, open=p["Open"], high=p["High"], low=p["Low"], close=p["Close"], name="日K", increasing_line_color='#e04a4a', decreasing_line_color='#2e9e4f'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dates, y=p["5MA"], line=dict(color='#f1c40f', width=1.2), name="5MA"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dates, y=p["20MA"], line=dict(color='#9b59b6', width=1.4), name="20MA"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dates, y=p["60MA"], line=dict(color='#3498db', width=1.6), name="60MA"), row=1, col=1)
-    
-    fig.add_trace(go.Bar(x=dates, y=p["Plot_Vol"], marker_color=v_colors, name=vol_label), row=2, col=1)
-    fig.add_trace(go.Scatter(x=dates, y=p["20VMA"], line=dict(color='#e67e22', width=1.1), name="20均量"), row=2, col=1)
+# --- 資金比例的狀態與按鈕 ---
+if "diag_w1" not in st.session_state:
+    st.session_state.diag_w1 = int(round(cfg.TRANCHES[0] * 100))
+if "diag_w2" not in st.session_state:
+    st.session_state.diag_w2 = int(round(cfg.TRANCHES[1] * 100))
 
-    fig.update_layout(
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=5, r=5, t=25, b=5),
-        height=390,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
-        template="plotly_dark",
-        dragmode=False
-    )
-    fig.update_xaxes(type="category", tickangle=-45, showgrid=False)
-    fig.update_yaxes(side="right", gridcolor='rgba(255,255,255,0.08)')
-    return fig
 
-# --- 官方證交所原生編碼字典：100% 精準覆蓋全台股產業與作戰題材 ---
-PREFIX_MAP = {
-    "11": ("水泥工業", ["碳費與綠能轉型", "公共工程水泥需求", "低碳建材", "中國房市盤整"]),
-    "12": ("食品工業", ["大宗物資黃豆玉米", "內需民生消費", "原物料成本轉嫁", "高殖利率防守"]),
-    "13": ("塑膠工業", ["石化輕油裂解", "EVA太陽能封裝", "中國產能去化", "塑膠原料報價"]),
-    "14": ("紡織纖維", ["機能服飾代工", "回收環保紗線", "奧運與運動品牌拉貨", "NIKE供應鏈"]),
-    "15": ("電機機械 / 重電", ["台電強韌電網", "電力變壓器外銷美國", "綠能儲能電廠", "自動化機器人"]),
-    "16": ("電器電纜", ["台電強韌電網線纜", "超高壓銅纜", "國際銅價受惠", "海纜離岸風電"]),
-    "17": ("化學生技醫療", ["CDMO製藥代工", "學名藥外銷", "特用化學品", "半導體材料"]),
-    "18": ("玻璃陶瓷", ["建築陶瓷", "光電玻璃基板", "耐火材料"]),
-    "19": ("造紙工業", ["工紙紙箱紙器", "碳權與生質能", "原物料紙漿報價"]),
-    "20": ("鋼鐵工業", ["中鋼盤價走勢", "美國基建鋼構", "耐震H型鋼", "特殊鋼合金"]),
-    "21": ("橡膠工業", ["車用輪胎外銷", "天然橡膠報價", "電動車專用胎"]),
-    "22": ("汽車工業", ["新車交車與租賃", "電動車零組件", "車載電控模組"]),
-    "23": ("半導體 / 電腦代工", ["AI晶片代工", "AI伺服器整機", "先進製程與封裝", "GB200主力代工"]),
-    "24": ("IC設計 / 電腦週邊", ["邊緣AI手機晶片", "客製化ASIC", "高速傳輸介面", "車用晶片"]),
-    "25": ("建材營造", ["都更危老重建", "預售屋交屋潮", "商辦園區興建", "高殖利率資產股"]),
-    "26": ("航運業", ["SCFI貨櫃運價", "美西長約換約", "歐洲線地緣題材", "航空客運票價"]),
-    "27": ("觀光餐飲", ["內需餐飲消費", "入境旅遊復甦", "海外展店連鎖品牌"]),
-    "28": ("金融保險", ["高殖利率配息", "降息海外投資收益", "銀行企金放款利差", "壽險淨值回升"]),
-    "29": ("貿易百貨", ["零售實體通路", "電商物流串接", "內需週年慶買氣"]),
-    "30": ("光電 / 散熱零組件", ["光學鏡頭長焦", "3D VC液冷散熱模組", "水冷板CDU", "車載鏡頭模組"]),
-    "32": ("伺服器 / 網通週邊", ["GPU運算基板", "雲端資料中心伺服器", "工業電腦 IPC"]),
-    "33": ("電子零組件 / 散熱", ["伺服器液冷散熱", "水冷板", "折疊手機散熱", "光學鏡頭"]),
-    "34": ("光電 / IC設計服務", ["iPhone長焦鏡頭", "ASIC特殊晶片設計", "車用光學模組"]),
-    "35": ("光電 / 半導體材料", ["矽晶圓材料", "車用光學鏡頭", "Micro LED"]),
-    "36": ("ASIC / 伺服器滑軌", ["雲端ASIC設計服務", "伺服器滑軌導軌", "水冷機櫃零組件"]),
-    "41": ("生技醫療", ["新藥臨床試驗", "FDA藥證取得", "生物相似藥", "醫療器材外銷"]),
-    "47": ("生技醫療 / 特化", ["糖尿病傷口新藥", "高階特用化學品", "生技控股創投"]),
-    "62": ("電子零組件 / 網通", ["高頻高速CCL銅箔基板", "800G交換器", "伺服器板"]),
-    "64": ("生技 / 光通訊 / 伺服器", ["CDMO製藥大廠", "矽光子CPO模組", "AI伺服器代工"]),
-    "80": ("IC設計 / 封測", ["神盾集團ASIC", "車用控制IC", "半導體測試導線架"]),
-}
+def set_dw(a, b):
+    st.session_state.diag_w1, st.session_state.diag_w2 = a, b
 
-def resolve_tw_stock_sector(code, info):
-    prefix2 = code[:2]
-    name_raw = info.get("shortName") or info.get("longName") or code
-    clean_name = name_raw.replace("CO LTD", "").replace("INC", "").replace("CORPORATION", "").strip()
 
-    if prefix2 in PREFIX_MAP:
-        sector, themes = PREFIX_MAP[prefix2]
-    else:
-        sec_en = str(info.get("sector", ""))
-        sector = "一般上市櫃類股" if not sec_en else sec_en
-        themes = ["波段籌碼聚焦", "法人重點評估", "趨勢主流輪動"]
-        
-    return clean_name, sector, themes
+# ==========================================
+# 資料（全部從網路抓）
+# ==========================================
+def _flat(df, ticker):
+    if isinstance(df.columns, pd.MultiIndex):
+        for lvl in range(df.columns.nlevels):
+            if ticker in df.columns.get_level_values(lvl):
+                df = df.xs(ticker, axis=1, level=lvl)
+                break
+    return df.dropna(subset=["Close"])
 
-# --- 籌碼趨勢評估 ---
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_index():
+    df = yf.download("^TWII", period="1y", interval="1d", progress=False, auto_adjust=True)
+    return _flat(df, "^TWII")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_stock(code, suffix):
+    return yf.Ticker(code + suffix).history(period="1y")
+
+
+@st.cache_data(ttl=60 * 60 * 24, show_spinner="載入證交所官方股票清單...")
+def get_directory():
+    return lookup.load_directory()
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def get_themes():
+    """題材表：自己維護的 Google 試算表 CSV（選填，設定 THEMES_CSV_URL）。"""
+    import os
+    url = os.getenv("THEMES_CSV_URL", "")
+    if not url:
+        try:
+            url = st.secrets.get("THEMES_CSV_URL", "")
+        except Exception:
+            url = ""
+    try:
+        return lookup.load_themes(url)
+    except Exception:
+        return {}
+
+
 def get_chip_analysis(code, df):
+    """400 張以上大戶持股；抓不到時改用量價推估（會明確標示不是大戶資料）"""
     try:
         url = f"https://norway.twsthr.info/StockHolders.aspx?stock={code}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        r = requests.get(url, timeout=3.5, headers=headers)
+        r = requests.get(url, timeout=3.5, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code == 200 and "StockHolders" in r.text:
             tb = pd.read_html(io.StringIO(r.text))[0]
             col = 7 if len(tb.columns) > 7 else -2
-            w0 = float(str(tb.iloc[1, col]).replace("%", "").strip())
-            w1 = float(str(tb.iloc[2, col]).replace("%", "").strip())
-            w2 = float(str(tb.iloc[3, col]).replace("%", "").strip())
+            w0, w1, w2 = (float(str(tb.iloc[k, col]).replace("%", "").strip()) for k in (1, 2, 3))
             diff = round(w0 - w2, 2)
-            if w0 > w1 > w2: txt = f"🟢 籌碼集中（400張大戶近3週連續增持 +{diff}%）"
-            elif w0 < w1 < w2: txt = f"🔴 籌碼退場（400張大戶近3週連續減碼 {diff}%）"
-            else: txt = f"🟡 籌碼平衡（大戶近3週微幅震盪 {diff:+.2f}%）"
+            if w0 > w1 > w2:
+                txt = f"🟢 400張大戶近3週連續增持 +{diff}%"
+            elif w0 < w1 < w2:
+                txt = f"🔴 400張大戶近3週連續減碼 {diff}%"
+            else:
+                txt = f"🟡 400張大戶近3週微幅震盪 {diff:+.2f}%"
             return f"{w0:.2f}%", txt
-    except:
+    except Exception:
         pass
-    
-    v_recent = df["Volume"].iloc[-5:].mean()
-    v_prev = df["Volume"].iloc[-15:-5].mean()
+    v_recent, v_prev = df["Volume"].iloc[-5:].mean(), df["Volume"].iloc[-15:-5].mean()
     p_chg = (df["Close"].iloc[-1] - df["Close"].iloc[-15]) / df["Close"].iloc[-15] * 100
     if p_chg > 0 and v_recent > v_prev:
-        return "量增價漲", "🟢 籌碼偏多（近3週量能放大且均線向上，主力進場吸籌）"
-    elif p_chg < 0 and v_recent > v_prev:
-        return "放量跌破", "🔴 籌碼渙散（近3週量增下跌，主力法人調節庫存）"
-    else:
-        return "整理盤態", "🟡 籌碼平衡（近3週量能平穩，多空震盪整理）"
+        return "量價推估", "🟢 （抓不到大戶資料，以下是量價推估）近3週量增價漲"
+    if p_chg < 0 and v_recent > v_prev:
+        return "量價推估", "🔴 （抓不到大戶資料，以下是量價推估）近3週量增下跌"
+    return "量價推估", "🟡 （抓不到大戶資料，以下是量價推估）近3週量能平穩"
+
+
+def plan_markdown(p):
+    r = p["ratios"]
+    return (
+        "| 階段 | 動作 | 價位 | 資金比例 | 累計均價 |\n| :--- | :--- | :--- | :--- | :--- |\n"
+        f"| **第 1 筆** | 進場 | `{p['e']:.2f}` | {r[0] * 100:.0f}% | `{p['e']:.2f}` |\n"
+        f"| **第 2 筆** | {p['key_label']} | `{p['b']:.2f}` | {r[1] * 100:.0f}% | `{p['avg2']:.2f}` |\n"
+        f"| **第 3 筆** | 關鍵價 +{(cfg.EXT_RATIO - 1) * 100:.0f}% | `{p['b2']:.2f}` | {r[2] * 100:.0f}% | `{p['avg3']:.2f}` |"
+    )
+
+
+def show_plan(p):
+    st.markdown(plan_markdown(p))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("第 1 筆停損", f"{p['stop1']:.2f}")
+    c2.metric("第 2 筆防守", f"{p['stop2']:.2f}")
+    c3.metric("目標價", f"{p['targets'][0][1]:.2f}")
+    if p.get("stop1_note"):
+        st.caption(f"停損依據：{p['stop1_note']}")
+    if p.get("breakeven"):
+        st.caption(f"第 2 筆被砍掉後，第 1 筆要漲到 `{p['breakeven']:.2f}` 整趟才打平")
+    if len(p["targets"]) > 1:
+        st.caption("目標價：" + "；".join(f"{lbl} `{px:.2f}`" for lbl, px in p["targets"]))
+    for n in p.get("notes", []):
+        st.caption(n)
+
 
 tab_diag, tab_bt = st.tabs(["📱 即時診斷與部位試算", "🧪 歷史策略回測實驗室"])
 
 # ==================== 分頁一：即時診斷 ====================
 with tab_diag:
-    st.subheader("🌐 大盤位階與加權走勢")
-    with st.spinner("評估大盤位階中..."):
-        twii = yf.download("^TWII", period="6mo", interval="1d", progress=False, auto_adjust=True)
-        if isinstance(twii.columns, pd.MultiIndex): twii = twii.xs("^TWII", axis=1, level=1)
-        twii = twii.dropna(subset=["Close"])
-        c_tw = float(twii["Close"].iloc[-1])
-        m5 = float(twii["Close"].rolling(5).mean().iloc[-1])
-        m20 = float(twii["Close"].rolling(20).mean().iloc[-1])
-        m60 = float(twii["Close"].rolling(60).mean().iloc[-1])
-        
-        r3_low = float(twii["Low"].iloc[-3:].min())
-        p20_low = float(twii["Low"].iloc[-23:-3].min())
-        down_days = twii.iloc[-20:][twii.iloc[-20:]["Close"] < twii.iloc[-20:]["Open"]]
-        max_v = float(down_days["Volume"].max()) if not down_days.empty else 0.0
-        rebound = (r3_low >= p20_low) and (float(twii["Volume"].iloc[-3:].max()) >= max_v)
+    # ---------- 大盤 ----------
+    st.subheader("🌐 大盤位階")
+    try:
+        mkt_df = load_index()
+    except Exception as e:
+        mkt_df = None
+        st.error(f"大盤資料取得失敗：{e}")
 
-        if c_tw > m5 and c_tw > m20 and m20 > m60:
-            lvl, desc, ok = 1, "第 1 層：強烈多頭 (多頭排列)", True
-        elif c_tw > m20 and m20 > m60 and c_tw < m5:
-            lvl, desc, ok = 2, "第 2 層：多頭拉回 (月季線上洗盤)", True
-        elif (m20 > c_tw > m60) or (m60 > c_tw > m20):
-            lvl, desc, ok = 3, "第 3 層：多空震盪 (月季線糾結)", True
-        elif c_tw < m20 and c_tw < m60 and c_tw > m5:
-            lvl, desc, ok = 4, "第 4 層：弱勢反彈 (均線反壓)", rebound
-        else:
-            lvl, desc, ok = 5, "第 5 層：強烈空頭 (主跌段破位)", False
-
+    mk = S.market_summary(mkt_df) if (mkt_df is not None and len(mkt_df) >= 70) else None
+    if mk:
         c1, c2 = st.columns(2)
-        c1.metric("加權指數", f"{c_tw:,.1f}")
-        
-        if rebound:
-            c2.metric("位階判定", f"第 {lvl} 層", "止跌量達標 ✅")
+        c1.metric("加權指數", f"{mk['close']:,.1f}")
+        c2.metric("大盤層級", f"第 {mk['layer']} 層", mk["layer_name"])
+        for line in S.describe_market(mk):
+            st.markdown(line)
+        st.caption("加權指數日 K 線與成交量（Yahoo 資料）：")
+        st.plotly_chart(charts.plot_k_vol(mk["df"], is_market=True), use_container_width=True,
+                        config={"displayModeBar": False})
+        if mk["active"]:
+            (st.warning if mk["risk"] else st.success)(
+                "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
         else:
-            c2.metric("位階判定", f"第 {lvl} 層", "量能不足 🛑", delta_color="inverse")
-        
-        st.caption("加權指數日 K 線與成交金額走勢 (單位：億元)：")
-        st.plotly_chart(plot_k_vol(twii, is_market=True), use_container_width=True, config={"displayModeBar": False})
-        
-        if ok:
-            st.success(f"🟢 **大盤准入放行**：【{desc}】盤面環境符合准入標準，允許依策略佈局。")
-        else:
-            st.error(f"🛑 **大盤禁止進場（強烈警報）**：【{desc}】空頭主跌段且均線下彎，嚴格禁止買入，全面空手觀望！")
+            st.error("🛑 大盤空頭尚未止跌確認，目前不新進場。")
 
+    # ---------- 資金比例 ----------
     st.divider()
-    st.subheader("⚙️ 自訂三段進場資金權重")
+    st.subheader("⚙️ 三段投入資金比例")
     b1, b2, b3 = st.columns(3)
     b1.button("平衡 30/40/30", use_container_width=True, on_click=set_dw, args=(30, 40))
     b2.button("重壓 30/50/20", use_container_width=True, on_click=set_dw, args=(30, 50))
     b3.button("右側 20/50/30", use_container_width=True, on_click=set_dw, args=(20, 50))
-
     cw1, cw2, cw3 = st.columns(3)
-    w1 = cw1.number_input("第 1 筆 (%)", 0, 90, step=5, key="diag_w1")
+    w1 = cw1.number_input("第 1 筆 (%)", 5, 90, step=5, key="diag_w1")
     w2 = cw2.number_input("第 2 筆 (%)", 0, max(0, 100 - w1), step=5, key="diag_w2")
     w3 = max(0, 100 - w1 - w2)
-    cw3.metric("第 3 筆打滿 (%)", f"{w3}%")
-    st.caption(f"🔒 **資金鎖定**：`{w1}%` + `{w2}%` + `{w3}%` ＝ **100% (1.0)**")
+    cw3.metric("第 3 筆 (%)", f"{w3}%")
+    ratios = S.norm_ratios((w1, w2, w3))
+    st.caption(f"🔒 `{w1}%` + `{w2}%` + `{w3}%` = 100%。比例會同時影響「創高拉回」的進場區間與所有點位試算。")
 
+    # ---------- 個股 ----------
     st.divider()
-    st.subheader("🔍 個股即時診斷與點位試算")
-    code = st.text_input("輸入 4 位台股代號（例：1101、6472、3406、2002、2603）：", "1101").strip()
+    st.subheader("🔍 個股診斷：適不適合進場？")
+    try:
+        directory = get_directory()
+    except Exception as e:
+        directory = None
+        st.warning(f"官方股票清單暫時抓不到（{e}），目前只能用代號查詢，且不顯示中文名稱與產業。")
 
-    if st.button("🚀 開始即時診斷", use_container_width=True):
-        if not (code.isdigit() and len(code) == 4):
-            st.error("請輸入正確 4 碼數字股票代號！")
+    query = st.text_input("輸入股票代號或中文名稱（例：2330、台積電、保瑞）：", "台積電").strip()
+    choice = None
+    matches = lookup.resolve(query, directory) if (directory is not None and query) else []
+    if len(matches) == 1:
+        choice = matches[0]
+    elif len(matches) > 1:
+        labels = [f"{m['code']} {m['name']}（{m['industry'] or m['market']}）" for m in matches]
+        pick = st.selectbox("找到多檔，請選擇：", labels)
+        choice = matches[labels.index(pick)]
+    elif query:
+        q = re.sub(r"\.(TWO|TW)$", "", query.upper())
+        if re.fullmatch(r"\d{4,6}", q):
+            choice = {"code": q, "name": "", "industry": "", "suffix": None, "market": ""}
+            st.caption("官方清單查不到這個代號（可能是 ETF 或特別股），仍會嘗試抓行情。")
         else:
-            with st.spinner(f"正在載入代號 {code} 行情與產業題材..."):
-                ticker = f"{code}.TW"
-                tk = yf.Ticker(ticker)
-                df = tk.history(period="6mo")
-                if df.empty or len(df) < 10:
-                    ticker = f"{code}.TWO"
-                    tk = yf.Ticker(ticker)
-                    df = tk.history(period="6mo")
+            st.warning("找不到符合的股票，請確認名稱，或改用 4 碼代號。")
 
-                if df.empty or len(df) < 10:
-                    st.error(f"查無代號【{code}】歷史資料，請確認是否為有效掛牌標的。")
-                else:
-                    name, sector, themes = resolve_tw_stock_sector(code, tk.info)
-                    close = float(df["Close"].iloc[-1])
-                    diff = (close - float(df["Close"].iloc[-2])) / float(df["Close"].iloc[-2]) * 100
-                    
-                    st.markdown(f"### {'🔴' if diff > 0 else '🟢'} **{code} {name}** ｜ 現價：`{close:.2f}` 元 ({diff:+.2f}%)")
-                    st.markdown(f"🧩 **官方產業族群**：`{sector}`")
-                    st.markdown("🔥 **產業核心作戰題材**：" + " ".join([f"`{t}`" for t in themes]))
-                    
-                    r_tdcc, t_tdcc = get_chip_analysis(code, df)
-                    c_t1, c_t2 = st.columns([1, 2])
-                    c_t1.metric("籌碼狀態", r_tdcc)
-                    c_t2.info(f"📊 **籌碼趨勢評定**：\n{t_tdcc}")
+    if st.button("🚀 開始診斷", use_container_width=True, disabled=choice is None):
+        code = choice["code"]
+        with st.spinner(f"載入 {code} {choice['name']} 的行情..."):
+            df = None
+            for sfx in ([choice["suffix"]] if choice["suffix"] else [".TW", ".TWO"]):
+                try:
+                    h = load_stock(code, sfx)
+                except Exception:
+                    h = None
+                if h is not None and not h.empty and len(h) >= 10:
+                    df = h
+                    break
 
-                    st.caption("個股日 K 線與成交張數走勢 (含 20 日均量)：")
-                    st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True, config={"displayModeBar": False})
+        if df is None:
+            st.error(f"查無代號【{code}】的歷史資料，請確認是否為有效掛牌標的。")
+        else:
+            ev = S.evaluate(df, mkt_df, ratios)
+            name = choice["name"] or code
+            close = ev.get("close", float(df["Close"].iloc[-1]))
+            chg = (float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-2]) - 1) * 100
+            st.markdown(f"### {'🔴' if chg > 0 else '🟢'} **{code} {name}** ｜ 現價 `{close:.2f}`（{chg:+.2f}%）")
+            st.markdown(f"🧩 **官方產業別**：`{choice['industry'] or '（官方清單未提供）'}`")
+            themes = get_themes().get(code, [])
+            if themes:
+                st.markdown("🔥 **題材**：" + " ".join(f"`{t}`" for t in themes))
+            else:
+                st.caption("🔥 題材：尚未設定題材表（可用 Google 試算表自行維護，設定 THEMES_CSV_URL）")
 
-                    if not ok:
-                        st.error(f"🛑 **【大盤禁止進場】** 目前大盤處於【{desc}】，空頭架構未破，嚴禁任何多頭買入操作！")
-                    else:
-                        st.success(f"✅ **【大盤准入放行】** 盤勢處於【{desc}】，符合進場條件，可依下方動態點位分批佈局。")
+            if "error" in ev:
+                st.error(ev["error"])
+            else:
+                level, text = S.verdict(ev)
+                {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](text)
 
-                    nw1, nw2, nw3 = w1 / 100.0, w2 / 100.0, w3 / 100.0
-                    b_p = float(df["High"].iloc[-30:-2].max())
-                    ext_p = to_tw_tick(b_p * 1.08)
-                    avg_2 = to_tw_tick((nw1 * close + nw2 * b_p) / (nw1 + nw2)) if (nw1 + nw2) > 0 else close
-                    breakeven = to_tw_tick((close * nw1 - (to_tw_tick(b_p * 0.95) - b_p) * nw2) / nw1) if nw1 > 0 else close
+                _, chip_txt = get_chip_analysis(code, df)
+                st.info(f"📊 {chip_txt}")
+                st.plotly_chart(charts.plot_k_vol(df, is_market=False), use_container_width=True,
+                                config={"displayModeBar": False})
 
-                    st.markdown(f"""
-                    | 階段 | 操作動作 | 參考點位 | 資金權重 | 累計持有成本 |
-                    | :--- | :--- | :--- | :--- | :--- |
-                    | **第 1 筆 (試單)** | 現價進場 | `{close:.2f}` | **{int(nw1*100)}%** | `{close:.2f}` |
-                    | **第 2 筆 (加碼)** | 突破前高 | `{b_p:.2f}` | **{int(nw2*100)}%** | `{avg_2:.2f}` |
-                    | **第 3 筆 (打滿)** | 延伸 +8% | `{ext_p:.2f}` | **{int(nw3*100)}%** | `{to_tw_tick((nw1*close + nw2*b_p + nw3*ext_p)):.2f}` |
-                    """)
-                    f1, f2, f3 = st.columns(3)
-                    f1.metric("首筆停損 (-10%)", f"{to_tw_tick(close * 0.9):.2f}")
-                    f2.metric("加碼砍單保本線", f"{breakeven:.2f}")
-                    f3.metric("目標獲利價 (+25%)", f"{to_tw_tick(close * 1.25):.2f}")
+                for sname in ("pullback", "flag", "breakout", "dry"):
+                    r = ev["results"][sname]
+                    label = cfg.STRATEGY_NAMES[sname]
+                    if r is None:
+                        st.caption(f"{label}：資料不足，無法判斷")
+                        continue
+                    applicable = "大盤目前適用" if r["active"] else "大盤目前不適用"
+                    with st.expander(f"{'✅' if r['ok'] else '❌'} {label}｜{'符合' if r['ok'] else '尚未符合'}｜{applicable}",
+                                     expanded=r["ok"] or sname == "pullback"):
+                        for cname, cok, detail in r["checks"]:
+                            st.markdown(f"{'✅' if cok else '❌'} **{cname}**：{detail}")
+                        if sname == "pullback":
+                            st.markdown(f"🎯 **理想第 1 筆進場區**：`{r['zone_lo']}` ~ `{r['zone_hi']}`"
+                                        f"（依你的比例 {w1}/{w2}/{w3} 推算，前高 `{r['key']:.2f}`）")
+                            if r["in_zone"]:
+                                st.caption("現價已在進場區內，以下以現價為第 1 筆試算。")
+                            elif r["close"] > r["zone_hi"]:
+                                st.caption(f"現價還沒回檔到進場區，以下假設第 1 筆掛在 {r['zone_hi']} 試算。")
+                            else:
+                                st.caption("回檔已超過上限，規則上不進場；以下仍以進場區上緣試算供參考。")
+                        if r["ok"] or sname == "pullback":
+                            if not r["active"] and r["ok"]:
+                                st.warning("型態符合，但目前大盤層級不適用這套策略。")
+                            show_plan(S.plan_for(sname, r, ratios))
 
 # ==================== 分頁二：歷史回測 ====================
 with tab_bt:
     st.subheader("🧪 歷史策略回測實驗室")
-    st.markdown("##### ⚙️ 調整回測測試權重：")
-    b1, b2, b3 = st.columns(3)
-    b1.button("平衡 30/40/30", use_container_width=True, on_click=set_bw, args=(30, 40), key="b_b1")
-    b2.button("重壓 30/50/20", use_container_width=True, on_click=set_bw, args=(30, 50), key="b_b2")
-    b3.button("右側 20/50/30", use_container_width=True, on_click=set_bw, args=(20, 50), key="b_b3")
-
-    bc1, bc2, bc3 = st.columns(3)
-    bw1 = bc1.number_input("第 1 筆 (%)", 0, 90, step=5, key="bt_w1")
-    bw2 = bc2.number_input("第 2 筆 (%)", 0, max(0, 100 - bw1), step=5, key="bt_w2")
-    bw3 = max(0, 100 - bw1 - bw2)
-    bc3.metric("第 3 筆打滿 (%)", f"{bw3}%")
-
-    sc = st.radio("測試情境：", ["📈 近 3 年全市場多頭波段 (2023-2026)", "📉 2022 年大空頭崩盤壓力測試"])
-    if st.button("🚀 執行歷史回測", use_container_width=True):
-        rb1, rb2 = bw1 / 100.0, bw2 / 100.0
-        mdd = -6.5 - (rb1 * 7.0) if "2022" in sc else -9.0 - (rb1 * 8.0)
-        ret = 8.0 + (rb2 * 20.0) - (rb1 * 5.0) if "2022" in sc else 95.0 + (rb2 * 90.0)
-        np.random.seed(int(bw1 * 100 + bw2 * 10 + bw3))
-        days = 250 if "2022" in sc else 750
-        strat = np.cumprod(1 + np.random.normal(0.0004 + rb2*0.0004, 0.007 + rb1*0.003, days))
-        bench = np.cumprod(1 + np.random.normal(-0.0008 if "2022" in sc else 0.0006, 0.013, days))
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("策略總報酬", f"{ret:+.1f}%")
-        c2.metric("勝率", "48.5%" if "2022" in sc else "56.2%")
-        c3.metric("最大回撤 MDD", f"{mdd:.1f}%")
-        c4.metric("盈虧比", "3.1 : 1")
-        st.line_chart(pd.DataFrame({"策略淨值": strat, "加權指數基準": bench}))
+    st.warning(
+        "⚠️ 這個分頁原本顯示的報酬、勝率、回撤，是用**亂數**產生的示意數字，不是真實回測，已經移除。\n\n"
+        "真實回測用真實歷史價格計算，會放在 GitHub Actions 的 backtest 功能，之後再把結果接到這裡。"
+    )
