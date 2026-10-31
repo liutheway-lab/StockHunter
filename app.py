@@ -222,7 +222,7 @@ def plan_view(p, capital, close):
     r = p["ratios"]
     rows = [("① 進場", p["e"], r[0]), ("② 突破", p["b"], r[1]), ("③ 加碼", p["b2"], r[2])]
     gap = lambda price: f"{(price / close - 1) * 100:+.1f}%"
-    st.markdown(f"**預期第 1 筆進場 {px(p['e'])}**　現價 {px(close)}，差 {sdiff(p['e'] - close, close)} 元（{gap(p['e'])}）")
+    st.markdown(f"**預期第 1 筆進場 {px(p['e'])}**　（現價 {px(close)}，差 {gap(p['e'])}）")
 
     shares, costs = [], []
     for _, price, ratio in rows:
@@ -234,31 +234,26 @@ def plan_view(p, capital, close):
         sh, cost = sum(shares[:k + 1]), sum(costs[:k + 1])
         avgs.append(S.tick(cost / sh) if sh > 0 else p["e"])
 
-    show_table(["階段", "價位", "距現價", "累計均價"],
-               [(lab, px(price), gap(price), px(avgs[i])) for i, (lab, price, _) in enumerate(rows)])
-    show_table(["階段", "投入（元）", "股數"],
-               [(lab, f"{capital * ratio:,.0f}", f"{shares[i]:,}") for i, (lab, _, ratio) in enumerate(rows)]
-               + [("合計", f"{sum(costs):,.0f}", f"{sum(shares):,}")])
-    st.caption(f"② 突破＝突破價；③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%。"
-               f"可用資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元。")
-
-    # 各階段停損：只買第 1 筆時停損在停損價；突破加碼後，停損拉到「累計均價（進位到可下單價）」，扣掉手續費與證交稅
-    st.markdown("**各階段停損**")
-    risk = []
-    for k, name in enumerate(("① 第 1 筆", "② 前 2 筆", "③ 前 3 筆")):
-        sh, cost = sum(shares[:k + 1]), sum(costs[:k + 1])
-        if sh <= 0:
+    # 一張表看完：每一筆的進場價、股數、累計均價、出場價、出場損益
+    # 出場價：只買第 1 筆時是原本的出場價；突破加碼後，拉到累計均價（進位到可下單價），損益只剩手續費與證交稅
+    out = []
+    for k, (lab, price, _) in enumerate(rows):
+        sh_k, cost_k = sum(shares[:k + 1]), sum(costs[:k + 1])
+        if shares[k] <= 0:
             continue
-        stop = p["stop1"] if k == 0 else S.tick(cost / sh, "ceil")
-        pnl = sh * stop - cost - cost * cfg.FEE_RT
-        risk.append((name, px(stop), f"{(stop / close - 1) * 100:+.1f}%", f"{pnl:+,.0f}"))
-    show_table(["持有", "停損價", "距現價", "停損損益（元）"], risk)
-    st.caption("第 2 筆（突破）買進後，停損拉到累計均價，損益只剩手續費與證交稅（來回約 "
-               f"{cfg.FEE_RT * 100:.1f}%）。若跳空跌破停損價，實際虧損會比表上多。")
+        exit_p = p["stop1"] if k == 0 else S.tick(cost_k / sh_k, "ceil")
+        pnl = sh_k * exit_p - cost_k - cost_k * cfg.FEE_RT
+        out.append((lab, px(price), f"{shares[k]:,}", px(avgs[k]), px(exit_p), f"{pnl:+,.0f}"))
+    show_table(["階段", "進場價", "股數", "累計均價", "出場價", "出場損益"], out)
+    st.caption(f"② 突破＝突破價；③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%。"
+               f"出場價與損益是買到該階段後的累計狀況。合計投入 {sum(costs):,.0f} 元、{sum(shares):,} 股，"
+               f"可用資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元。")
+    st.caption("買進第 2 筆（突破）後，出場價拉到累計均價，損益只剩手續費與證交稅（來回約 "
+               f"{cfg.FEE_RT * 100:.1f}%）。若跳空跌破出場價，實際虧損會比表上多。")
 
     st.markdown(f"🎯 **目標價　{px(p['targets'][0][1])}**（距現價 {gap(p['targets'][0][1])}）")
     if p.get("stop1_note"):
-        st.caption(f"第 1 筆停損依據：{p['stop1_note']}")
+        st.caption(f"第 1 筆出場依據：{p['stop1_note']}")
     if len(p["targets"]) > 1:
         st.caption("目標價：" + "；".join(f"{lbl} {px(v)}" for lbl, v in p["targets"]))
     for n in p.get("notes", []):
@@ -375,9 +370,14 @@ else:
                     else:
                         st.caption("今天沒有符合的股票。")
     else:
-        st.error("🔴 尚未止跌，不建立多頭部位，今日不推薦。")
+        st.error(f"🔴 尚未止跌，不建立多頭部位。已讀取 {scan['data_date']} 的夜間掃描：今日無推薦。")
 
     watch = [(n, hits.get(n, [])) for n in ORDER if n not in active and hits.get(n)]
+    n_active = sum(len(hits.get(a_, [])) for a_ in active)
+    if active and n_active == 0:
+        st.info(f"✅ 已讀取 {scan['data_date']} 的夜間掃描：今日無推薦（啟用的策略都沒有符合的股票）。")
+    if not watch:
+        st.caption("👀 觀察名單：無。" if not active else "")
     if watch:
         st.markdown("**👀 觀察名單**（型態符合，但大盤目前不適用，僅供追蹤）")
         for name, items in watch:
@@ -390,7 +390,7 @@ st.subheader("⚙️ 資金與三段投入比例")
 capital = st.number_input("可用資金（元）", min_value=10000, max_value=100_000_000, value=1_000_000,
                           step=50000, key="capital",
                           help="可以直接輸入金額，或按 + / − 調整，每次 5 萬")
-st.caption("💡 可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）。選好標的後，各策略的分批計畫會依這筆資金換算每一筆可買的股數與停損金額。")
+st.caption("💡 可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）。選好標的後，各策略的分批計畫會依這筆資金換算每一筆可買的股數與出場損益。")
 if "w1" not in st.session_state:
     st.session_state.w1 = int(round(cfg.TRANCHES[0] * 100))
     st.session_state.w2 = int(round(cfg.TRANCHES[1] * 100))
@@ -490,7 +490,7 @@ if target:
             st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
                             config={"displayModeBar": False})
 
-            st.caption(f"以下依可用資金 {capital:,.0f} 元、比例 {w1}/{w2}/{w3} 換算股數與停損金額")
+            st.caption(f"以下依可用資金 {capital:,.0f} 元、比例 {w1}/{w2}/{w3} 換算股數與出場損益")
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
                 label = cfg.STRATEGY_NAMES[sname]
@@ -504,7 +504,9 @@ if target:
                     md_cond([("✅" if cok else "❌", cname, detail) for cname, cok, detail in r["checks"]])
                     if sname == "pullback":
                         st.markdown(f"🎯 **理想第 1 筆進場區　{px(r['zone_lo'])} ~ {px(r['zone_hi'])}**")
-                        st.caption(f"依你的比例 {w1}/{w2}/{w3} 推算，前高 {px(r['key'])}")
+                        st.caption(f"前高 {px(r['key'])}。上緣＝第 1 筆買在這個價、第 2 筆買在前高時，前兩筆平均成本剛好是前高的 "
+                                   f"{cfg.PB_MAX_AVG_RATIO * 100:.0f}%（依你的比例 {w1}/{w2}/{w3} 推算）；"
+                                   f"下緣＝前高回檔 {cfg.PB_PULLBACK_MAX * 100:.0f}%，再跌更深視為轉弱。")
                         if r["in_zone"]:
                             st.caption("現價已在進場區內，以下以現價為第 1 筆試算。")
                         elif r["close"] > r["zone_hi"]:
@@ -518,7 +520,7 @@ if target:
                     else:
                         plan = S.plan_for(sname, r, ratios)
                         if sname != "pullback" and plan["stop1"] >= plan["e"]:
-                            st.info("現價已低於停損價，無法試算。")
+                            st.info("現價已低於出場價，無法試算。")
                         else:
                             if not r["ok"]:
                                 st.warning("尚未符合條件，以下試算僅供參考。")
