@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       sample:
-        description: "只回測隨機抽出的幾檔（快速版）。填 0 = 全部股票（會跑比較久）"
+        description: "要回測幾檔股票？可填任何數字（例：30、100、300＝隨機抽這麼多檔）；填 0＝全部股票（最準，但要跑約半小時以上）"
         default: "300"
         type: string
 
