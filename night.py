@@ -6,6 +6,7 @@
 診斷模式：手動執行時把 diag 勾起來（或環境變數 DIAG=true），會不管大盤層級、
 列出四套策略各自符合的股票，並顯示每個條件各有幾檔通過，用來判斷哪個條件太嚴格。
 """
+import json
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -175,6 +176,37 @@ def strategy_block(name, items, names, risk, note=""):
     return title + "\n" + code_block(lines) + more + "\n📊 TradingView 線圖：" + links
 
 
+RESULT_FILE = "scan_results.json"
+
+
+def save_results(mk, hits, names, directory, now):
+    """把今晚的掃描結果存成 JSON，網頁 app 的『今日推薦』直接讀它"""
+    info = {r.sym: (r.industry, r.market) for r in directory.itertuples()}
+    out = {
+        "generated_at": f"{now:%Y-%m-%d %H:%M}",
+        "data_date": f"{mk['date']:%Y-%m-%d}",
+        "layer": mk["layer"], "layer_name": mk["layer_name"],
+        "active": list(mk["active"]), "risk": bool(mk["risk"]),
+        "stab_ok": bool(mk["stab_ok"]),
+        "hits": {},
+    }
+    for name in ORDER:
+        rows = []
+        for h in hits[name]:
+            code = h["sym"].split(".")[0]
+            ind, mkt = info.get(h["sym"], ("", ""))
+            rows.append({
+                "code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
+                "industry": ind or "", "market": mkt or "",
+                "close": round(h["r"]["close"], 2), "key": h["plan"]["key"], "stop1": h["plan"]["stop1"],
+                "target": h["plan"]["targets"][0][1], "turnover": round(h["turnover"]),
+                "broke": bool(name == "flag" and h["r"].get("status", "").startswith("已突破")),
+            })
+        out["hits"][name] = rows
+    with open(RESULT_FILE, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+
+
 def run():
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     ratios = cfg.TRANCHES
@@ -200,6 +232,10 @@ def run():
     hits, liquid, stale, funnel = scan(prices, mk, ratios)
 
     print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
+    try:
+        save_results(mk, hits, names, directory, now)
+    except Exception as e:
+        print("掃描結果存檔失敗：", repr(e))
 
     data_date = mk["date"]
     head = [
