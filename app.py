@@ -112,13 +112,30 @@ def prepare_chart_data(df, is_market=False, bars=65):
     return d.iloc[-bars:], label
 
 
-def vol_low_info(df, days=30):
-    """近 30 個交易日成交量最大的那一天，以及當天的最低點"""
-    d = df[df["Volume"] > 0].iloc[-days:]
+def vol_low_info(df):
+    """近 30 日成交量最大那天的最低點（main）。
+    若它比現價高（壓力），再從近 60 日找「最低點在現價之下、量最大」的那天當短線支撐（sup）"""
+    d = df[df["Volume"] > 0]
     if d.empty:
         return None
-    day = d["Volume"].idxmax()
-    return {"key": f"{day:%m/%d}", "low": float(d.loc[day, "Low"]), "vol": float(d.loc[day, "Volume"]) / 1000.0}
+    close = float(df["Close"].iloc[-1])
+
+    def pack(day):
+        return {"key": f"{day:%m/%d}", "low": float(d.loc[day, "Low"]), "vol": float(d.loc[day, "Volume"]) / 1000.0}
+
+    d30 = d.iloc[-30:]
+    main = pack(d30["Volume"].idxmax())
+    main["pressure"] = main["low"] > close
+    sup = None
+    if main["pressure"]:
+        d60 = d.iloc[-60:]
+        cand = d60[d60["Low"] < close]
+        if not cand.empty:
+            sup = pack(cand["Volume"].idxmax())
+    return {"main": main, "sup": sup, "close": close}
+
+
+RED, GREEN = "#e03131", "#2b9a3f"      # 跟大盤燈號邏輯一致：紅＝壓力／風險，綠＝支撐
 
 
 def plot_k_vol(df, is_market=False, bars=65, stab=None):
@@ -164,7 +181,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
              f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff8c00", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00a8d6", -4, 108)
+                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#ff8c00", -4, 108)
 
         # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
         dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
@@ -177,9 +194,8 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                 i = dates.index(dkey)
                 fig.add_shape(type="rect", x0=i - 0.5, x1=i + 0.5, y0=0, y1=dv_b, row=2, col=1,
                               line=dict(color="#ff8c00", width=2), fillcolor="rgba(0,0,0,0)")
-                # 文字放在橘框左邊、虛線上方（那一帶沒有其他長條）
-                fig.add_annotation(x=dkey, y=dv_b, row=2, col=1, text=f"爆量日 {dkey}", showarrow=False,
-                                   xanchor="right", xshift=-8, yshift=9, font=dict(color="#ff8c00", size=11))
+                # 文字往左移開，用細箭頭指到橘框，避免跟右邊「近3日最大量」重疊
+                mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -14, row=2)
             if rv:
                 # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
                 mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量<br>為爆量日 {rv / dv * 100:.0f}%",
@@ -202,23 +218,32 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     lo_pad = float(p["Low"].min())
     rng_p = max(hi_v - lo_pad, 1e-9)
     # 個股圖：下方多留一條空白帶，專門放「大量低點」的文字，這樣文字不會蓋到 K 線或成交量
-    extra = (0.18 if not is_market else (0.40 if stab and stab.get('prior_low') is not None else 0))
+    extra = (0.38 if not is_market else (0.40 if stab and stab.get('prior_low') is not None else 0))
     y_lo, y_hi = lo_pad - rng_p * (0.04 + extra), hi_v + rng_p * 0.10
     fig.update_yaxes(range=[y_lo, y_hi], row=1, col=1)
 
     if not is_market:
         info = vol_low_info(df)
-        if info and info["key"] in dates:
+        if info:
             ppu = 280.0 / (y_hi - y_lo)          # 價格圖大約 280 像素高：每 1 元約幾像素
-            text_y = lo_pad - rng_p * 0.11
-            i = dates.index(info["key"])
-            fig.add_annotation(x=info["key"], y=info["low"], row=1, col=1,
-                               text=f"30日量最大 低 {px(info['low'])}（{info['key']}）",
-                               showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#7048e8",
-                               ax=-4 if side(i) == "right" else (4 if side(i) == "left" else 0),
-                               ay=max(18.0, (info["low"] - text_y) * ppu), xanchor=side(i),
-                               font=dict(color="#7048e8", size=12))
-            fig.add_hline(y=info["low"], row=1, col=1, line=dict(color="rgba(112,72,232,0.7)", width=1, dash="dot"))
+            items = [(info["main"], RED if info["main"]["pressure"] else GREEN,
+                      f"近30日最大量（{info['main']['key']}）<br>當天最低點 {px(info['main']['low'])}"
+                      + ("　壓力" if info["main"]["pressure"] else "　支撐"), 0.08)]
+            if info["sup"]:
+                items.append((info["sup"], GREEN,
+                              f"短線支撐（近60日，{info['sup']['key']}）<br>當天最低點 {px(info['sup']['low'])}", 0.28))
+            for it, color, text, depth in items:
+                if it["key"] not in dates:
+                    continue
+                i = dates.index(it["key"])
+                text_y = lo_pad - rng_p * depth
+                fig.add_annotation(x=it["key"], y=it["low"], row=1, col=1, text=text,
+                                   showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
+                                   ax=-4 if i > n_bar * 0.55 else 4, ay=max(18.0, (it["low"] - text_y) * ppu),
+                                   xanchor="right" if i > n_bar * 0.55 else "left",
+                                   font=dict(color=color, size=12))
+                fig.add_hline(y=it["low"], row=1, col=1,
+                              line=dict(color=color, width=1, dash="dot"))
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
@@ -422,10 +447,12 @@ def pick(item):
 def rec_buttons(prefix, strategy, items, limit=15):
     for it in items[:limit]:
         arrow = "↑" if it.get("broke") else ""
-        if st.button(f"{it['code']} {it['name']}{arrow}　現價 {px(it['close'])}｜突破價 {px(it['key'])}",
+        vs = {"壓": "　🔴壓", "撐": "　🟢撐"}.get(it.get("vl_side"), "")
+        if st.button(f"{it['code']} {it['name']}{arrow}　現價 {px(it['close'])}｜突破價 {px(it['key'])}{vs}",
                      key=f"{prefix}_{strategy}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
+    st.caption(L("🔴壓＝近 30 日最大量當天最低點在現價之上（短線壓力）", "🟢撐＝在現價之下（支撐、出場參考）"))
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
@@ -578,13 +605,20 @@ if target:
 
             vi = vol_low_info(df)
             if vi:
-                if vi["low"] > close:
-                    st.markdown(L(f"**近 30 日最大量　{vi['key']}（{vi['vol']:,.0f} 張）**",
-                                  f"當天最低點 {px(vi['low'])}，高於現價 {px(close)}",
+                m_ = vi["main"]
+                head = f"**近 30 日最大量　{m_['key']}（{m_['vol']:,.0f} 張）**"
+                if m_["pressure"]:
+                    st.markdown(L(head, f"當天最低點 {px(m_['low'])}，高於現價 {px(close)}",
                                   "🔴 很可能是短線壓力，不利上攻"))
+                    sp = vi["sup"]
+                    if sp:
+                        st.markdown(L(f"**🟢 短線支撐　{px(sp['low'])}**（{(sp['low'] / close - 1) * 100:+.1f}%）",
+                                      f"近 60 日、最低點在現價之下的最大量日 {sp['key']}",
+                                      f"當天最低點 {px(sp['low'])}，可作支撐或出場價的參考"))
+                    else:
+                        st.caption("近 60 日沒有最低點在現價之下的大量日，下方沒有明確支撐")
                 else:
-                    st.markdown(L(f"**近 30 日最大量　{vi['key']}（{vi['vol']:,.0f} 張）**",
-                                  f"當天最低點 {px(vi['low'])}，低於現價 {px(close)}",
+                    st.markdown(L(head, f"當天最低點 {px(m_['low'])}，低於現價 {px(close)}",
                                   "🟢 可作為短期支撐，或出場價的參考"))
             st.caption(L(f"以下依可用資金 {capital:,.0f} 元", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
             for sname in ("pullback", "flag", "breakout", "dry"):
