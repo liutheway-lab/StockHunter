@@ -52,15 +52,22 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                           x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.18)",
                           line_width=0, layer="above")
 
-        def mark(day, val, color):
+        def mark(day, val, text, color, ax, ay):
             if day in dates:
                 fig.add_trace(go.Scatter(x=[day], y=[val], mode="markers", showlegend=False, hoverinfo="skip",
-                                         marker=dict(symbol="diamond", size=11, color=color,
-                                                     line=dict(color="#ffffff", width=1.5))), row=1, col=1)
+                                         marker=dict(symbol="diamond", size=9, color=color,
+                                                     line=dict(color="#ffffff", width=1))), row=1, col=1)
+                # 用箭頭拉出來寫數字；兩個標籤的位置錯開，才不會疊在一起
+                fig.add_annotation(x=day, y=val, xref="x", yref="y", text=text, showarrow=True,
+                                   arrowhead=2, arrowsize=1, arrowwidth=1.5, arrowcolor=color,
+                                   ax=ax, ay=ay, font=dict(color=color, size=12),
+                                   bgcolor="rgba(17,17,17,0.85)", borderpad=2)
 
-        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"], "#ff9f1a")
+        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"], f"前低 {stab['prior_low']:,.0f}",
+             "#ff9f1a", -70, 40)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
-            mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"], "#00e5ff")
+            mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
+                 f"近3日低 {stab['recent_low']:,.0f}", "#00e5ff", -90, 95)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
