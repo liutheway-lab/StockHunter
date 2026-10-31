@@ -90,55 +90,53 @@ def load_directory():
     return lookup.load_directory()
 
 
-def shares_text(n):
-    """股數 → 『2 張 300 股』"""
-    if n <= 0:
-        return "資金不足 1 股"
-    lots, odd = divmod(n, 1000)
-    parts = ([f"{lots} 張"] if lots else []) + ([f"{odd} 股"] if odd else [])
-    return " ".join(parts) + f"（{n:,} 股）" if lots else f"{n:,} 股"
-
-
-def plan_cards(p, capital):
-    """每一筆：價位、投入金額、可買股數、累計均價、停損價與停損虧損金額"""
+def plan_view(p, capital):
+    """分批計畫：價位、投入、可買股數、各階段停損與風險"""
     r = p["ratios"]
-    rows = [("① 進場", p["e"], r[0], p["e"], p["stop1"]),
-            ("② 突破價", p["b"], r[1], p["avg2"], p["stop2"]),
-            (f"③ 突破價+{(cfg.EXT_RATIO - 1) * 100:.0f}%", p["b2"], r[2], p["avg3"], p["stop2"])]
-    out, total_sh, total_cost, worst = [], 0, 0.0, 0.0
-    for label, price, ratio, avg, stop in rows:
+    rows = [("① 進場", p["e"], r[0]),
+            ("② 突破價", p["b"], r[1]),
+            (f"③ 突破+{(cfg.EXT_RATIO - 1) * 100:.0f}%", p["b2"], r[2])]
+    lines = ["| 階段 | 價位 | 投入（元） | 可買股數 |", "| :--- | ---: | ---: | ---: |"]
+    shares, costs = [], []
+    for label, price, ratio in rows:
         amt = capital * ratio
         sh = int(amt // price) if price > 0 else 0
-        cost = sh * price
-        loss = sh * max(price - stop, 0)
-        total_sh += sh
-        total_cost += cost
-        worst += sh * max(price - p["stop1"], 0)
-        out.append(f"**{label}　{price:.2f}**  \n"
-                   f"　投入 {amt:,.0f} 元（{ratio * 100:.0f}%）  \n"
-                   f"　**可買 {shares_text(sh)}**  \n"
-                   f"　累計均價 {avg:.2f}  \n"
-                   f"　停損價 {stop:.2f}，停損虧損 **{loss:,.0f} 元**")
-    out.append(f"**合計**　約 {total_sh:,} 股，實際投入 {total_cost:,.0f} 元（剩 {capital - total_cost:,.0f} 元）  \n"
-               f"全部跌到第 1 筆停損價 {p['stop1']:.2f} 的最大虧損：**{worst:,.0f} 元**"
-               f"（佔可用資金 {worst / capital * 100:.1f}%）")
-    return "\n\n".join(out)
+        shares.append(sh)
+        costs.append(sh * price)
+        lines.append(f"| {label} | {price:.2f} | {amt:,.0f} | {sh:,} |")
+    st.markdown("\n".join(lines))
 
+    tot_sh, tot_cost = sum(shares), sum(costs)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("合計股數", f"{tot_sh:,}")
+    m2.metric("實際投入", f"{tot_cost:,.0f}")
+    m3.metric("剩餘資金", f"{capital - tot_cost:,.0f}")
 
-def show_plan(p, capital):
-    st.markdown(plan_cards(p, capital))
-    c1, c2, c3 = st.columns(3)
-    c1.metric("第 1 筆停損價", f"{p['stop1']:.2f}")
-    c2.metric("第 2 筆防守價", f"{p['stop2']:.2f}")
-    c3.metric("目標價", f"{p['targets'][0][1]:.2f}")
+    # 各階段停損：只買第 1 筆時停損在停損價；突破加碼後，停損拉到實際平均成本（保本）
+    fee = cfg.FEE_RT
+    risk = ["| 買到 | 停損價 | 若被停損 |", "| :--- | ---: | ---: |"]
+    loss1 = shares[0] * max(p["e"] - p["stop1"], 0)
+    risk.append(f"| ① 只買第 1 筆 | {p['stop1']:.2f} | 虧 {loss1:,.0f}（{loss1 / capital * 100:.1f}%） |")
+    for k, name in ((2, "② 買到第 2 筆"), (3, "③ 買到第 3 筆")):
+        sh, cost = sum(shares[:k]), sum(costs[:k])
+        if sh > 0:
+            avg = cost / sh
+            risk.append(f"| {name} | {avg:.2f}（均價） | 約打平（只損費用 {cost * fee:,.0f}） |")
+    st.markdown("**各階段停損與風險**")
+    st.markdown("\n".join(risk))
+    st.caption("買到第 2 筆（突破）之後，停損拉到實際平均成本，整體不虧本，只損失手續費與證交稅。若跳空跌破停損價，實際虧損會比表上多。")
+
+    st.metric("目標價", f"{p['targets'][0][1]:.2f}")
     if p.get("stop1_note"):
-        st.caption(f"停損依據：{p['stop1_note']}")
-    if p.get("breakeven"):
-        st.caption(f"第 2 筆被砍掉後，第 1 筆要漲到 `{p['breakeven']:.2f}` 整趟才打平")
+        st.caption(f"第 1 筆停損依據：{p['stop1_note']}")
     if len(p["targets"]) > 1:
         st.caption("目標價：" + "；".join(f"{lbl} `{px:.2f}`" for lbl, px in p["targets"]))
     for n in p.get("notes", []):
         st.caption(n)
+
+
+def show_plan(p, capital):
+    plan_view(p, capital)
 
 
 # ==================== 大盤 ====================
