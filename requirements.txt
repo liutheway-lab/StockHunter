@@ -3,3 +3,5 @@ pandas
 requests
 lxml
 matplotlib
+streamlit
+plotly
