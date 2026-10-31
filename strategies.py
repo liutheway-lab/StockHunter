@@ -450,8 +450,8 @@ def build_plan(entry, B, ratios=None):
     }
 
 
-def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破關鍵價", stop1_note=""):
-    """其他三套策略的通用分批：第 1 筆 E、第 2 筆突破關鍵價 K、第 3 筆 K x 1.08"""
+def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_note=""):
+    """其他三套策略的通用分批：第 1 筆 E、第 2 筆突破價 K、第 3 筆 K x 1.08"""
     t = norm_ratios(ratios)
     p1, k = tick(E), tick(K)
     p2 = max(k, p1)
@@ -464,7 +464,7 @@ def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破關鍵價", s
     elif tg <= p3:
         notes.append(f"⚠️ 目標價 {tg} 不高於第 3 筆加碼價 {p3}，第 3 筆實務上可能不會買進")
     if p1 >= k:
-        notes.append("ℹ️ 現價已在關鍵價之上，第 2 筆可與第 1 筆一併買進")
+        notes.append("ℹ️ 現價已在突破價之上，第 2 筆可與第 1 筆一併買進")
     return {
         "ratios": t, "e": p1, "b": p2, "b2": p3, "key": k, "key_label": key_label,
         "avg2": tick(avg_cost([p1, p2], t[:2])), "avg3": tick(avg_cost([p1, p2, p3], t)),
