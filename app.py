@@ -12,7 +12,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 
-import charts
+import webcharts as charts
 import config as cfg
 import data
 import guide
@@ -51,10 +51,14 @@ def _scroll_script(key, title):
         }}
       }}
       if (el) el.scrollIntoView({{block: 'center'}});
-    }}, 250);
+    }}, 40);
     </script>""", height=0)
 
 
+_fragment = getattr(st, "fragment", None) or (lambda f: f)
+
+
+@_fragment
 def foldable(key, title, body, default=False):
     """可展開／收合的區塊：標題是一顆按鈕，展開後最下面也有一顆收合鈕（收合後會捲回標題）"""
     if key not in st.session_state:
@@ -90,43 +94,46 @@ def load_directory():
     return lookup.load_directory()
 
 
+def md_table(head, rows):
+    """靠右對齊的 markdown 表格（第一欄靠左）"""
+    out = ["| " + " | ".join(head) + " |", "| :--- " + "| ---: " * (len(head) - 1) + "|"]
+    out += ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
+    return "\n".join(out)
+
+
 def plan_view(p, capital):
     """分批計畫：價位、投入、可買股數、各階段停損與風險"""
     r = p["ratios"]
-    rows = [("① 進場", p["e"], r[0]),
-            ("② 突破價", p["b"], r[1]),
-            (f"③ 突破+{(cfg.EXT_RATIO - 1) * 100:.0f}%", p["b2"], r[2])]
-    lines = ["| 階段 | 價位 | 投入（元） | 可買股數 |", "| :--- | ---: | ---: | ---: |"]
-    shares, costs = [], []
+    rows = [("① 進場", p["e"], r[0]), ("② 突破", p["b"], r[1]), ("③ 加碼", p["b2"], r[2])]
+    tbl, shares, costs = [], [], []
     for label, price, ratio in rows:
         amt = capital * ratio
         sh = int(amt // price) if price > 0 else 0
         shares.append(sh)
         costs.append(sh * price)
-        lines.append(f"| {label} | {price:.2f} | {amt:,.0f} | {sh:,} |")
-    st.markdown("\n".join(lines))
+        tbl.append((label, f"{price:.2f}", f"{amt:,.0f}", f"{sh:,}"))
+    st.markdown(md_table(["階段", "價位", "投入", "股數"], tbl))
+    st.caption(f"② 突破＝突破價；③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%。投入單位：元。")
 
     tot_sh, tot_cost = sum(shares), sum(costs)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("合計股數", f"{tot_sh:,}")
-    m2.metric("實際投入", f"{tot_cost:,.0f}")
-    m3.metric("剩餘資金", f"{capital - tot_cost:,.0f}")
+    st.markdown(md_table(["合計股數", "實際投入", "剩餘資金"],
+                         [(f"{tot_sh:,}", f"{tot_cost:,.0f}", f"{capital - tot_cost:,.0f}")]))
 
     # 各階段停損：只買第 1 筆時停損在停損價；突破加碼後，停損拉到實際平均成本（保本）
-    fee = cfg.FEE_RT
-    risk = ["| 買到 | 停損價 | 若被停損 |", "| :--- | ---: | ---: |"]
     loss1 = shares[0] * max(p["e"] - p["stop1"], 0)
-    risk.append(f"| ① 只買第 1 筆 | {p['stop1']:.2f} | 虧 {loss1:,.0f}（{loss1 / capital * 100:.1f}%） |")
-    for k, name in ((2, "② 買到第 2 筆"), (3, "③ 買到第 3 筆")):
+    risk = [("① 第 1 筆", f"{p['stop1']:.2f}", f"虧 {loss1:,.0f}")]
+    notes = [f"第 1 筆停損約佔資金 {loss1 / capital * 100:.1f}%"]
+    for k, name in ((2, "② 前 2 筆"), (3, "③ 前 3 筆")):
         sh, cost = sum(shares[:k]), sum(costs[:k])
         if sh > 0:
-            avg = cost / sh
-            risk.append(f"| {name} | {avg:.2f}（均價） | 約打平（只損費用 {cost * fee:,.0f}） |")
-    st.markdown("**各階段停損與風險**")
-    st.markdown("\n".join(risk))
-    st.caption("買到第 2 筆（突破）之後，停損拉到實際平均成本，整體不虧本，只損失手續費與證交稅。若跳空跌破停損價，實際虧損會比表上多。")
+            risk.append((name, f"{cost / sh:.2f}", "約打平"))
+            notes.append(f"前 {k} 筆約損費用 {cost * cfg.FEE_RT:,.0f}")
+    st.markdown("**各階段停損**")
+    st.markdown(md_table(["持有", "停損價", "結果"], risk))
+    st.caption("買到第 2 筆（突破）後，停損拉到實際平均成本，整體不虧本，只損手續費與證交稅"
+               f"（{'、'.join(notes)} 元）。若跳空跌破停損價，實際虧損會比表上多。")
 
-    st.metric("目標價", f"{p['targets'][0][1]:.2f}")
+    st.markdown(f"🎯 **目標價　{p['targets'][0][1]:.2f}**")
     if p.get("stop1_note"):
         st.caption(f"第 1 筆停損依據：{p['stop1_note']}")
     if len(p["targets"]) > 1:
@@ -320,3 +327,5 @@ if target:
 
                 foldable(f"{code}_{sname}", f"{'✅' if r['ok'] else '❌'} {label}｜{'符合' if r['ok'] else '尚未符合'}｜{applicable}",
                          body, default=r["ok"])
+
+st.caption(f"程式版本：{charts.VERSION}")
