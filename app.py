@@ -101,6 +101,13 @@ def md_table(head, rows):
     return "\n".join(out)
 
 
+def md_cond(rows):
+    """條件表：結果 | 條件 | 現況。放在表格裡，換行時文字也會對齊"""
+    esc = lambda t: str(t).replace("|", "／")
+    return "\n".join(["| | 條件 | 現況 |", "| :---: | :--- | :--- |"]
+                      + [f"| {a} | **{esc(b)}** | {esc(c)} |" for a, b, c in rows])
+
+
 def plan_view(p, capital):
     """分批計畫：價位、投入、可買股數、各階段停損與風險"""
     r = p["ratios"]
@@ -179,17 +186,13 @@ if mk:
             ok = lambda b: "✅" if b else "❌"
             ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
             st.markdown(f"🧱 **止跌確認**　{'✅ 通過' if s_['ok'] else '🔴 尚未止跌'}（兩項都要通過）")
-            st.markdown(
-                f"{ok(s_['no_break'])} **1. 不破低**  \n"
-                f"　近 3 日最低 {s_['recent_low']:,.0f}（{s_['recent_low_date']:%m/%d}）  \n"
-                f"　前低 {s_['prior_low']:,.0f}（{s_['prior_low_date']:%m/%d}）  \n"
-                f"　{'沒有跌破前低' if s_['no_break'] else '已跌破或貼近前低'}"
-            )
-            st.markdown(
-                f"{ok(s_['vol_ok'])} **2. 量承接**  \n"
-                f"　近 3 日最大量 ＝ 爆量下跌日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%  \n"
-                f"　需要 100% 以上"
-            )
+            st.markdown(md_cond([
+                (ok(s_["no_break"]), "不破低",
+                 f"近 3 日最低 {s_['recent_low']:,.0f}（{s_['recent_low_date']:%m/%d}），"
+                 f"前低 {s_['prior_low']:,.0f}（{s_['prior_low_date']:%m/%d}）"),
+                (ok(s_["vol_ok"]), "量承接",
+                 f"近 3 日最大量為爆量下跌日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上"),
+            ]))
 
     st.plotly_chart(charts.plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                     use_container_width=True, config={"displayModeBar": False})
@@ -309,23 +312,30 @@ if target:
                 applicable = "大盤適用" if r["active"] else "大盤不適用"
 
                 def body(r=r, sname=sname):
-                    for i, (cname, cok, detail) in enumerate(r["checks"], 1):
-                        st.markdown(f"{'✅' if cok else '❌'} **{i}. {cname}**  \n　{detail}")
+                    st.markdown(md_cond([("✅" if cok else "❌", cname, detail) for cname, cok, detail in r["checks"]]))
                     if sname == "pullback":
-                        st.markdown(f"🎯 **理想第 1 筆進場區**　`{r['zone_lo']}` ~ `{r['zone_hi']}`  \n"
-                                    f"　依你的比例 {w1}/{w2}/{w3} 推算，前高 `{r['key']:.2f}`")
+                        st.markdown(f"🎯 **理想第 1 筆進場區　{r['zone_lo']} ~ {r['zone_hi']}**")
+                        st.caption(f"依你的比例 {w1}/{w2}/{w3} 推算，前高 {r['key']:.2f}")
                         if r["in_zone"]:
                             st.caption("現價已在進場區內，以下以現價為第 1 筆試算。")
                         elif r["close"] > r["zone_hi"]:
                             st.caption(f"現價還沒回檔到進場區，以下假設第 1 筆掛在 {r['zone_hi']} 試算。")
                         else:
                             st.caption("回檔已超過上限，規則上不進場；以下仍以進場區上緣試算供參考。")
-                    if r["ok"] or sname == "pullback":
-                        if not r["active"] and r["ok"]:
-                            st.warning("型態符合，但目前大盤層級不適用這套策略。")
-                        show_plan(S.plan_for(sname, r, ratios), capital)
+                    if r["ok"] and not r["active"]:
+                        st.warning("型態符合，但目前大盤層級不適用這套策略。")
+                    if "key" not in r or ("stop1" not in r and sname != "pullback"):
+                        st.info("目前沒有符合的型態，無法試算。")
+                    else:
+                        plan = S.plan_for(sname, r, ratios)
+                        if sname != "pullback" and plan["stop1"] >= plan["e"]:
+                            st.info("現價已低於停損價，無法試算。")
+                        else:
+                            if not r["ok"]:
+                                st.warning("尚未符合條件，以下試算僅供參考。")
+                            show_plan(plan, capital)
 
                 foldable(f"{code}_{sname}", f"{'✅' if r['ok'] else '❌'} {label}｜{'符合' if r['ok'] else '尚未符合'}｜{applicable}",
                          body, default=r["ok"])
 
-st.caption(f"程式版本：{charts.VERSION}")
+st.caption("最後更新：2026 年 10 月")
