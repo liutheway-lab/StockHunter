@@ -77,7 +77,11 @@ def market_chart(mk, bars=45):
         p = _pos(idx, pld)
         if p is not None:
             ax.scatter([p], [pl], marker="^", color="#333", zorder=5, s=30)
-        ax.text(0.5, pl + rng_v * 0.02, f"前低 {pl:,.0f}（{pld:%m/%d}）", fontsize=9, color="#333")
+            ax.annotate(f"前低 {pl:,.0f}（{pld:%m/%d}）", xy=(p, pl),
+                        xytext=(max(p - 20, 0.5), lowest - rng_v * 0.05), fontsize=9, color="#333",
+                        arrowprops=dict(arrowstyle="->", color="#333", linewidth=0.9))
+        else:
+            ax.text(0.5, pl + rng_v * 0.02, f"前低 {pl:,.0f}", fontsize=9, color="#333")
     if rl is not None and _pos(idx, rld) is not None:
         rp = _pos(idx, rld)
         ax.scatter([rp], [rl], color="#d35400", zorder=5, s=28)
