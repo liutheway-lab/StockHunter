@@ -79,6 +79,54 @@ def fetch_twse_turnover(months=4):
     return pd.Series(out).sort_index()
 
 
+def _numf(v):
+    try:
+        return float(str(v).replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def fetch_mi_index_amounts(day):
+    """證交所『大盤統計資訊』（MI_INDEX）當天各類成交金額（元）。回傳 {項目名稱: 金額}。
+    用來跟 FMTQIK 的成交金額對照，找出跟看盤軟體數字一致的口徑。"""
+    url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={day:%Y%m%d}&type=MS"
+    j = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"}).json()
+    tables = list(j.get("tables") or [])
+    for k in list(j):                      # 舊格式：fields1/data1 ...
+        if k.startswith("fields") and k.replace("fields", "data") in j:
+            tables.append({"fields": j[k], "data": j[k.replace("fields", "data")]})
+    out = {}
+    for t in tables:
+        cols = [i for i, f in enumerate(t.get("fields") or []) if "成交金額" in str(f)]
+        if not cols:
+            continue
+        for row in t.get("data") or []:
+            v = _numf(row[cols[0]])
+            if v:
+                out[str(row[0]).strip()] = v
+    return out
+
+
+def turnover_compare(mkt_df, n=3):
+    """診斷用：最近 n 個交易日，FMTQIK 成交金額與 MI_INDEX 各口徑並排（億元）。每個日期一行文字"""
+    lines = []
+    for day in list(mkt_df.index[-n:]):
+        base = mkt_df["Volume"].get(day)
+        parts = [f"FMTQIK {base / 1e8:,.0f}" if base == base and base else "FMTQIK -"]
+        try:
+            amts = fetch_mi_index_amounts(day)
+            for name, v in amts.items():
+                if any(k in name for k in ("總計", "合計", "一般股票")):
+                    parts.append(f"{name} {v / 1e8:,.0f}")
+            if len(parts) == 1:
+                parts.append("MI_INDEX 沒有對應項目")
+        except Exception as e:
+            parts.append(f"MI_INDEX 失敗 {type(e).__name__}")
+        lines.append(f"{day:%m/%d}　" + "｜".join(parts))
+        time.sleep(2)
+    return lines
+
+
 def fetch_market(period="2y", retries=3):
     """加權指數日線（^TWII）。價格來自 Yahoo；Volume 欄位換成證交所官方的「成交金額」。
     成交金額抓不到時 Volume 全部留空，止跌確認會顯示『無法確認』，而不是用錯的數字。"""
