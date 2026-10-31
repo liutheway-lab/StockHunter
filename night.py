@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import config as cfg
 import strategies as st
-from data import fetch_market, fetch_prices, get_directory, turnover_compare
+from data import fetch_market, fetch_prices, get_directory, turnover_audit
 from notify import send_photo, send_telegram
 
 MAX_LIST = 12   # 每套策略最多列出幾檔（依 20 日均成交金額由大到小）
@@ -49,11 +49,9 @@ def market_block(mk):
         return s + (f"   {l2:<5}{v2:>8,.0f}" if v2 is not None else "")
 
     # 全部是半形字，所以一定對齊
-    vol = mk["df"]["Volume"]
-    vlast = float(vol.iloc[-1]) if len(vol) and vol.iloc[-1] == vol.iloc[-1] else None
     tbl = [two("Close", mk["close"], "MA5", ma[5]),
            two("MA10", ma[10], "MA20", ma[20]),
-           two("MA60", ma[60], "Amt", vlast / 1e8) if vlast else two("MA60", ma[60])]
+           two("MA60", ma[60])]
     out = [head, code_block(tbl)]
 
     if mk["layer"] in (4, 5):
@@ -64,16 +62,14 @@ def market_block(mk):
             out.append("🧱 止跌確認：❌ 無法確認（大盤成交金額抓不到）")
         else:
             ok = lambda b: "✅" if b else "❌"
-            out.append(f"🧱 *止跌確認*　{'✅ 通過' if s['ok'] else '❌ 未通過'}")
-            out.append(code_block([
-                f"最低點　{s['recent_low']:>7,.0f} > {s['prior_low']:,.0f} {ok(s['no_break'])}",
-                f"成交額　{s['recent_vol'] / 1e8:>7,.0f} ≥ {s['dump_vol'] / 1e8:,.0f} {ok(s['vol_ok'])}",
-            ]))
-            last3 = vol.iloc[-3:]
-            days = "｜".join(f"{d:%m/%d} {v / 1e8:,.0f}" for d, v in last3.items() if v == v)
+            ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
+            out.append(f"🧱 *止跌確認*　{'✅ 通過' if s['ok'] else '❌ 未通過'}（兩項都要過）")
             out.append(
-                f"前低出現在 {s['prior_low_date']:%m/%d}｜爆量下跌日 {s['dump_date']:%m/%d}\n"
-                f"近 3 日成交額（億）：{days}"
+                f"{ok(s['no_break'])} 1. 近 3 日沒有再創新低\n"
+                f"　近 3 日最低 {s['recent_low']:,.0f}（{s['recent_low_date']:%m/%d}）"
+                f"{'高於' if s['no_break'] else '低於或等於'}前低 {s['prior_low']:,.0f}（{s['prior_low_date']:%m/%d}）\n"
+                f"{ok(s['vol_ok'])} 2. 近 3 日有大量承接\n"
+                f"　近 3 日最大量 = 爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需要 100% 以上"
             )
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
@@ -125,30 +121,39 @@ def scan(prices, mk, ratios):
 
 
 def funnel_lines(funnel, liquid):
-    """各策略每個條件各有幾檔通過（診斷用）。每個條件一行，避免整段擠在一起"""
-    out = [f"流動性合格 {liquid} 檔，各條件『單獨』通過的檔數："]
+    """各策略每個條件各有幾檔通過（診斷用）"""
+    out = [f"今天流動性合格共 {liquid} 檔。",
+           "下面每個條件是『單獨』計算有幾檔過關；全部條件同時過關才會入選。"]
     for name in ORDER:
         f = funnel[name]
         out.append("")
-        out.append(f"{TITLES[name]}　全部通過 {f['ok']} 檔")
+        out.append(f"{TITLES[name]}　最後入選 {f['ok']} 檔")
         for c, k in f["checks"].items():
             if c != "流動性":
-                out.append(f"　・{c}：{k}")
+                out.append(f"・{c}　{k}／{liquid}")
     return out
+
+
+def _md(t):
+    """名稱裡若有 Telegram Markdown 的特殊符號就跳脫"""
+    for ch in "_*`[":
+        t = t.replace(ch, "\\" + ch)
+    return t
 
 
 def strategy_block(name, items, names, risk, note=""):
     title = f"*{TITLES[name]}*　{len(items)} 檔" + ("　⚠️標示風險" if risk else "") + note
-    # 數字欄位全部是半形，所以一定對齊；中文名稱放最後一欄，長短不影響對齊
-    lines = [f"{'Code':<4} {'Now':>5} {'Brk':>5} {'Stop':>5} {'Goal':>5} 名稱"]
+    cards = []
     for h in items[:MAX_LIST]:
         code = h["sym"].split(".")[0]
         p = h["plan"]
         broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
-        lines.append(f"{code:<4} {fp(h['r']['close']):>5} {fp(p['key']):>5} {fp(p['stop1']):>5} "
-                     f"{fp(p['targets'][0][1]):>5} {names.get(h['sym'], code)[:4]}" + (" ↑" if broke else ""))
+        cards.append(
+            f"*{code} {_md(names.get(h['sym'], code))}*　現價 {fp(h['r']['close'])}" + ("　↑已突破" if broke else "") + "\n"
+            f"　突破 {fp(p['key'])}　停損 {fp(p['stop1'])}　目標 {fp(p['targets'][0][1])}"
+        )
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    return title + "\n" + code_block(lines) + more
+    return title + "\n\n" + "\n\n".join(cards) + more
 
 
 def run():
@@ -183,7 +188,6 @@ def run():
     active = mk["active"]
     shown = False
     if active or DIAG:
-        parts.append("Now 現價｜Brk 突破價｜Stop 停損｜Goal 目標｜↑ 已突破")
         for name in ORDER:
             if not hits[name]:
                 continue
@@ -197,7 +201,7 @@ def run():
             parts.append("今晚沒有符合的股票。")
     if DIAG:
         try:
-            parts.append("🔬 *成交額對照（億元，請跟看盤軟體比）*\n" + "\n".join(turnover_compare(mk["df"])))
+            parts.append("🔬 *成交額核對（暫時，找看盤軟體的算法）*\n" + "\n".join(turnover_audit()))
         except Exception as e:
             print("成交額對照失敗：", repr(e))
         parts.append("🔬 *各條件通過檔數*\n" + "\n".join(funnel_lines(funnel, liquid)))
