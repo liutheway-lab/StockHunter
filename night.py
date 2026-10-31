@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import config as cfg
 import strategies as st
-from data import fetch_market, fetch_prices, get_directory
+from data import fetch_market, fetch_prices, get_directory, turnover_compare
 from notify import send_photo, send_telegram
 
 MAX_LIST = 12   # 每套策略最多列出幾檔（依 20 日均成交金額由大到小）
@@ -49,9 +49,11 @@ def market_block(mk):
         return s + (f"   {l2:<5}{v2:>8,.0f}" if v2 is not None else "")
 
     # 全部是半形字，所以一定對齊
+    vol = mk["df"]["Volume"]
+    vlast = float(vol.iloc[-1]) if len(vol) and vol.iloc[-1] == vol.iloc[-1] else None
     tbl = [two("Close", mk["close"], "MA5", ma[5]),
            two("MA10", ma[10], "MA20", ma[20]),
-           two("MA60", ma[60])]
+           two("MA60", ma[60], "Amt", vlast / 1e8) if vlast else two("MA60", ma[60])]
     out = [head, code_block(tbl)]
 
     if mk["layer"] in (4, 5):
@@ -67,9 +69,11 @@ def market_block(mk):
                 f"最低點　{s['recent_low']:>7,.0f} > {s['prior_low']:,.0f} {ok(s['no_break'])}",
                 f"成交額　{s['recent_vol'] / 1e8:>7,.0f} ≥ {s['dump_vol'] / 1e8:,.0f} {ok(s['vol_ok'])}",
             ]))
+            last3 = vol.iloc[-3:]
+            days = "｜".join(f"{d:%m/%d} {v / 1e8:,.0f}" for d, v in last3.items() if v == v)
             out.append(
                 f"前低出現在 {s['prior_low_date']:%m/%d}｜爆量下跌日 {s['dump_date']:%m/%d}\n"
-                f"近 3 日 = {s['recent_start']:%m/%d}–{s['recent_end']:%m/%d}"
+                f"近 3 日成交額（億）：{days}"
             )
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
@@ -192,6 +196,10 @@ def run():
         if not shown:
             parts.append("今晚沒有符合的股票。")
     if DIAG:
+        try:
+            parts.append("🔬 *成交額對照（億元，請跟看盤軟體比）*\n" + "\n".join(turnover_compare(mk["df"])))
+        except Exception as e:
+            print("成交額對照失敗：", repr(e))
         parts.append("🔬 *各條件通過檔數*\n" + "\n".join(funnel_lines(funnel, liquid)))
 
     # 只有出問題時才顯示提醒
