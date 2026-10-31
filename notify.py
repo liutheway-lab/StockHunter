@@ -70,3 +70,29 @@ def send_telegram(blocks):
         print("\n\n".join(blocks))
         return False
     return all([tg_send(cid, blocks) for cid in chats])
+
+
+def send_photo(png, caption=""):
+    """傳一張圖（png 的 bytes）給所有設定的 chat。沒設定金鑰時存成 chart_preview.png。回傳是否成功"""
+    chats = chat_ids()
+    if not TG_TOKEN or not chats:
+        with open("chart_preview.png", "wb") as f:
+            f.write(png)
+        print("\n[沒有讀到 TG_BOT_TOKEN / TG_CHAT_ID，圖存成 chart_preview.png，沒有推播]")
+        return False
+    ok = True
+    for cid in chats:
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto",
+                data={"chat_id": cid, "caption": caption[:1000]},
+                files={"photo": ("chart.png", png, "image/png")},
+                timeout=60,
+            )
+            if not r.ok:
+                ok = False
+                print(f"Telegram 傳圖失敗 ({cid}): {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            ok = False
+            print(f"Telegram 傳圖異常 ({cid}): {e}")
+    return ok
