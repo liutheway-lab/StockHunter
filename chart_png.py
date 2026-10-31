@@ -99,13 +99,14 @@ def market_chart(mk, bars=45):
             axv.axhline(dv / 1e8, color="#555", linestyle="--", linewidth=1)
             if dp is not None:
                 axv.bar([dp], [dv / 1e8], color="none", edgecolor="#d35400", linewidth=1.8, width=0.65)
-                axv.annotate(f"爆量下跌日 {dv / 1e8:,.0f}億（{dd:%m/%d}）", xy=(dp, dv / 1e8),
-                             xytext=(max(dp - 12, 0), dv / 1e8 * 1.02), fontsize=9, color="#d35400")
+                axv.annotate(f"爆量下跌日（{dd:%m/%d}）", xy=(dp, dv / 1e8),
+                             xytext=(max(dp - 10, 0), dv / 1e8 * 1.04), fontsize=9, color="#d35400")
         rv = s.get("recent_vol")
-        if rv and r1 is not None:
-            axv.annotate(f"近3日最大 {rv / 1e8:,.0f}億", xy=(r1, rv / 1e8), xytext=(max(r1 - 9, 0), rv / 1e8 * 1.25),
-                         fontsize=9, color="#333", arrowprops=dict(arrowstyle="->", color="#555"))
-        axv.set_ylabel("成交金額(億)")
+        if rv and dv and r1 is not None:
+            axv.annotate(f"近3日最大量 = 爆量日的 {rv / dv * 100:.0f}%", xy=(r1, rv / 1e8),
+                         xytext=(max(r1 - 14, 0), max(float(v.max()), dv / 1e8) * 1.12), fontsize=9, color="#333",
+                         arrowprops=dict(arrowstyle="->", color="#555"))
+        axv.set_ylabel("成交金額（證交所，億）")
         axv.grid(alpha=0.15)
         axv.set_ylim(0, max(float(v.max()), (dv or 0) / 1e8) * 1.25)
 
