@@ -259,9 +259,9 @@ def run():
         + concl + f"\n{LINE}\n"
         + "\n".join(blocks)
         + f"\n{LINE}\n"
-        "🟢 利多　🔴 利空\n"
         "⏰ 08:45 台指期開盤　09:00 現貨開盤"
     )
+
     send_telegram([report])
     if failed == total:
         raise SystemExit("全部項目都抓不到，請檢查網路或 Yahoo 是否限流")
