@@ -1,0 +1,43 @@
+name: backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "只回測隨機抽出的幾檔（快速版）。填 0 = 全部股票（會跑比較久）"
+        default: "300"
+        type: string
+
+permissions:
+  contents: write            # 把統計結果（bt_report.json）存回 repo，之後網頁 app 可以顯示
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 回測
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python backtest.py --sample ${{ inputs.sample }}
+      - name: 保存完整結果（可以下載）
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-result
+          path: |
+            bt_report.json
+            bt_trades.csv
+      - name: 把統計結果存回 repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bt_report.json || true
+          git diff --cached --quiet || git commit -m "更新回測結果"
+          git push
