@@ -150,31 +150,31 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
 
         # 前低：細虛線橫跨整張圖 + 箭頭，文字放在 K 線下方的空白處
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
-                      line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dash"))
+                      line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dash"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff9f1a", -4, 62)
+             f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff8c00", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00e5ff", -4, 108)
+                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00a8d6", -4, 108)
 
         # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
         dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
         if dd is not None and dv:
             dv_b = dv / 1e8
-            fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 1.35], row=2, col=1)
-            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dash"))
+            fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 1.75], row=2, col=1)
+            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dash"))
             dkey = f"{dd:%m/%d}"
             if dkey in dates:
                 i = dates.index(dkey)
                 fig.add_shape(type="rect", x0=i - 0.5, x1=i + 0.5, y0=0, y1=dv_b, row=2, col=1,
-                              line=dict(color="#ff9f1a", width=1.5), fillcolor="rgba(0,0,0,0)")
+                              line=dict(color="#ff8c00", width=2), fillcolor="rgba(0,0,0,0)")
                 # 文字放在橘框左邊、虛線上方（那一帶沒有其他長條）
                 fig.add_annotation(x=dkey, y=dv_b, row=2, col=1, text=f"爆量日 {dkey}", showarrow=False,
-                                   xanchor="right", xshift=-8, yshift=9, font=dict(color="#ff9f1a", size=11))
+                                   xanchor="right", xshift=-8, yshift=9, font=dict(color="#ff8c00", size=12))
             if rv:
-                # 文字在右側長條上方的空白處，只往左伸展，不會碰到橘框
-                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量 {rv / dv * 100:.0f}%",
-                     "#dddddd", -4, -26, row=2)
+                # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
+                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量<br>＝爆量日的 {rv / dv * 100:.0f}%",
+                     "#7048e8", -4, -34, row=2)
 
     # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
     hi_i = int(p["High"].to_numpy().argmax())
@@ -185,13 +185,17 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     def side(i):
         return "right" if i > n_bar - 9 else ("left" if i < 8 else "center")
 
-    fig.add_hline(y=hi_v, row=1, col=1, line=dict(color="rgba(200,200,200,0.35)", width=1, dash="dot"))
+    fig.add_hline(y=hi_v, row=1, col=1, line=dict(color="rgba(214,51,108,0.7)", width=1, dash="dot"))
     fig.add_annotation(x=dates[hi_i], y=hi_v, row=1, col=1, text=f"前高 {px(hi_v)}（{dates[hi_i]}）",
-                       showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#e6e6e6",
+                       showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#d6336c",
                        ax=-4 if side(hi_i) == "right" else 4, ay=-22, xanchor=side(hi_i),
-                       font=dict(color="#e6e6e6", size=11))
+                       font=dict(color="#d6336c", size=12))
     lo_pad = float(p["Low"].min())
-    fig.update_yaxes(range=[lo_pad - (hi_v - lo_pad) * 0.04, hi_v + (hi_v - lo_pad) * 0.10], row=1, col=1)
+    rng_p = max(hi_v - lo_pad, 1e-9)
+    # 個股圖：下方多留一條空白帶，專門放「大量低點」的文字，這樣文字不會蓋到 K 線或成交量
+    extra = (0.30 if not is_market else (0.40 if stab and stab.get('prior_low') is not None else 0))
+    y_lo, y_hi = lo_pad - rng_p * (0.04 + extra), hi_v + rng_p * 0.10
+    fig.update_yaxes(range=[y_lo, y_hi], row=1, col=1)
 
     if not is_market:
         band = 0.10
@@ -199,15 +203,20 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
         if len(cand) < 2:
             cand = p[p["Plot_Vol"] > 0]
         top2 = cand.nlargest(2, "Plot_Vol")
+        ppu = 280.0 / (y_hi - y_lo)          # 價格圖大約 280 像素高：每 1 元約幾像素
         for rank, (day, row_) in enumerate(top2.iterrows()):
-            i = dates.index(day.strftime("%m/%d")) if day.strftime("%m/%d") in dates else None
-            if i is None:
+            key = day.strftime("%m/%d")
+            if key not in dates:
                 continue
-            fig.add_annotation(x=dates[i], y=float(row_["Low"]), row=1, col=1,
-                               text=f"{'量最大' if rank == 0 else '量次大'} 低 {px(float(row_['Low']))}（{dates[i]}）",
-                               showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#fd79a8",
+            i = dates.index(key)
+            low = float(row_["Low"])
+            text_y = lo_pad - rng_p * (0.10 + 0.11 * rank)      # 兩個文字各占空白帶的一層，不會疊在一起
+            fig.add_annotation(x=key, y=low, row=1, col=1,
+                               text=f"{'量最大' if rank == 0 else '量次大'} 低 {px(low)}（{key}）",
+                               showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#7048e8",
                                ax=-4 if side(i) == "right" else (4 if side(i) == "left" else 0),
-                               ay=38 + 30 * rank, xanchor=side(i), font=dict(color="#fd79a8", size=11))
+                               ay=max(18.0, (low - text_y) * ppu), xanchor=side(i),
+                               font=dict(color="#7048e8", size=12))
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
