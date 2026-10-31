@@ -107,26 +107,6 @@ def fetch_mi_index_amounts(day):
     return out
 
 
-def turnover_audit(day="2026-10-30", target_yi=8777.3, tol=0.15):
-    """暫時的診斷：列出證交所當天所有成交金額項目，並找出哪些項目加起來等於看盤軟體的數字"""
-    from itertools import combinations
-    day = pd.Timestamp(day)
-    amts = fetch_mi_index_amounts(day)
-    lines = [f"{day:%Y/%m/%d} 看盤軟體 {target_yi:,.1f} 億", "證交所各項目（億）："]
-    names = list(amts)
-    for n in names:
-        lines.append(f"・{n}　{amts[n] / 1e8:,.1f}")
-    found = []
-    for k in range(1, min(len(names), 4) + 1):
-        for combo in combinations(names, k):
-            if abs(sum(amts[n] for n in combo) / 1e8 - target_yi) <= tol:
-                found.append(" ＋ ".join(combo))
-    lines.append("")
-    lines.append("加起來等於看盤軟體數字的組合：" if found else "沒有任何組合等於看盤軟體數字")
-    lines += [f"・{f}" for f in found[:10]]
-    return lines
-
-
 def fetch_market(period="2y", retries=3):
     """加權指數日線（^TWII）。價格來自 Yahoo；Volume 欄位換成證交所官方的「成交金額」。
     成交金額抓不到時 Volume 全部留空，止跌確認會顯示『無法確認』，而不是用錯的數字。"""
