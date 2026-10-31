@@ -249,45 +249,107 @@ def _result(name, checks, **kw):
     return {"name": name, "ok": all(c[1] for c in checks), "checks": checks, **kw}
 
 
-def check_pullback(df, i, ratios=None):
-    """策略 1：創高拉回。df 需先 add_indicators"""
+ATTACK_DAY_CHECKS = ("攻擊日：收盤突破盤整高點", "收紅 K", "攻擊日漲幅", "收在當天上 1/3", "攻擊日量能", "流動性")
+
+
+def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **extra):
+    """創高拉回、噴後整理共用的「攻擊日」判斷。
+    pk：前波高點那一天；S：前一波起漲價（算目標價用）。
+    盤整區＝前波高點之後到昨天（4～10 天、離前高 ≤ 10%）；
+    今天收盤第一次站上盤整高點、收紅 K、漲 ≥ 5%、收在當天上 1/3、量能 ≥ 前高那天的 9 成 → 攻擊日。
+    回傳的 pre_ok＝「昨天為止的盤整條件都成立」，chase_px＝盤中追價點（漲 4% 且突破盤整高點）"""
+    o, h, l, c, v = (df[x].to_numpy(float) for x in ("Open", "High", "Low", "Close", "Volume"))
+    row = df.iloc[i]
+    H = float(h[pk])
+    n_cons = i - 1 - pk
+    if n_cons >= 1:
+        upper, lower = float(h[pk + 1:i].max()), float(l[pk + 1:i].min())
+    else:
+        upper = lower = float("nan")
+    E = float(c[i])
+    prev = float(c[i - 1])
+    gain = E / prev - 1 if prev > 0 else float("nan")
+    rng = h[i] - l[i]
+    pos = (E - l[i]) / rng if rng > 0 else 1.0
+    vol_pk = float(v[pk])
+    vr = _ratio(float(v[i]), vol_pk)
+    broke = n_cons >= 1 and E > upper
+    mc = max_consol or cfg.ATTACK_MAX_CONSOL
+    setup = [
+        (f"盤整 {cfg.ATTACK_MIN_CONSOL}～{mc} 天",
+         cfg.ATTACK_MIN_CONSOL <= n_cons <= mc,
+         f"前波高點 {df.index[pk]:%m/%d} 之後已盤整 {max(n_cons, 0)} 天"),
+        (f"盤整深度 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%", bool(n_cons >= 1 and lower >= H * (1 - cfg.ATTACK_MAX_DEPTH)),
+         f"盤整最低 {lower:.2f}，離前高 {(1 - lower / H) * 100:.1f}%" if n_cons >= 1 else "還沒有盤整區"),
+    ]
+    attack_checks = [
+        ("攻擊日：收盤突破盤整高點", bool(broke),
+         f"盤整區 {lower:.2f}～{upper:.2f}，收盤 {E:.2f}" if n_cons >= 1 else "還沒有盤整區"),
+        ("收紅 K", bool(c[i] > o[i]), f"開盤 {o[i]:.2f}、收盤 {E:.2f}"),
+        ("攻擊日漲幅", bool(gain >= cfg.ATTACK_MIN_GAIN), f"今日漲 {gain * 100:+.1f}%（需 ≥ {cfg.ATTACK_MIN_GAIN * 100:.0f}%）"),
+        ("收在當天上 1/3", bool(pos >= cfg.ATTACK_CLOSE_POS), f"收盤在當天區間的 {pos * 100:.0f}% 位置"),
+        ("攻擊日量能", bool(vol_pk > 0 and vr >= cfg.ATTACK_VOL_VS_PEAK),
+         f"今日量 = 前高那天的 {vr * 100:.0f}%（需 ≥ {cfg.ATTACK_VOL_VS_PEAK * 100:.0f}%）"),
+    ]
+    checks = list(base_checks) + setup + list(quality_checks) + attack_checks
+    pre_ok = all(ok for nm, ok, _ in checks if nm not in ATTACK_DAY_CHECKS)
+    if n_cons < 1:
+        return _result(name, checks, close=E, pre_ok=False, date=df.index[i], turnover=float(row["TURN20"]), **extra)
+    chase_px = tick(max(prev * (1 + cfg.CHASE_GAIN), upper), "ceil")          # 今天的盤中追價點
+    if broke:
+        entry = E
+    else:                                                    # 還不是攻擊日：明天的追價點（漲 4% 且突破盤整高點）
+        entry = tick(max(E * (1 + cfg.CHASE_GAIN), upper, float(h[i])), "ceil")
+    target = tick(H + (H - S))
+    if target <= entry:
+        checks.append(("目標價高於進場價", False, f"目標 {target}、進場 {entry}"))
+    status = f"已突破 +{(E / H - 1) * 100:.1f}%" if E >= H else f"還差 {(1 - E / H) * 100:.1f}%"
+    r = _result(name, checks, close=E, entry=entry, key=H, peak_date=df.index[pk], leg_start=S,
+                cons_hi=upper, cons_lo=lower, attack=bool(broke), pre_ok=pre_ok, chase_px=chase_px, n_cons=n_cons,
+                target=target, stop_after2=tick(H * (1 - cfg.ATTACK_STOP2_PCT)), status=status,
+                date=df.index[i], turnover=float(row["TURN20"]), **extra)
+    r["stop1"], r["stop1_note"] = attack_stop(r, entry)
+    return r
+
+
+def attack_stop(r, entry):
+    """出場價＝盤整最低點；離買價超過 10% 時改用買價下 10%"""
+    lo = tick(r["cons_lo"], "floor")
+    cap = tick(entry * (1 - cfg.ATTACK_MAX_LOSS), "ceil")
+    if lo >= cap:
+        return lo, f"跌破盤整最低點 {lo}"
+    return cap, f"盤整最低點 {lo} 太遠，改用買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%"
+
+
+def check_pullback(df, i, ratios=None, max_consol=None):
+    """策略 1：創高拉回。近 30 日創新高 → 盤整（量縮、離前高 ≤ 10%）→ 攻擊日進場。df 需先 add_indicators"""
     if i < 69 or i >= len(df):
         return None
-    t = norm_ratios(ratios)
-    max_ratio = solve_max_entry_ratio(t[0], t[1])
-    min_ratio = 1.0 - cfg.PB_PULLBACK_MAX
     row = df.iloc[i]
-    close, vol = float(row["Close"]), float(row["Volume"])
-    lo = i - cfg.PB_LOOKBACK + 1
-    win_high = df["High"].iloc[lo:i - 1]
-    if win_high.empty:
-        return None
-    b_pos = lo + int(win_high.to_numpy().argmax())
-    B = float(df["High"].iloc[b_pos])
-    vol_B = float(df["Volume"].iloc[b_pos])
-    prior = df["High"].iloc[:lo]
+    lo = i - cfg.PB_LOOKBACK
+    h = df["High"].to_numpy(float)
+    win = h[lo:i]                                          # 不含今天
+    pk = lo + int(win.argmax())
+    H = float(h[pk])
+    prior = h[:lo]
     prior_high = float(prior.max()) if len(prior) else float("nan")
-    ratio = close / B
-    mav20 = float(row["MAV20"])
+    leg = df["Low"].to_numpy(float)[max(0, pk - cfg.PB_LEG_LOOKBACK):pk + 1]
+    S = float(leg.min())
+    v = df["Volume"].to_numpy(float)
+    cons_vol = float(v[pk + 1:i].mean()) if i - 1 - pk >= 1 else float("nan")
     ema20, ema60 = float(row["EMA20"]), float(row["EMA60"])
-
-    checks = [
+    base = [
         _liq(row),
-        ("前高為近期新高", bool(pd.isna(prior_high) or B >= prior_high * 0.98),
-         f"前高 {B:.2f}，更早的高點 {prior_high:.2f}"),
-        (f"回檔 {(1 - max_ratio) * 100:.1f}~{cfg.PB_PULLBACK_MAX * 100:.0f}%", min_ratio <= ratio <= max_ratio,
-         f"目前回檔 {(1 - ratio) * 100:.1f}%"),
-        ("量縮", bool(vol_B > 0 and mav20 > 0 and vol <= cfg.PB_VOL_RATIO * vol_B and vol <= mav20),
-         f"今日量 = 高點日的 {_ratio(vol, vol_B) * 100:.0f}%、20日均量的 {_ratio(vol, mav20) * 100:.0f}%"
-         f"（需 ≤ {cfg.PB_VOL_RATIO * 100:.0f}% 且 ≤ 100%）"),
-        ("趨勢向上", bool(ema20 > ema60 and close >= ema60 * 0.98),
-         f"EMA20 {ema20:.2f}、EMA60 {ema60:.2f}、收盤 {close:.2f}"),
+        ("前高是近期新高", bool(pd.isna(prior_high) or H >= prior_high * 0.98),
+         f"前高 {H:.2f}（{df.index[pk]:%m/%d}），更早的高點 {prior_high:.2f}"),
+        ("趨勢向上", bool(ema20 > ema60), f"EMA20 {ema20:.2f}、EMA60 {ema60:.2f}"),
     ]
-    zone_hi = tick(B * max_ratio, "floor")
-    zone_lo = tick(B * min_ratio, "ceil")
-    return _result("pullback", checks, close=close, key=B, B_date=df.index[b_pos], ratio=ratio,
-                   zone_hi=zone_hi, zone_lo=zone_lo, in_zone=zone_lo <= close <= zone_hi,
-                   date=df.index[i], turnover=float(row["TURN20"]))
+    quality = [
+        ("盤整量縮", bool(cons_vol == cons_vol and v[pk] > 0 and cons_vol <= cfg.PB_CONS_VOL_RATIO * v[pk]),
+         f"盤整均量 = 前高那天的 {_ratio(cons_vol, v[pk]) * 100:.0f}%（需 ≤ {cfg.PB_CONS_VOL_RATIO * 100:.0f}%）"
+         if cons_vol == cons_vol else "還沒有盤整區"),
+    ]
+    return _attack(df, i, pk, S, "pullback", base, quality, max_consol=max_consol)
 
 
 def check_breakout(df, i):
@@ -362,7 +424,7 @@ def check_dry(df, i, mkt=None):
                    stop1_note=f"跌破個股前低 {stop1}", date=df.index[i], turnover=float(row["TURN20"]))
 
 
-def check_flag(df, i):
+def check_flag(df, i, max_consol=None):
     """策略 4：噴出後整理再攻。以昨天(j)為基準判斷型態，今天(i)判斷是否接近/突破前波高點"""
     if i < 69 or i >= len(df):
         return None
@@ -399,41 +461,50 @@ def check_flag(df, i):
                        date=df.index[i], turnover=float(row["TURN20"]))
 
     bp, S, kind, g, vmult = found
-    seg = high[bp - 2:j + 1]
-    H = float(seg.max())
+    seg = high[bp - 2:i]                                    # 噴出到昨天的最高點＝前波高點
     pk = bp - 2 + int(seg.argmax())
+    H = float(high[pk])
     G = H - S
-    consol = j - pk
-    cons_close, cons_ma = close[pk + 1:j + 1], ma20[pk + 1:j + 1]
     mid = S + cfg.FLAG_MAX_PULLBACK * G
+    cons_close, cons_ma = close[pk + 1:i], ma20[pk + 1:i]
     min_close = float(cons_close.min()) if len(cons_close) else float("nan")
     burst_vol = float(vol[bp - 2:pk + 1].mean())
-    cons_vol = float(vol[pk + 1:j + 1].mean()) if len(cons_close) else float("nan")
-    cl = float(close[i])
-    status = f"已突破 +{(cl / H - 1) * 100:.1f}%" if cl >= H else f"還差 {(1 - cl / H) * 100:.1f}%"
-
-    checks = [
-        liq,
-        ("噴出", True, f"{df.index[bp]:%m/%d} {kind}漲幅 {g * 100:.1f}%，量 {vmult:.1f} 倍均量"),
-        (f"整理 ≥ {cfg.FLAG_MIN_CONSOL} 天", consol >= cfg.FLAG_MIN_CONSOL, f"高點後已整理 {consol} 天"),
-        (f"回檔 ≤ 噴出漲幅的 {cfg.FLAG_MAX_PULLBACK * 100:.0f}%",
-         bool(len(cons_close) and min_close >= mid and cl >= mid),
-         f"噴出 {S:.2f}→{H:.2f}，要守住 {mid:.2f}；整理最低收盤 {min_close:.2f}"),
-        ("守月線(MA20)", bool(len(cons_close) and (cons_close >= cons_ma).all() and cl >= ma20[i]),
-         f"現價 {cl:.2f}、MA20 {ma20[i]:.2f}"),
-        (f"整理期量縮（≤ 噴出期 {cfg.FLAG_VOL_RATIO * 100:.0f}%）",
+    cons_vol = float(vol[pk + 1:i].mean()) if len(cons_close) else float("nan")
+    base = [liq, ("噴出", True, f"{df.index[bp]:%m/%d} {kind}漲幅 {g * 100:.1f}%，量 {vmult:.1f} 倍均量")]
+    quality = [
+        (f"回檔 ≤ 噴出漲幅的 {cfg.FLAG_MAX_PULLBACK * 100:.0f}%", bool(len(cons_close) and min_close >= mid),
+         f"噴出 {S:.2f}→{H:.2f}，要守住 {mid:.2f}；盤整最低收盤 {min_close:.2f}"),
+        ("守月線(MA20)", bool(len(cons_close) and (cons_close >= cons_ma).all()),
+         f"盤整期間收盤都在 MA20 之上" if len(cons_close) and (cons_close >= cons_ma).all() else "盤整期間有跌破 MA20"),
+        (f"盤整量縮（≤ 噴出期 {cfg.FLAG_VOL_RATIO * 100:.0f}%）",
          bool(len(cons_close) and cons_vol <= cfg.FLAG_VOL_RATIO * burst_vol),
-         f"整理均量 = 噴出期均量的 {_ratio(cons_vol, burst_vol) * 100:.0f}%"),
-        (f"距前波高點 {cfg.FLAG_NEAR * 100:.0f}% 內（含已突破）", cl >= (1 - cfg.FLAG_NEAR) * H,
-         f"現價 {cl:.2f}、前波高點 {H:.2f}（{status}）"),
+         f"盤整均量 = 噴出期均量的 {_ratio(cons_vol, burst_vol) * 100:.0f}%"),
     ]
-    E = tick(cl)
-    stop_half = tick(mid)
-    stop_pct = tick(E * (1 - cfg.FLAG_STOP_MIN_PCT))
-    return _result("flag", checks, close=cl, key=H, burst_start=S, burst_gain=G,
-                   stop1=min(stop_half, stop_pct), target=tick(H + G),
-                   stop1_note=f"噴出高度一半 {stop_half} 與買價下 {cfg.FLAG_STOP_MIN_PCT * 100:.0f}% {stop_pct} 取較低",
-                   status=status, date=df.index[i], turnover=float(row["TURN20"]))
+    return _attack(df, i, pk, S, "flag", base, quality, max_consol=max_consol, burst_start=S, burst_gain=G)
+
+
+def watch_tomorrow(raw, name):
+    """明日追價名單：今天收盤後，盤整條件已經成立（盤整放寬到 15 天）的股票，算出明天的追價點。
+    做法：在最後面補一根「明天」的假 K 線（價格＝今天收盤），用同一套條件判斷『昨天為止』的盤整。
+    回傳策略結果（含 chase_px＝明天漲 4% 且突破盤整高點的價格），不符合回傳 None"""
+    d = _naive(raw)
+    if len(d) < 80:
+        return None
+    last = d.iloc[-1]
+    nxt = d.index[-1] + pd.tseries.offsets.BDay(1)
+    fake = pd.DataFrame({"Open": [last["Close"]], "High": [last["Close"]], "Low": [last["Close"]],
+                         "Close": [last["Close"]], "Volume": [last["Volume"]]}, index=[nxt])
+    df = add_indicators(pd.concat([d[["Open", "High", "Low", "Close", "Volume"]], fake]))
+    i = len(df) - 1
+    fn = check_pullback if name == "pullback" else check_flag
+    r = fn(df, i, max_consol=cfg.WATCH_MAX_CONSOL)
+    if not r or not r.get("pre_ok") or "chase_px" not in r:
+        return None
+    if not _liq(df.iloc[i - 1])[1]:
+        return None
+    r["turnover"] = float(df["TURN20"].iloc[i - 1])
+    r["date"] = d.index[-1]
+    return r
 
 
 # =====================================================
@@ -445,23 +516,6 @@ def _breakeven(e, p2, stop2, t):
         return None
     s1, s2 = (t[0] / e, t[1] / p2) if cfg.COST_BY_MONEY else (t[0], t[1])
     return tick(e + max(0.0, p2 - stop2) * s2 / s1)
-
-
-def build_plan(entry, B, ratios=None):
-    """創高拉回的完整計畫（第 1 筆在 entry，第 2 筆突破前高 B，第 3 筆 B x 1.08）"""
-    t = norm_ratios(ratios)
-    e, b = tick(entry), tick(B)
-    b2 = tick(B * cfg.EXT_RATIO)
-    avg2, avg3 = tick(avg_cost([e, b], t[:2])), tick(avg_cost([e, b, b2], t))
-    stop2 = tick(b * (1 - cfg.STOP_ADD_PCT))
-    tp = cfg.PB_STOP_PCT * cfg.PB_RRR
-    return {
-        "ratios": t, "e": e, "b": b, "b2": b2, "key": b, "key_label": "突破前高",
-        "avg2": avg2, "avg3": avg3,
-        "stop1": tick(e * (1 - cfg.PB_STOP_PCT)), "stop1_note": f"進場價下 {cfg.PB_STOP_PCT * 100:.0f}%",
-        "stop2": stop2, "breakeven": _breakeven(e, b, stop2, t),
-        "targets": [("打滿三筆", tick(avg3 * (1 + tp))), ("只買兩筆", tick(avg2 * (1 + tp)))],
-    }
 
 
 def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_note=""):
@@ -485,17 +539,37 @@ def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_n
         "stop1": tick(stop1), "stop1_note": stop1_note,
         "stop2": stop2, "breakeven": _breakeven(p1, p2, stop2, t),
         "targets": [("", tg)], "notes": notes,
+        "tranches": [("① 進場", p1, t[0]), ("② 突破", p2, t[1]), ("③ 加碼", p3, t[2])],
+    }
+
+
+def attack_plan(r, entry=None):
+    """創高拉回、噴後整理：攻擊日買 50%，站上前波高點（突破日）再買 50%。entry：實際買價（回測追價用）"""
+    t = tuple(cfg.ATTACK_SPLIT)
+    e = tick(entry if entry is not None else r["entry"])
+    stop1, note = attack_stop(r, e) if entry is not None else (r["stop1"], r.get("stop1_note", ""))
+    k = tick(r["key"])
+    b = max(k, e)
+    notes = []
+    if e >= k:
+        notes.append("ℹ️ 攻擊日已經站上前波高點，兩筆同一天買進")
+    after2 = max(r["stop_after2"], stop1)
+    return {
+        "ratios": t, "e": e, "b": b, "b2": b, "key": k, "key_label": "前波高點",
+        "tranches": [("① 攻擊日", e, t[0]), ("② 突破日", b, t[1])],
+        "avg2": tick(avg_cost([e, b], t)), "avg3": tick(avg_cost([e, b], t)),
+        "stop1": stop1, "stop1_note": note, "stop_after2": after2, "stop2": after2,
+        "breakeven": None, "targets": [("", r["target"])], "notes": notes,
     }
 
 
 def plan_for(name, r, ratios=None):
-    """依策略結果 r 產生交易計畫。創高拉回：現價在進場區就用現價，否則假設掛在進場區上緣"""
+    """依策略結果 r 產生交易計畫"""
     if r is None:
         return None
-    if name == "pullback":
-        entry = r["close"] if r["in_zone"] else r["zone_hi"]
-        return build_plan(entry, r["key"], ratios)
-    labels = {"breakout": "突破當天最高價", "dry": "近20日高點", "flag": "前波高點"}
+    if name in ("pullback", "flag"):
+        return attack_plan(r)
+    labels = {"breakout": "突破當天最高價", "dry": "近20日高點"}
     return ladder_plan(r["close"], r["key"], r["stop1"], r["target"], ratios,
                        key_label=f"突破{labels[name]}", stop1_note=r.get("stop1_note", ""))
 
