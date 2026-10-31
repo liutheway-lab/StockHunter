@@ -120,14 +120,18 @@ def _liq(row):
 # 2. 大盤五層 + 止跌確認
 # =====================================================
 def layer_series(df):
-    """加權指數每天的層級：1 強多頭 / 2 多頭 / 3 盤整轉折 / 4 空頭 / 5 強空頭 / 0 資料不足"""
+    """加權指數每天的層級：1 強多頭 / 2 多頭 / 3 盤整轉折 / 4 空頭 / 5 強空頭 / 0 資料不足
+    看收盤價相對 MA20、MA60 的位置（多空對稱，不等均線交叉，避免反應太慢）：
+      收盤在 MA20 與 MA60 之上 = 多頭；再加上 收盤>MA5>MA10>MA20 = 強多頭
+      收盤在 MA20 與 MA60 之下 = 空頭；再加上 收盤<MA5<MA10<MA20 = 強空頭
+      其餘（夾在兩條線中間）= 盤整／轉折"""
     c = df["Close"]
     ma5, ma10, ma20, ma60 = (c.rolling(n).mean() for n in (5, 10, 20, 60))
     layer = pd.Series(3, index=df.index)
-    layer[(ma20 > ma60) & (c > ma20)] = 2
-    layer[(ma20 < ma60) & (c < ma20)] = 4
-    layer[(c > ma5) & (ma5 > ma10) & (ma10 > ma20) & (ma20 > ma60)] = 1
-    layer[(c < ma5) & (ma5 < ma10) & (ma10 < ma20) & (ma20 < ma60)] = 5
+    layer[(c > ma20) & (c > ma60)] = 2
+    layer[(c < ma20) & (c < ma60)] = 4
+    layer[(c > ma5) & (ma5 > ma10) & (ma10 > ma20) & (c > ma60)] = 1
+    layer[(c < ma5) & (ma5 < ma10) & (ma10 < ma20) & (c < ma60)] = 5
     layer[ma60.isna()] = 0
     return layer
 
