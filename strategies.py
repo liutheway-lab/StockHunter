@@ -169,8 +169,8 @@ def stabilization(df, i):
             "prior_low": L, "recent_low": low_recent, "dump_vol": dump, "recent_vol": recent_v, **dates}
 
 
-def vol_low(df, days=60):
-    """近 60 個交易日成交量最大那天的最低點。低點在現價之上＝短線壓力（壓），在現價之下＝支撐參考（撐）"""
+def vol_low(df, days=180):
+    """近 180 個交易日成交量最大那天的最低點。低點在現價之上＝短線壓力（壓），在現價之下＝支撐參考（撐）"""
     d = df[df["Volume"] > 0].iloc[-days:]
     if d.empty:
         return None
