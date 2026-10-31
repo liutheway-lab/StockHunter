@@ -388,13 +388,13 @@ def load_market_hist():
 
 
 @st.cache_data(ttl=60 * 60 * 12, show_spinner=False, max_entries=50)
-def stock_backtest(code, suffix, ratios, mode, only_active):
+def stock_backtest(code, suffix, ratios, mode, only_active, entry_mode="chase"):
     import backtest as BT
     raw = load_stock_long(code, suffix)
     mkt, mstate = load_market_hist()
     if raw is None or len(raw) < 120:
         return None
-    return BT.run_stock(raw, mkt, mstate, ratios, mode=mode, only_active=only_active)
+    return BT.run_stock(raw, mkt, mstate, ratios, mode=mode, only_active=only_active, entry_mode=entry_mode)
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner="載入證交所官方股票清單...")
@@ -451,7 +451,8 @@ def md_cond(rows):
 def plan_view(p, capital, close):
     """分批計畫：價位、距現價、均價、投入、股數、各階段停損與損益"""
     r = p["ratios"]
-    rows = [("① 進場", p["e"], r[0]), ("② 突破", p["b"], r[1]), ("③ 加碼", p["b2"], r[2])]
+    rows = p.get("tranches") or [("① 進場", p["e"], r[0]), ("② 突破", p["b"], r[1]), ("③ 加碼", p["b2"], r[2])]
+    n_tr = len(rows)
     gap = lambda price: f"{(price / close - 1) * 100:+.1f}%"
     st.markdown(f"**預期第 1 筆進場 {px(p['e'])}**　（現價 {px(close)}，差 {gap(p['e'])}）")
 
@@ -461,7 +462,7 @@ def plan_view(p, capital, close):
         shares.append(sh)
         costs.append(sh * price)
     avgs = []
-    for k in range(3):
+    for k in range(n_tr):
         sh, cost = sum(shares[:k + 1]), sum(costs[:k + 1])
         avgs.append(S.tick(cost / sh) if sh > 0 else p["e"])
 
@@ -472,17 +473,28 @@ def plan_view(p, capital, close):
         sh_k, cost_k = sum(shares[:k + 1]), sum(costs[:k + 1])
         if shares[k] <= 0:
             continue
-        exit_p = p["stop1"] if k == 0 else S.tick(cost_k / sh_k, "ceil")
+        if k == 0:
+            exit_p = p["stop1"]
+        elif p.get("stop_after2"):
+            exit_p = p["stop_after2"]                     # 攻擊日策略：突破日買進後，出場價上移到前波高點下 5%
+        else:
+            exit_p = S.tick(cost_k / sh_k, "ceil")
         pnl = sh_k * exit_p - cost_k - cost_k * cfg.FEE_RT
         out.append((lab, px(price), f"{shares[k]:,}", px(avgs[k]), px(exit_p), f"{pnl:+,.0f}"))
     show_table(["階段", "進場價", "股數", "均價", "出場價", "損益"], out)
-    st.caption(L(f"② 突破＝突破價　③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%",
+    head_note = (f"① 攻擊日＝漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點時追進　② 突破日＝站上前波高點" if p.get("stop_after2")
+                 else f"② 突破＝突破價　③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%")
+    st.caption(L(head_note,
                  "均價、出場價、損益＝買到該階段後的累計狀況",
                  f"合計投入 {sum(costs):,.0f} 元、{sum(shares):,} 股",
                  f"可用資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元"))
-    st.caption(L("買進第 2 筆後，出場價拉到累計均價",
-                 f"損益只剩手續費與證交稅（來回約 {cfg.FEE_RT * 100:.1f}%）",
-                 "若跳空跌破出場價，實際虧損會比表上多"))
+    if p.get("stop_after2"):
+        st.caption(L(f"突破日買進後，出場價上移到前波高點下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%",
+                     "若跳空跌破出場價，實際虧損會比表上多"))
+    else:
+        st.caption(L("買進第 2 筆後，出場價拉到累計均價",
+                     f"損益只剩手續費與證交稅（來回約 {cfg.FEE_RT * 100:.1f}%）",
+                     "若跳空跌破出場價，實際虧損會比表上多"))
 
     st.markdown(f"🎯 **目標價　{px(p['targets'][0][1])}**（距現價 {gap(p['targets'][0][1])}）")
     if p.get("stop1_note"):
@@ -586,6 +598,19 @@ def rec_buttons(prefix, strategy, items, limit=15):
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
+def watch_buttons(name, items, limit=15):
+    for it in items[:limit]:
+        up = (it["chase"] / it["close"] - 1) * 100 if it["close"] else 0
+        if st.button(f"{it['code']} {it['name']}　追價 {px(it['chase'])}（{up:+.1f}%）｜出場 {px(it['stop1'])}",
+                     key=f"watch_{name}_{it['code']}", use_container_width=True):
+            pick(it)
+            st.rerun()
+    if len(items) > limit:
+        st.caption(f"還有 {len(items) - limit} 檔未列出")
+    st.caption(L(f"追價＝明天漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點的價格",
+                 f"盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天，盤中看強弱再決定追不追"))
+
+
 st.divider()
 st.subheader("🌟 今日推薦")
 scan = get_scan()
@@ -611,6 +636,16 @@ else:
     else:
         st.error(L("🔴 尚未止跌，不建議建立多頭部位", f"已讀取 {scan['data_date']} 夜間掃描：今日無推薦"))
 
+    wl = scan.get("watch") or {}
+    if any(wl.get(n) for n in ("pullback", "flag")):
+        st.markdown(L("**🎯 明日追價名單**", "盤整條件已成立，明天盤中觀察要不要追"))
+        for name in ("pullback", "flag"):
+            items = wl.get(name) or []
+            if not items:
+                continue
+            note = "" if name in active else "（大盤目前不適用）"
+            foldable(f"wlfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔{note}",
+                     lambda name=name, items=items: watch_buttons(name, items), default=name in active)
     watch = [(n, hits.get(n, [])) for n in ORDER if n not in active and hits.get(n)]
     n_active = sum(len(hits.get(a_, [])) for a_ in active)
     if active and n_active == 0:
@@ -653,7 +688,9 @@ st.markdown(f"**各階段可投入**  \n"
             f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）  \n"
             f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）  \n"
             f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）")
-st.caption(L("比例會影響「創高拉回」的進場區間", "資金用來試算每一筆可以買幾股"))
+st.caption(L("這個比例用在「盤整後噴出」「量縮抗跌」",
+             f"「創高拉回」「噴後整理」固定攻擊日 {cfg.ATTACK_SPLIT[0] * 100:.0f}%、突破日 {cfg.ATTACK_SPLIT[1] * 100:.0f}%",
+             "資金用來試算每一筆可以買幾股"))
 
 # ==================== 單檔回測 ====================
 BT_MODE = {"ladder_avg": "分 3 次買｜買到第 2 筆後，出場價上移到平均成本（保本）",
@@ -687,7 +724,10 @@ def stock_bt_body(code, suffix, capital):
     import backtest as BT
     mode = "ladder_avg"            # 照你設定的進場邏輯：三段比例，買到第 2 筆後出場價拉到平均成本
     only_active = st.toggle("只在大盤啟用該策略時進場（照目前規則）", value=True, key="sbt_active")
-    st.caption(L(f"照你的設定：分 3 次買（{w1}/{w2}/{w3}），買到第 2 筆後出場價拉到平均成本"))
+    st.caption(L(f"創高拉回、噴後整理：盤中漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點就追（你的習慣）",
+                 f"攻擊日買 {cfg.ATTACK_SPLIT[0] * 100:.0f}%、突破日買 {cfg.ATTACK_SPLIT[1] * 100:.0f}%",
+                 f"跌破盤整低點出場（最多賠 {cfg.ATTACK_MAX_LOSS * 100:.0f}%），突破後出場價移到前高下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%",
+                 f"盤整後噴出、量縮抗跌：分 3 次買（{w1}/{w2}/{w3}），買到第 2 筆後出場價拉到平均成本"))
     periods = {"近 5 年": None, **{k: v for k, v in CRASHES.items()}}
     period = st.selectbox("期間", list(periods), key="sbt_period")
     with st.spinner("回測中…第一次要載入 8 年的大盤資料，約需 30 秒"):
@@ -717,6 +757,25 @@ def stock_bt_body(code, suffix, capital):
         show_table(["策略", "筆數", "勝率", "期望值", "平均賺／賠", "最差"], rows)
         pnl = T["ret_plan"] * capital
         st.markdown(L(f"**每次都投入可用資金 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
+
+    # 追價 vs 收盤確認（只比較創高拉回、噴後整理）
+    T_close = stock_backtest(code, suffix, tuple(ratios), mode, only_active, "close")
+    rows_c = []
+    for label, X in (("盤中漲 4% 就追", T_all), ("收盤確認才買", T_close)):
+        if X is None or X.empty:
+            rows_c.append((label, "0", "—", "—", "—"))
+            continue
+        X = X[(X["date"] >= a_) & (X["date"] <= b_) & X["strat"].isin(["pullback", "flag"])]
+        if X.empty:
+            rows_c.append((label, "0", "—", "—", "—"))
+            continue
+        s_ = BT.trade_stats(X)
+        rows_c.append((label, f"{s_['n']}", f"{s_['win'] * 100:.0f}%", f"{s_['mean'] * 100:+.1f}%",
+                       f"{(X['ret_plan'] * capital).sum():+,.0f}"))
+    st.markdown("**追價 vs 收盤確認**（創高拉回、噴後整理）")
+    show_table(["買法", "筆數", "勝率", "期望值", "損益（元）"], rows_c)
+    st.caption(L("盤中追：漲 4% 且突破盤整高點就買，收盤不一定是攻擊日",
+                 "收盤確認：收盤符合全部攻擊日條件，用收盤價買"))
 
     # 崩盤期總覽：這檔股票本身跌多少 vs 照策略操作的結果
     st.markdown("**崩盤期總覽**")
@@ -861,25 +920,20 @@ if target:
                 def body(r=r, sname=sname):
                     st.markdown(f"**現價 {px(close)}**")
                     md_cond([("✅" if cok else "❌", cname, detail) for cname, cok, detail in r["checks"]])
-                    if sname == "pullback":
-                        st.markdown(f"🎯 **理想第 1 筆進場區　{px(r['zone_lo'])} ~ {px(r['zone_hi'])}**")
-                        st.caption(L(f"前高 {px(r['key'])}（依你的比例 {w1}/{w2}/{w3} 推算）",
-                                     f"上緣：第 1 筆買在這個價、第 2 筆買在前高時，",
-                                     f"前兩筆平均成本剛好是前高的 {cfg.PB_MAX_AVG_RATIO * 100:.0f}%",
-                                     f"下緣：前高回檔 {cfg.PB_PULLBACK_MAX * 100:.0f}%，再深就視為轉弱"))
-                        if r["in_zone"]:
-                            st.caption("現價已在進場區內，以現價為第 1 筆試算")
-                        elif r["close"] > r["zone_hi"]:
-                            st.caption(L("現價還沒回檔到進場區", f"以下假設第 1 筆掛在 {px(r['zone_hi'])} 試算"))
-                        else:
-                            st.caption(L("回檔已超過上限，規則上不進場", "以下仍以進場區上緣試算供參考"))
+                    if sname in ("pullback", "flag") and "cons_hi" in r:
+                        st.markdown(L(f"**盤整區　{px(r['cons_lo'])} ～ {px(r['cons_hi'])}**",
+                                      f"前波高點 {px(r['key'])}（{r['peak_date']:%m/%d}）"))
+                        if not r.get("attack"):
+                            st.caption(L("今天還不是攻擊日",
+                                         f"明天漲到 {px(r['entry'])}（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）就是追價點",
+                                         "以下用這個價格試算"))
                     if r["ok"] and not r["active"]:
                         st.warning(L("型態符合", "但目前大盤層級不適用這套策略"))
-                    if "key" not in r or ("stop1" not in r and sname != "pullback"):
+                    if "key" not in r or "stop1" not in r:
                         st.info("目前沒有符合的型態，無法試算。")
                     else:
                         plan = S.plan_for(sname, r, ratios)
-                        if sname != "pullback" and plan["stop1"] >= plan["e"]:
+                        if plan["stop1"] >= plan["e"]:
                             st.info("現價已低於出場價，無法試算。")
                         else:
                             if not r["ok"]:
