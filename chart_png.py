@@ -124,7 +124,10 @@ def market_chart(mk, bars=45):
     else:
         title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}"
     fig.suptitle(title, fontsize=11, x=0.02, ha="left")
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    if stab_mode:
+        fig.text(0.02, 0.008, "黃色區＝近 3 日　虛線＝止跌確認的門檻（前低、爆量下跌日的量）",
+                 fontsize=8, color="#666", ha="left", va="bottom")
+    fig.tight_layout(rect=(0, 0.025 if stab_mode else 0, 1, 0.96))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
