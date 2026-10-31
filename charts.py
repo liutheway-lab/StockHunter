@@ -1,4 +1,4 @@
-"""charts.py — 網頁 app 用的互動 K 線圖（plotly）
+\"""charts.py — 網頁 app 用的互動 K 線圖（plotly）
 均線先用完整歷史算，再截取最近 N 根來畫。K 線顏色：紅漲綠跌（跟看盤軟體一致）。
 """
 import pandas as pd
@@ -45,22 +45,30 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
 
     if stab and stab.get("prior_low") is not None:
         pl = stab["prior_low"]
-        fig.add_hline(y=pl, line_dash="dash", line_color="#ff9f1a", line_width=2, row=1, col=1)
-        pld = f"{stab['prior_low_date']:%m/%d}"
-        if pld in dates:
-            fig.add_trace(go.Scatter(x=[pld], y=[pl], mode="markers+text", showlegend=False,
-                                     marker=dict(symbol="triangle-up", size=11, color="#ff9f1a"),
-                                     text=[f"前低 {pl:,.0f}（{pld}）"], textposition="bottom right",
-                                     textfont=dict(color="#ff9f1a", size=12)), row=1, col=1)
         s0, s1 = f"{stab['recent_start']:%m/%d}", f"{stab['recent_end']:%m/%d}"
         if s0 in dates and s1 in dates:
-            # 用整張圖的高度（yref=paper）畫一整條色帶，上下兩個子圖之間不會斷開
+            # 近 3 日：整張圖高度的亮黃色帶（layer=above 才不會被深色背景蓋住）
             fig.add_shape(type="rect", xref="x", yref="paper", x0=dates.index(s0) - 0.5,
-                          x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="#ffd400", opacity=0.30,
-                          line_width=0, layer="below")
+                          x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.28)",
+                          line=dict(color="#ffdd00", width=2), layer="above")
+            fig.add_annotation(x=(dates.index(s0) + dates.index(s1)) / 2, y=1.0, xref="x", yref="paper",
+                               text="近 3 日", showarrow=False, yanchor="bottom",
+                               font=dict(color="#000", size=12), bgcolor="#ffdd00", borderpad=3)
+        # 前低：橘色粗線 + 實心標籤
+        fig.add_hline(y=pl, line_dash="dash", line_color="#ff7a00", line_width=3, row=1, col=1)
+        pld = f"{stab['prior_low_date']:%m/%d}"
+        if pld in dates:
+            fig.add_annotation(x=pld, y=pl, xref="x", yref="y", text=f"前低 {pl:,.0f}（{pld}）",
+                               showarrow=True, arrowhead=2, arrowsize=1.3, arrowwidth=2, arrowcolor="#ff7a00",
+                               ax=0, ay=45, font=dict(color="#000", size=13), bgcolor="#ff7a00", borderpad=4)
+        rl, rld = stab.get("recent_low"), f"{stab['recent_low_date']:%m/%d}" if stab.get("recent_low_date") is not None else None
+        if rl is not None and rld in dates:
+            fig.add_annotation(x=rld, y=rl, xref="x", yref="y", text=f"近3日最低 {rl:,.0f}（{rld}）",
+                               showarrow=True, arrowhead=2, arrowsize=1.3, arrowwidth=2, arrowcolor="#00e5ff",
+                               ax=-70, ay=60, font=dict(color="#000", size=13), bgcolor="#00e5ff", borderpad=4)
 
     fig.update_layout(
-        xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=25, b=5), height=420,
+        xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10)),
         template="plotly_dark", dragmode=False,
     )
