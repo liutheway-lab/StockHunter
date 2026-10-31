@@ -662,6 +662,12 @@ BT_MODE = {"ladder_avg": "分 3 次買｜買到第 2 筆後，出場價上移到
            "single": "一次全部買進｜出場價不動"}
 BT_SHORT = {"pullback": "創高拉回", "flag": "噴後整理", "breakout": "盤整噴出", "dry": "量縮抗跌"}
 BT_REASON = {"target": "🎯", "stop": "🛑", "time": "⏰"}
+CRASH_NOTE = {
+    "2020 疫情崩盤": "新冠肺炎全球爆發，各國封城，全球股市恐慌性崩跌",
+    "2022 全年空頭": "美國通膨失控、聯準會快速升息，加上俄烏戰爭，股市全年走空",
+    "2024/08 急殺": "日本升息引發日圓套利交易平倉，加上美國就業數據轉弱，8/5 台股單日重挫",
+    "2025/04 關稅急跌": "美國宣布對各國課徵對等關稅，全球股市連續重挫",
+}
 CRASHES = {                      # 崩盤期（訊號出現在這段期間的交易）
     "2020 疫情崩盤": ("2020-02-15", "2020-04-30"),
     "2022 全年空頭": ("2022-01-01", "2022-12-31"),
@@ -679,11 +685,9 @@ def _stat_row(label, s_):
 
 def stock_bt_body(code, suffix, capital):
     import backtest as BT
-    mode = st.radio("買法與出場價怎麼移動", list(BT_MODE), format_func=lambda m: BT_MODE[m], key="sbt_mode")
-    st.caption(L(f"分 3 次買：第 1 筆在訊號隔天開盤買（{w1}%）",
-                 f"第 2 筆漲到突破價才買（{w2}%），第 3 筆漲到突破價 +8% 才買（{w3}%）",
-                 "出場價一開始都是各策略算的出場價，碰到就全部賣出"))
+    mode = "ladder_avg"            # 照你設定的進場邏輯：三段比例，買到第 2 筆後出場價拉到平均成本
     only_active = st.toggle("只在大盤啟用該策略時進場（照目前規則）", value=True, key="sbt_active")
+    st.caption(L(f"照你的設定：分 3 次買（{w1}/{w2}/{w3}），買到第 2 筆後出場價拉到平均成本"))
     periods = {"近 5 年": None, **{k: v for k, v in CRASHES.items()}}
     period = st.selectbox("期間", list(periods), key="sbt_period")
     with st.spinner("回測中…第一次要載入 8 年的大盤資料，約需 30 秒"):
@@ -698,6 +702,8 @@ def stock_bt_body(code, suffix, capital):
     else:
         a_, b_ = (pd.Timestamp(x) for x in periods[period])
     T = T_all[(T_all["date"] >= a_) & (T_all["date"] <= b_)] if not T_all.empty else T_all
+    if period in CRASH_NOTE:
+        st.caption(f"📌 {CRASH_NOTE[period]}")
 
     if raw.index[0] > a_ + pd.Timedelta(days=100):
         st.info(L(f"這檔的資料從 {raw.index[0]:%Y/%m} 才開始", "這段期間無法回測"))
@@ -711,8 +717,6 @@ def stock_bt_body(code, suffix, capital):
         show_table(["策略", "筆數", "勝率", "期望值", "平均賺／賠", "最差"], rows)
         pnl = T["ret_plan"] * capital
         st.markdown(L(f"**每次都投入可用資金 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
-        if len(T) < 10:
-            st.warning(L(f"只有 {len(T)} 筆交易，樣本很少", "勝率容易被運氣影響，參考就好"))
 
     # 崩盤期總覽：這檔股票本身跌多少 vs 照策略操作的結果
     st.markdown("**崩盤期總覽**")
@@ -733,6 +737,7 @@ def stock_bt_body(code, suffix, capital):
             rows.append((label, f"{hold * 100:+.1f}%", f"{s_['n']}", f"{s_['win'] * 100:.0f}%",
                          f"{(x['ret_plan'] * capital).sum():+,.0f}"))
     show_table(["期間", "股價漲跌", "筆數", "勝率", "損益（元）"], rows)
+    st.caption(L(*[f"{short[k]}：{v}" for k, v in CRASH_NOTE.items()]))
     st.caption(L("股價漲跌＝這段期間一直抱著這檔的漲跌", "筆數、損益＝照策略操作（訊號出現在這段期間的交易）",
                  "未進場＝策略沒有出手，也就沒有虧損"))
     if T.empty:
