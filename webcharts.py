@@ -3,7 +3,7 @@
 """
 import pandas as pd
 
-VERSION = "圖表 v4"
+VERSION = "圖表 v5"
 UP, DOWN = "#e04a4a", "#2e9e4f"
 MA_STYLE = (("MA5", "#f1c40f", 1.2), ("MA10", "#1abc9c", 1.2), ("MA20", "#9b59b6", 1.4), ("MA60", "#3498db", 1.6))
 
@@ -47,24 +47,20 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     if stab and stab.get("prior_low") is not None:
         s0, s1 = f"{stab['recent_start']:%m/%d}", f"{stab['recent_end']:%m/%d}"
         if s0 in dates and s1 in dates:
-            # 近 3 日：整張圖高度的黃色底（不加外框；layer=above 才不會被深色背景蓋住）
-            fig.add_shape(type="rect", xref="x", yref="paper", x0=dates.index(s0) - 0.5,
-                          x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.22)",
+            # 近 3 日：淡黃色底，只蓋住上面的 K 線圖（不蓋成交金額）
+            fig.add_shape(type="rect", xref="x", yref="y domain", x0=dates.index(s0) - 0.5,
+                          x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.18)",
                           line_width=0, layer="above")
 
-        def mark(day, val, text, color, pos):
+        def mark(day, val, color):
             if day in dates:
-                fig.add_trace(go.Scatter(x=[day], y=[val], mode="markers+text", showlegend=False,
-                                         hoverinfo="skip", text=[text], textposition=pos,
-                                         textfont=dict(color=color, size=12),
-                                         marker=dict(symbol="diamond", size=10, color=color,
-                                                     line=dict(color="#ffffff", width=1))), row=1, col=1)
+                fig.add_trace(go.Scatter(x=[day], y=[val], mode="markers", showlegend=False, hoverinfo="skip",
+                                         marker=dict(symbol="diamond", size=11, color=color,
+                                                     line=dict(color="#ffffff", width=1.5))), row=1, col=1)
 
-        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"], f"前低 {stab['prior_low']:,.0f}",
-             "#ff9f1a", "middle left")
+        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"], "#ff9f1a")
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
-            mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"], f"近3日低 {stab['recent_low']:,.0f}",
-                 "#00e5ff", "bottom left")
+            mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"], "#00e5ff")
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
