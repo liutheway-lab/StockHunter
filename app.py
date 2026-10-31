@@ -2,12 +2,14 @@
 功能：大盤位階（五層＋止跌確認）、個股診斷（四套策略＋分批計畫）。
 資料口徑跟夜間掃描完全相同（data.py、strategies.py 共用）。
 """
+import json
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 
 import charts
@@ -31,16 +33,41 @@ def _toggle(key):
     st.session_state[key] = not st.session_state.get(key, False)
 
 
+def _close(key):
+    st.session_state[key] = False
+    st.session_state["_scroll_to"] = key      # 收合後，捲回這個區塊的標題
+
+
+def _scroll_script(key, title):
+    """收合後頁面會變短、瀏覽器停在最底部，所以用小段 JS 把畫面捲回標題那一顆按鈕"""
+    t = json.dumps(title)
+    components.html(f"""<script>
+    setTimeout(function () {{
+      const d = window.parent.document;
+      let el = d.querySelector('.st-key-open_{key}');
+      if (!el) {{
+        for (const b of d.querySelectorAll('button')) {{
+          if (b.innerText.indexOf({t}) >= 0) {{ el = b; break; }}
+        }}
+      }}
+      if (el) el.scrollIntoView({{block: 'center'}});
+    }}, 250);
+    </script>""", height=0)
+
+
 def foldable(key, title, body, default=False):
-    """可展開／收合的區塊：標題是一顆按鈕，展開後最下面也有一顆收合鈕"""
+    """可展開／收合的區塊：標題是一顆按鈕，展開後最下面也有一顆收合鈕（收合後會捲回標題）"""
     if key not in st.session_state:
         st.session_state[key] = default
     opened = st.session_state[key]
     st.button(f"{'▼' if opened else '▶'}　{title}", key=f"open_{key}", on_click=_toggle, args=(key,),
               use_container_width=True)
+    if st.session_state.get("_scroll_to") == key:
+        st.session_state["_scroll_to"] = None
+        _scroll_script(key, title)
     if opened:
         body()
-        st.button("▲　收合", key=f"close_{key}", on_click=_toggle, args=(key,), use_container_width=True)
+        st.button("▲　收合", key=f"close_{key}", on_click=_close, args=(key,), use_container_width=True)
 
 
 foldable("guide", "📖 規則說明書", lambda: st.markdown(guide_markdown()))
@@ -73,22 +100,28 @@ def shares_text(n):
 
 
 def plan_cards(p, capital):
-    """每一筆：價位、投入金額、可買股數、累計均價"""
+    """每一筆：價位、投入金額、可買股數、累計均價、停損價與停損虧損金額"""
     r = p["ratios"]
-    rows = [("① 進場", p["e"], r[0], p["e"]),
-            ("② 突破價", p["b"], r[1], p["avg2"]),
-            (f"③ 突破價+{(cfg.EXT_RATIO - 1) * 100:.0f}%", p["b2"], r[2], p["avg3"])]
-    out, total_sh, total_cost = [], 0, 0.0
-    for label, price, ratio, avg in rows:
+    rows = [("① 進場", p["e"], r[0], p["e"], p["stop1"]),
+            ("② 突破價", p["b"], r[1], p["avg2"], p["stop2"]),
+            (f"③ 突破價+{(cfg.EXT_RATIO - 1) * 100:.0f}%", p["b2"], r[2], p["avg3"], p["stop2"])]
+    out, total_sh, total_cost, worst = [], 0, 0.0, 0.0
+    for label, price, ratio, avg, stop in rows:
         amt = capital * ratio
         sh = int(amt // price) if price > 0 else 0
+        cost = sh * price
+        loss = sh * max(price - stop, 0)
         total_sh += sh
-        total_cost += sh * price
+        total_cost += cost
+        worst += sh * max(price - p["stop1"], 0)
         out.append(f"**{label}　{price:.2f}**  \n"
                    f"　投入 {amt:,.0f} 元（{ratio * 100:.0f}%）  \n"
-                   f"　可買 {shares_text(sh)}  \n"
-                   f"　累計均價 {avg:.2f}")
-    out.append(f"**合計**　約 {total_sh:,} 股，實際投入 {total_cost:,.0f} 元（剩 {capital - total_cost:,.0f} 元）")
+                   f"　**可買 {shares_text(sh)}**  \n"
+                   f"　累計均價 {avg:.2f}  \n"
+                   f"　停損價 {stop:.2f}，停損虧損 **{loss:,.0f} 元**")
+    out.append(f"**合計**　約 {total_sh:,} 股，實際投入 {total_cost:,.0f} 元（剩 {capital - total_cost:,.0f} 元）  \n"
+               f"全部跌到第 1 筆停損價 {p['stop1']:.2f} 的最大虧損：**{worst:,.0f} 元**"
+               f"（佔可用資金 {worst / capital * 100:.1f}%）")
     return "\n\n".join(out)
 
 
@@ -167,7 +200,9 @@ if mk:
 st.divider()
 st.subheader("⚙️ 資金與三段投入比例")
 capital = st.number_input("可用資金（元）", min_value=10000, max_value=100_000_000, value=1_000_000,
-                          step=50000, key="capital")
+                          step=50000, key="capital",
+                          help="可以直接輸入金額，或按 + / − 調整，每次 5 萬")
+st.caption("💡 可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）。選好標的後，各策略的分批計畫會依這筆資金換算每一筆可買的股數與停損金額。")
 if "w1" not in st.session_state:
     st.session_state.w1 = int(round(cfg.TRANCHES[0] * 100))
     st.session_state.w2 = int(round(cfg.TRANCHES[1] * 100))
@@ -259,6 +294,7 @@ if target:
             st.plotly_chart(charts.plot_k_vol(df, is_market=False), use_container_width=True,
                             config={"displayModeBar": False})
 
+            st.caption(f"以下依可用資金 {capital:,.0f} 元、比例 {w1}/{w2}/{w3} 換算股數與停損金額")
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
                 label = cfg.STRATEGY_NAMES[sname]
