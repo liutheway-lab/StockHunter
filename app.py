@@ -112,26 +112,31 @@ def prepare_chart_data(df, is_market=False, bars=65):
     return d.iloc[-bars:], label
 
 
+def rank_name(r):
+    return {1: "最大量", 2: "次大量"}.get(r, f"第 {r} 大量")
+
+
 def vol_low_info(df):
-    """近 30 日成交量最大那天的最低點（main）。
-    若它比現價高（壓力），再從近 60 日找「最低點在現價之下、量最大」的那天當短線支撐（sup）"""
-    d = df[df["Volume"] > 0]
+    """近 60 個交易日依成交量排名。main＝量最大那天；若它的最低點比現價高（壓力），
+    sup＝排名最前、而且最低點在現價之下的那天（短線支撐，標示它是第幾大量）"""
+    d = df[df["Volume"] > 0].iloc[-60:]
     if d.empty:
         return None
     close = float(df["Close"].iloc[-1])
+    order = list(d["Volume"].sort_values(ascending=False).index)
 
-    def pack(day):
-        return {"key": f"{day:%m/%d}", "low": float(d.loc[day, "Low"]), "vol": float(d.loc[day, "Volume"]) / 1000.0}
+    def pack(day, rank):
+        return {"key": f"{day:%m/%d}", "low": float(d.loc[day, "Low"]), "vol": float(d.loc[day, "Volume"]) / 1000.0,
+                "rank": rank, "name": rank_name(rank)}
 
-    d30 = d.iloc[-30:]
-    main = pack(d30["Volume"].idxmax())
+    main = pack(order[0], 1)
     main["pressure"] = main["low"] > close
     sup = None
     if main["pressure"]:
-        d60 = d.iloc[-60:]
-        cand = d60[d60["Low"] < close]
-        if not cand.empty:
-            sup = pack(cand["Volume"].idxmax())
+        for r, day in enumerate(order[1:], start=2):
+            if float(d.loc[day, "Low"]) < close:
+                sup = pack(day, r)
+                break
     return {"main": main, "sup": sup, "close": close}
 
 
@@ -198,7 +203,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                 mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -6, row=2)
             if rv:
                 # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
-                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量<br>為爆量日 {rv / dv * 100:.0f}%",
+                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3交易日最大量<br>約為爆量日 {rv / dv * 100:.0f}%",
                      "#00a8d6", -4, -40, row=2, yanchor="bottom")
 
     # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
@@ -239,9 +244,9 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
 
         main, sup = info["main"], info["sup"]
         labels = [(main, RED if main["pressure"] else GREEN,
-                   f"近30日最大量（{main['key']}）<br>當天最低點 {px(main['low'])}　{'壓力' if main['pressure'] else '支撐'}")]
+                   f"近60交易日{main['name']}（{main['key']}）<br>最低點 {px(main['low'])}")]
         if sup:
-            labels.append((sup, GREEN, f"短線支撐（近60日，{sup['key']}）<br>當天最低點 {px(sup['low'])}"))
+            labels.append((sup, GREEN, f"近60交易日{sup['name']}（{sup['key']}）<br>最低點 {px(sup['low'])}"))
         W, bar_px = 318.0, 318.0 / max(n_bar, 1)
         xs = [dates.index(it["key"]) * bar_px if it["key"] in dates else None for it, _, _ in labels]
 
@@ -451,7 +456,7 @@ if mk:
                  f"近 3 日最低 {s_['recent_low']:,.0f}（{s_['recent_low_date']:%m/%d}），"
                  f"前低 {s_['prior_low']:,.0f}（{s_['prior_low_date']:%m/%d}）"),
                 (ok(s_["vol_ok"]), "量承接",
-                 f"近 3 日最大量為爆量下跌日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上"),
+                 f"近 3 交易日最大量約為爆量下跌日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上"),
             ])
 
     st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
@@ -497,7 +502,7 @@ def rec_buttons(prefix, strategy, items, limit=15):
                      key=f"{prefix}_{strategy}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
-    st.caption(L("🔴壓＝近 30 日最大量當天最低點在現價之上（短線壓力）", "🟢撐＝在現價之下（支撐、出場參考）"))
+    st.caption(L("🔴壓＝近 60 交易日最大量當天最低點在現價之上（短線壓力）", "🟢撐＝在現價之下（支撐、出場參考）"))
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
@@ -651,19 +656,19 @@ if target:
             vi = vol_low_info(df)
             if vi:
                 m_ = vi["main"]
-                head = f"**近 30 日最大量　{m_['key']}（{m_['vol']:,.0f} 張）**"
+                head = f"**近 60 交易日{m_['name']}　{m_['key']}（{m_['vol']:,.0f} 張）**"
                 if m_["pressure"]:
-                    st.markdown(L(head, f"當天最低點 {px(m_['low'])}，高於現價 {px(close)}",
+                    st.markdown(L(head, f"最低點 {px(m_['low'])}，高於現價 {px(close)}",
                                   "🔴 很可能是短線壓力，不利上攻"))
                     sp = vi["sup"]
                     if sp:
-                        st.markdown(L(f"**🟢 短線支撐　{px(sp['low'])}**（{(sp['low'] / close - 1) * 100:+.1f}%）",
-                                      f"近 60 日、最低點在現價之下的最大量日 {sp['key']}",
-                                      f"當天最低點 {px(sp['low'])}，可作支撐或出場價的參考"))
+                        st.markdown(L(f"**近 60 交易日{sp['name']}　{sp['key']}（{sp['vol']:,.0f} 張）**",
+                                      f"最低點 {px(sp['low'])}，低於現價 {px(close)}（{(sp['low'] / close - 1) * 100:+.1f}%）",
+                                      "🟢 可作短線支撐，或出場價的參考"))
                     else:
-                        st.caption("近 60 日沒有最低點在現價之下的大量日，下方沒有明確支撐")
+                        st.caption("近 60 交易日沒有最低點在現價之下的大量日，下方沒有明確支撐")
                 else:
-                    st.markdown(L(head, f"當天最低點 {px(m_['low'])}，低於現價 {px(close)}",
+                    st.markdown(L(head, f"最低點 {px(m_['low'])}，低於現價 {px(close)}",
                                   "🟢 可作為短期支撐，或出場價的參考"))
             st.caption(L(f"以下依可用資金 {capital:,.0f} 元", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
             for sname in ("pullback", "flag", "breakout", "dry"):
