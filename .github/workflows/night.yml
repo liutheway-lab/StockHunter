@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "30 14 * * 1-5"   # 台灣時間 週一到週五 22:30（GitHub 用 UTC，所以是 14:30）
   workflow_dispatch:          # 也可以手動執行：Actions → night → Run workflow
+    inputs:
+      diag:
+        description: "診斷模式：不管大盤層級，列出所有策略符合的股票與各條件通過檔數"
+        type: boolean
+        default: false
 
 jobs:
   run:
@@ -20,4 +25,5 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          DIAG: ${{ inputs.diag }}
         run: python night.py
