@@ -112,7 +112,7 @@ def prepare_chart_data(df, is_market=False, bars=65):
     return d.iloc[-bars:], label
 
 
-VOL_DAYS = 180      # 看近幾個交易日的成交量排名
+VOL_DAYS = 65       # 看近幾個交易日的成交量排名（跟圖上看得到的 65 個交易日一致）
 VOL_SUP_RANK = 5    # 找短線支撐時，最多往下找到第幾大量（再後面的量太小，不具參考價值）
 
 
@@ -121,7 +121,7 @@ def rank_name(r):
 
 
 def vol_low_info(df):
-    """近 180 個交易日依成交量排名。main＝量最大那天；若它的最低點比現價高（壓力），
+    """近 65 個交易日依成交量排名。main＝量最大那天；若它的最低點比現價高（壓力），
     sup＝排名最前、而且最低點在現價之下的那天（短線支撐，標示它是第幾大量）"""
     d = df[df["Volume"] > 0].iloc[-VOL_DAYS:]
     if d.empty:
@@ -513,7 +513,7 @@ def rec_buttons(prefix, strategy, items, limit=15):
                      key=f"{prefix}_{strategy}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
-    st.caption(L("🔴壓＝近 180 交易日第 1 大量當天最低點在現價之上（短線壓力）", "🟢撐＝在現價之下（支撐、出場參考）"))
+    st.caption(L("🔴壓＝近 65 交易日第 1 大量當天最低點在現價之上（短線壓力）", "🟢撐＝在現價之下（支撐、出場參考）"))
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
@@ -667,17 +667,17 @@ if target:
             vi = vol_low_info(df)
             if vi:
                 m_ = vi["main"]
-                head = f"**近 180 交易日{m_['name']}　{m_['key']}（{m_['vol']:,.0f} 張）**"
+                head = f"**近 65 交易日{m_['name']}　{m_['key']}（{m_['vol']:,.0f} 張）**"
                 if m_["pressure"]:
                     st.markdown(L(head, f"最低點 {px(m_['low'])}，高於現價 {px(close)}",
                                   "🔴 很可能是短線壓力，不利上攻"))
                     sp = vi["sup"]
                     if sp:
-                        st.markdown(L(f"**近 180 交易日{sp['name']}　{sp['key']}（{sp['vol']:,.0f} 張）**",
+                        st.markdown(L(f"**近 65 交易日{sp['name']}　{sp['key']}（{sp['vol']:,.0f} 張）**",
                                       f"最低點 {px(sp['low'])}，低於現價 {px(close)}（{(sp['low'] / close - 1) * 100:+.1f}%）",
                                       "🟢 可作短線支撐，或出場價的參考"))
                     else:
-                        st.caption("近 180 交易日的前 5 大量，最低點都在現價之上，下方沒有明確支撐")
+                        st.caption("近 65 交易日的前 5 大量，最低點都在現價之上，下方沒有明確支撐")
                 else:
                     st.markdown(L(head, f"最低點 {px(m_['low'])}，低於現價 {px(close)}",
                                   "🟢 可作為短期支撐，或出場價的參考"))
