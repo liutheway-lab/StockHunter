@@ -1,110 +1,253 @@
-"""guide.py — 策略說明書（手動執行時，傳一則獨立訊息到 Telegram）
-數字全部讀 config.py，改了參數再執行一次，說明就會跟著更新。
-每行都刻意寫短，手機上才不會被切成兩段。
+"""night.py — 夜間個股掃描（台灣時間 22:30）
+流程：加權指數 → 判斷大盤五層 → 依層級決定啟用哪些策略 → 掃描全上市櫃 → Telegram 通知。
+沒有符合的股票也會發訊息（確認系統有在跑）。
+所有策略數字都在 config.py。
+
+診斷模式：手動執行時把 diag 勾起來（或環境變數 DIAG=true），會不管大盤層級、
+列出四套策略各自符合的股票，並顯示每個條件各有幾檔通過，用來判斷哪個條件太嚴格。
 """
+import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import config as cfg
 import strategies as st
-from notify import send_telegram
+from data import fetch_market, fetch_prices, get_directory
+from notify import send_photo, send_telegram
+
+MAX_LIST = 12   # 每套策略最多列出幾檔（依 20 日均成交金額由大到小）
+WEEKDAY = "一二三四五六日"
+LINE = "━━━━━━━━━━━━━━"
+LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
+ORDER = ["pullback", "flag", "breakout", "dry"]
+TITLES = {"pullback": "📈 創高拉回", "flag": "🚀 噴出後整理再攻",
+          "breakout": "🌱 盤整後噴出", "dry": "🛡 量縮抗跌"}
+DIAG = os.getenv("DIAG", "").strip().lower() in ("1", "true", "yes")
 
 
-def pct(x):
-    return f"{x * 100:.0f}%"
+def fp(x):
+    """價格格式：>=1000 不顯示小數，>=100 一位，其餘兩位"""
+    if x >= 1000:
+        return f"{x:,.0f}"
+    if x >= 100:
+        return f"{x:.1f}"
+    return f"{x:.2f}"
 
 
-def build():
-    t = cfg.TRANCHES
-    max_ratio = st.solve_max_entry_ratio(*st.norm_ratios(t)[:2])
-    pb_lo = (1 - max_ratio) * 100
-    k, n = cfg.STAB_DAYS, cfg.STAB_LOOKBACK
+def code_block(lines):
+    # 行尾補「看不見的空格」，避免 Telegram 右上角的 </> 複製鈕蓋到最後一個字
+    return "```\n" + "\n".join(ln + "⠀" * 3 for ln in lines) + "\n```"
 
-    text = f"""📖 *台股選股系統說明書*
-━━━━━━━━━━━━━━
-*一、大盤五層*
-看加權指數收盤與均線的位置
-🟢 第 1 層　強多頭
-　收盤 > MA5 > MA10 > MA20
-　且收盤在 MA60 之上
-🟢 第 2 層　多頭
-　收盤在 MA20、MA60 之上
-🟡 第 3 層　盤整／轉折
-　收盤站上 MA20、MA60 其中一條
-　同時跌破另一條
-🔴 第 4 層　空頭
-　收盤在 MA20、MA60 之下
-🔴 第 5 層　強空頭
-　收盤 < MA5 < MA10 < MA20
-　且收盤在 MA60 之下
 
-*二、各層啟用的策略*
-第 1、2 層：創高拉回、噴出後整理再攻
-第 3 層：同上，標示風險、縮小部位
-第 4、5 層：預設不進場
-　止跌確認通過才啟用
-　盤整後噴出、量縮抗跌
+# ---------- 大盤區塊 ----------
+def market_block(mk):
+    ma = mk["ma"]
+    head = f"🌐 *大盤｜第 {mk['layer']} 層・{mk['layer_name']}* {LAYER_ICON[mk['layer']]}"
 
-*三、止跌確認（空頭時看）*
-兩項都要通過：
-① 不破低
-　近 {k} 日最低點
-　高於前 {n} 日的最低點
-② 量承接
-　近 {k} 日最大量
-　不小於前 {n} 日下跌日的最大量
-　（即「爆量下跌日」）
-成交額採用證交所數據，
-看相對比例，100% 以上才算過。
+    def two(l1, v1, l2="", v2=None):
+        s = f"{l1:<5}{v1:>8,.0f}"
+        return s + (f"   {l2:<5}{v2:>8,.0f}" if v2 is not None else "")
 
-*四、四套個股策略*
-先過流動性：
-　5 日均量 ≥ {cfg.MIN_LOTS} 張
-　20 日均成交金額 ≥ {cfg.MIN_AVG_TURNOVER / 1e4:,.0f} 萬
+    # 全部是半形字，所以一定對齊
+    tbl = [two("Close", mk["close"], "MA5", ma[5]),
+           two("MA10", ma[10], "MA20", ma[20]),
+           two("MA60", ma[60])]
+    out = [head, code_block(tbl)]
 
-📈 *創高拉回*
-① 前高是近 {cfg.PB_LOOKBACK} 日的新高
-② 回檔 {pb_lo:.1f}%～{cfg.PB_PULLBACK_MAX * 100:.0f}%
-③ 今日量 ≤ 前高日量的 {pct(cfg.PB_VOL_RATIO)}
-④ EMA20 > EMA60
-停損：進場價下 {pct(cfg.PB_STOP_PCT)}
-目標：風報比 {cfg.PB_RRR}
+    if mk["layer"] in (4, 5):
+        s = mk["stab"]
+        if s is None:
+            out.append("🧱 止跌確認：資料不足")
+        elif s["vol_missing"]:
+            out.append("🧱 止跌確認：❌ 無法確認（大盤成交金額抓不到）")
+        else:
+            ok = lambda b: "✅" if b else "❌"
+            ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
+            out.append(f"🧱 *止跌確認*　{'✅ 通過' if s['ok'] else '❌ 未通過'}（兩項都要過）")
+            # 兩列的數字欄位寬度一樣、標籤都是 3 個中文字，所以會對齊
+            out.append(code_block([
+                f"不破低　{s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f}　{ok(s['no_break'])}",
+                f"量承接　{ratio:>5.0f}% {'≥' if s['vol_ok'] else '<'} {100:>5}%　{ok(s['vol_ok'])}",
+            ]))
+            out.append(f"不破低＝近 3 日最低 vs 前低（{s['prior_low_date']:%m/%d}）\n"
+                       f"量承接＝近 3 日最大量 vs 爆量下跌日（{s['dump_date']:%m/%d}）")
+    if mk["active"]:
+        names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
+        out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明，請縮小部位" if mk["risk"] else ""))
+    else:
+        out.append("🛑 沒有啟用的策略，不新進場")
+    return "\n".join(out)
 
-🚀 *噴出後整理再攻*
-① 近 {cfg.FLAG_WINDOW} 日內有噴出
-　3 日漲 ≥ {pct(cfg.FLAG_BURST_3D)}，或單日漲 ≥ {pct(cfg.FLAG_BURST_1D)}
-　且量 ≥ 均量 {cfg.FLAG_BURST_VOL} 倍
-② 整理至少 {cfg.FLAG_MIN_CONSOL} 天
-③ 回檔不超過噴出漲幅的一半
-④ 守住月線，整理期量縮
-⑤ 現價距前波高點 {pct(cfg.FLAG_NEAR)} 內
-　（已突破者標 ↑）
 
-🌱 *盤整後噴出*
-① 離 60 日低點漲幅 ≤ {pct(cfg.BO_MAX_RISE)}
-② 突破 {cfg.BO_PLATFORM} 日頸線
-③ 量 ≥ 20 日均量 {cfg.BO_VOL_MULT:.0f} 倍
-④ 站上季線、月線翻揚
-停損：頸線下 2% 或買價下 {pct(cfg.BO_STOP_PCT)}，取低
-目標：+{pct(cfg.BO_TARGET_PCT)}
+# ---------- 掃描 ----------
+def scan(prices, mk, ratios):
+    """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數)"""
+    hits = {k: [] for k in ORDER}
+    funnel = {k: {"checks": {}, "ok": 0} for k in ORDER}
+    liquid = stale = 0
+    last_date = mk["date"]
+    for sym, raw in prices.items():
+        try:
+            if raw.index[-1] < last_date:        # 停牌或資料沒更新到最新一天
+                stale += 1
+                continue
+            df = st.add_indicators(raw)
+            i = len(df) - 1
+            if i < 69:
+                continue
+            if not st._liq(df.iloc[i])[1]:
+                continue
+            liquid += 1
+            results = {
+                "pullback": st.check_pullback(df, i, ratios),
+                "flag": st.check_flag(df, i),
+                "breakout": st.check_breakout(df, i),
+                "dry": st.check_dry(df, i, mk["df"]),
+            }
+            for name, r in results.items():
+                if r is None:
+                    continue
+                for cname, cok, _ in r["checks"]:
+                    funnel[name]["checks"][cname] = funnel[name]["checks"].get(cname, 0) + (1 if cok else 0)
+                if r["ok"]:
+                    funnel[name]["ok"] += 1
+                    plan = st.plan_for(name, r, ratios)
+                    hits[name].append({"sym": sym, "r": r, "plan": plan, "turnover": r["turnover"]})
+        except Exception as e:   # 單一股票出錯不影響整體
+            print(f"{sym} 分析失敗：{e!r}")
+    for k in hits:
+        hits[k].sort(key=lambda x: -x["turnover"])
+    return hits, liquid, stale, funnel
 
-🛡 *量縮抗跌*
-① 3 日均量 ≤ 20 日均量的 {pct(cfg.DRY_VOL_RATIO)}
-② {k} 日不破前低
-③ 個股跌幅 ≤ 大盤的 {pct(cfg.DRY_RS_RATIO)}
-　（從大盤 20 日高點起算）
-停損：跌破個股前低
-目標：風報比 {cfg.DRY_RRR}
 
-*五、清單怎麼看*
-現價　今天收盤
-突破　第 2 筆買進的關鍵價
-停損　第 1 筆的停損價
-目標　第 1 個停利價
-↑　已突破前波高點
-分批　{pct(t[0])}／{pct(t[1])}／{pct(t[2])}
-　第 3 筆在關鍵價 × {cfg.EXT_RATIO}
+def funnel_lines(funnel, liquid):
+    """各策略每個條件各有幾檔通過（診斷用）"""
+    out = [f"今天流動性合格共 {liquid} 檔。",
+           "下面每個條件是『單獨』計算有幾檔過關；全部條件同時過關才會入選。"]
+    for name in ORDER:
+        f = funnel[name]
+        out.append("")
+        out.append(f"{TITLES[name]}　最後入選 {f['ok']} 檔")
+        for c, k in f["checks"].items():
+            if c != "流動性":
+                out.append(f"・{c}　{k}／{liquid}")
+    return out
 
-⚠️ 規則篩選，非買賣建議"""
-    return [text]
+
+def _w(t):
+    """估算顯示寬度：中文約 1.68 個半形字寬（iPhone 的等寬字型），其他 1"""
+    return sum(1.68 if ord(c) > 0x2E80 else 1 for c in t)
+
+
+def _padr(t, width):
+    """靠左對齊，用全形空白＋半形空白把寬度補到 width"""
+    d = width - _w(t)
+    if d <= 0:
+        return t
+    n = int(d // 1.68)
+    return t + "\u3000" * n + " " * round(d - n * 1.68)
+
+
+def tv_link(sym):
+    """TradingView 連結（台股：上市 TWSE、上櫃 TPEX）"""
+    code = sym.split(".")[0]
+    ex = "TPEX" if sym.endswith(".TWO") else "TWSE"
+    return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
+
+
+def strategy_block(name, items, names, risk, note=""):
+    title = f"*{TITLES[name]}*　{len(items)} 檔" + ("　⚠️標示風險" if risk else "") + note
+    shown = items[:MAX_LIST]
+    labels = []
+    for h in shown:
+        code = h["sym"].split(".")[0]
+        broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
+        labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else ""))
+    W = max([_w("代號 名稱")] + [_w(x) for x in labels])
+    cols = ["現價", "突破", "停損", "目標"]
+    lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
+    for h, lab in zip(shown, labels):
+        p = h["plan"]
+        nums = [h["r"]["close"], p["key"], p["stop1"], p["targets"][0][1]]
+        lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
+    links = "　".join(tv_link(h["sym"]) for h in shown)
+    more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
+    return title + "\n" + code_block(lines) + more + "\n📊 TradingView 線圖：" + links
+
+
+def run():
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    ratios = cfg.TRANCHES
+
+    if now.weekday() == 0:       # 每週一：掃描前先附上說明書（新加入的人才看得到）
+        try:
+            from guide import build
+            send_telegram(build())
+        except Exception as e:
+            print("說明書傳送失敗：", repr(e))
+
+    try:
+        mkt = fetch_market()
+        mk = st.market_summary(mkt)
+    except Exception as e:
+        send_telegram([f"🌙 *台股夜間掃描*\n⚠️ 大盤資料抓取失敗，今晚無法掃描：{e}"])
+        raise SystemExit(str(e))
+
+    directory = get_directory()
+    directory = directory.assign(sym=directory["code"] + directory["suffix"])
+    names = dict(zip(directory["sym"], directory["name"]))
+    prices, failed = fetch_prices(list(directory["sym"]))
+    hits, liquid, stale, funnel = scan(prices, mk, ratios)
+
+    print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
+
+    data_date = mk["date"]
+    head = [
+        "🌙 *台股夜間掃描*" + ("　🔬診斷模式" if DIAG else ""),
+        f"{now:%m/%d}（{WEEKDAY[now.weekday()]}）{now:%H:%M}　資料日 {data_date:%m/%d}",
+    ]
+    if data_date.date() != now.date():
+        head.append("📌 資料為最近交易日")
+
+    parts = ["\n".join(head) + "\n" + LINE, market_block(mk) + "\n" + LINE]
+
+    active = mk["active"]
+    shown = False
+    if active or DIAG:
+        for name in ORDER:
+            if not hits[name]:
+                continue
+            if name in active:
+                parts.append(strategy_block(name, hits[name], names, mk["risk"]))
+                shown = True
+            elif DIAG:
+                parts.append(strategy_block(name, hits[name], names, False, "　（大盤未啟用）"))
+                shown = True
+        if not shown:
+            parts.append("今晚沒有符合的股票。")
+    # 只有出問題時才顯示提醒
+    warn = []
+    if directory.attrs.get("fallback"):
+        warn.append("⚠️ 官方股票清單抓取失敗，只掃描備用的幾檔")
+    elif failed and len(failed) > 0.15 * len(directory):
+        warn.append(f"⚠️ 有 {len(failed)} 檔沒抓到資料，結果可能不完整")
+    if warn:
+        parts.append("\n".join(warn))
+
+    if parts[-1].endswith(LINE):       # 後面沒有內容時，不要留一條多餘的分隔線
+        parts[-1] = parts[-1][:-len(LINE)].rstrip()
+    send_telegram(parts)
+
+    # 每天都傳一張大盤線圖；空頭層級會多標出前低、爆量下跌日、近 3 日
+    try:
+        from chart_png import market_chart
+        cap = "加權指數 K 線、均線與成交金額"
+        if mk["layer"] in (4, 5) and mk["stab"]:
+            cap += "｜黃色區 = 近 3 日｜虛線 = 止跌確認的門檻"
+        send_photo(market_chart(mk), cap)
+    except Exception as e:
+        print("線圖產生失敗：", repr(e))
 
 
 if __name__ == "__main__":
-    send_telegram(build())
+    run()
