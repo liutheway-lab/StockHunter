@@ -144,7 +144,15 @@ def vol_low_info(df):
     return {"main": main, "sup": sup, "close": close}
 
 
-RED, GREEN = "#e03131", "#2b9a3f"      # 跟大盤燈號邏輯一致：紅＝壓力／風險，綠＝支撐
+RED, GREEN = "#f03e3e", "#37b24d"      # 跟大盤燈號邏輯一致：紅＝壓力／風險，綠＝支撐
+
+
+def soft(color, a=0.5):
+    """箭頭用：同一個顏色但半透明，線條比較柔和，不會搶過 K 線"""
+    if color.startswith("#") and len(color) == 7:
+        r, g, b = (int(color[k:k + 2], 16) for k in (1, 3, 5))
+        return f"rgba({r},{g},{b},{a})"
+    return color
 
 
 def plot_k_vol(df, is_market=False, bars=65, stab=None):
@@ -180,7 +188,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
             if day in dates:
                 # 細箭頭 + 靠右對齊的文字，沒有底色；文字放在圖上空白的位置，避免壓到 K 線
                 fig.add_annotation(x=day, y=val, text=text, showarrow=True, row=row, col=1,
-                                   arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
+                                   arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=soft(color),
                                    ax=ax, ay=ay, xanchor=xanchor, yanchor=yanchor, font=dict(color=color, size=11))
 
         # 前低：細虛線橫跨整張圖 + 箭頭，文字放在 K 線下方的空白處
@@ -224,11 +232,11 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     def side(i):
         return "right" if i > n_bar - 9 else ("left" if i < 8 else "center")
 
-    fig.add_hline(y=hi_v, row=1, col=1, line=dict(color="rgba(214,51,108,0.7)", width=1, dash="dot"))
+    fig.add_hline(y=hi_v, row=1, col=1, line=dict(color="rgba(230,73,128,0.6)", width=1, dash="dot"))
     fig.add_annotation(x=dates[hi_i], y=hi_v, row=1, col=1, text=f"前高 {px(hi_v)}（{dates[hi_i]}）",
-                       showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#d6336c",
+                       showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=soft("#e64980"),
                        ax=-4 if side(hi_i) == "right" else 4, ay=-22, xanchor=side(hi_i),
-                       font=dict(color="#d6336c", size=12))
+                       font=dict(color="#e64980", size=12))
     lo_pad = float(p["Low"].min())
     rng_p = max(hi_v - lo_pad, 1e-9)
     # 個股圖：下方多留一條空白帶，專門放「大量低點」的文字，這樣文字不會蓋到 K 線或成交量
@@ -306,7 +314,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
             text_y = band_top - (24 + 46 * row_i) / ppu          # 兩排文字各自固定高度
             anc = ancs[row_i]
             fig.add_annotation(x=it["key"], y=it["low"], row=1, col=1, text=text,
-                               showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
+                               showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=soft(color),
                                ax={"right": -4, "left": 4, "center": 0}[anc], ay=max(18.0, (it["low"] - text_y) * ppu),
                                xanchor=anc, font=dict(color=color, size=12))
             fig.add_hline(y=it["low"], row=1, col=1, line=dict(color=color, width=1, dash="dot"))
@@ -648,10 +656,10 @@ st.markdown(f"**各階段可投入**  \n"
 st.caption(L("比例會影響「創高拉回」的進場區間", "資金用來試算每一筆可以買幾股"))
 
 # ==================== 單檔回測 ====================
-BT_MODE = {"ladder_avg": "A 三段，買第 2 筆後出場價拉到均價",
-           "ladder_stop2": "B 三段，買第 2 筆後出場價拉到突破價下 5%",
-           "ladder_stop1": "C 三段，出場價不動",
-           "single": "D 一次買進"}
+BT_MODE = {"ladder_avg": "分 3 次買｜買到第 2 筆後，出場價上移到平均成本（保本）",
+           "ladder_stop2": "分 3 次買｜買到第 2 筆後，出場價上移到突破價下 5%",
+           "ladder_stop1": "分 3 次買｜出場價一直不動",
+           "single": "一次全部買進｜出場價不動"}
 BT_SHORT = {"pullback": "創高拉回", "flag": "噴後整理", "breakout": "盤整噴出", "dry": "量縮抗跌"}
 BT_REASON = {"target": "🎯", "stop": "🛑", "time": "⏰"}
 CRASHES = {                      # 崩盤期（訊號出現在這段期間的交易）
@@ -671,7 +679,10 @@ def _stat_row(label, s_):
 
 def stock_bt_body(code, suffix, capital):
     import backtest as BT
-    mode = st.radio("出場方式", list(BT_MODE), format_func=lambda m: BT_MODE[m], key="sbt_mode")
+    mode = st.radio("買法與出場價怎麼移動", list(BT_MODE), format_func=lambda m: BT_MODE[m], key="sbt_mode")
+    st.caption(L(f"分 3 次買：第 1 筆在訊號隔天開盤買（{w1}%）",
+                 f"第 2 筆漲到突破價才買（{w2}%），第 3 筆漲到突破價 +8% 才買（{w3}%）",
+                 "出場價一開始都是各策略算的出場價，碰到就全部賣出"))
     only_active = st.toggle("只在大盤啟用該策略時進場（照目前規則）", value=True, key="sbt_active")
     periods = {"近 5 年": None, **{k: v for k, v in CRASHES.items()}}
     period = st.selectbox("期間", list(periods), key="sbt_period")
@@ -731,9 +742,10 @@ def stock_bt_body(code, suffix, capital):
     show_table(["進場日", "策略", "進場", "出場", "結果", "損益"], [
         (f"{r.entry_date:%y/%m/%d}", BT_SHORT[r.strat], px(r.entry_px), px(r.exit_px), BT_REASON[r.reason],
          f"{r.ret_plan * capital:+,.0f}") for r in lst.itertuples()])
-    st.caption("損益單位：元　🎯 碰到目標價　🛑 碰到出場價　⏰ 持有到期" + (f"　｜只列最近 20 筆，共 {len(T)} 筆" if len(T) > 20 else ""))
+    st.caption("損益單位：元　🎯 碰到目標價　🛑 碰到出場價　⏰ 滿 60 天賣出" + (f"　｜只列最近 20 筆，共 {len(T)} 筆" if len(T) > 20 else ""))
     st.caption(L("規則：訊號隔天開盤進場；同一天碰到出場價和目標價先算出場",
-                 f"持有超過 {BT.MAX_HOLD} 個交易日用收盤價出場；已扣來回成本 {cfg.FEE_RT * 100:.1f}%",
+                 f"滿 {BT.MAX_HOLD} 個交易日還沒碰到出場價或目標價，用當天收盤價賣出",
+                 f"每筆都已扣買賣成本 {cfg.FEE_RT * 100:.1f}%（手續費 0.1425%×2＋證交稅 0.3%）",
                  "期望值＝平均每筆報酬（以實際投入的錢計）",
                  "回測是過去的表現，不代表未來"))
 
