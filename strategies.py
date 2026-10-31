@@ -169,6 +169,17 @@ def stabilization(df, i):
             "prior_low": L, "recent_low": low_recent, "dump_vol": dump, "recent_vol": recent_v, **dates}
 
 
+def vol_low(df, days=60):
+    """近 60 個交易日成交量最大那天的最低點。低點在現價之上＝短線壓力（壓），在現價之下＝支撐參考（撐）"""
+    d = df[df["Volume"] > 0].iloc[-days:]
+    if d.empty:
+        return None
+    day = d["Volume"].idxmax()
+    low, close = float(d.loc[day, "Low"]), float(df["Close"].iloc[-1])
+    return {"date": day, "low": low, "vol": float(d.loc[day, "Volume"]) / 1000.0,
+            "side": "壓" if low > close else "撐"}
+
+
 def active_strategies(layer, stab_ok):
     """依大盤層級決定哪些策略啟用。回傳 (策略清單, 是否要標示風險)"""
     if not cfg.USE_REGIME:
