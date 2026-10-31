@@ -22,6 +22,13 @@ import lookup
 import strategies as S
 
 st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="centered")
+# 檢查其他檔案是不是也更新了（只換了 app.py、沒換 config.py／strategies.py 時，給清楚的提示）
+_missing = [f for f, ok in (("config.py", hasattr(cfg, "WATCH_MAX_CONSOL")),
+                            ("strategies.py", hasattr(S, "watch_tomorrow")),
+                            ("backtest.py", True)) if not ok]
+if _missing:
+    st.error("⚠️ GitHub 上這幾個檔案還是舊版，請重新上傳：" + "、".join(_missing))
+    st.stop()
 st.title("📈 台股戰情室")
 st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}")
 
