@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import config as cfg
 import strategies as st
 from data import fetch_market, fetch_prices, get_directory
-from notify import send_telegram
+from notify import send_photo, send_telegram
 
 MAX_LIST = 12   # 每套策略最多列出幾檔（依 20 日均成交金額由大到小）
 WEEKDAY = "一二三四五六日"
@@ -59,14 +59,18 @@ def market_block(mk):
         if s is None:
             out.append("🧱 止跌確認：資料不足")
         elif s["vol_missing"]:
-            out.append("🧱 止跌確認：❌ 大盤成交量取不到，無法確認")
+            out.append("🧱 止跌確認：❌ 無法確認（大盤成交金額抓不到）")
         else:
             ok = lambda b: "✅" if b else "❌"
             out.append(f"🧱 *止跌確認*　{'✅ 通過' if s['ok'] else '❌ 未通過'}")
             out.append(code_block([
-                f"Low  {s['recent_low']:>7,.0f} / 前低 {s['prior_low']:,.0f} {ok(s['no_break'])}",
-                f"Vol  {s['recent_vol'] / 1e8:>7.2f} / 爆量 {s['dump_vol'] / 1e8:.2f} {ok(s['vol_ok'])}",
+                f"最低點　{s['recent_low']:>7,.0f} > {s['prior_low']:,.0f} {ok(s['no_break'])}",
+                f"成交額　{s['recent_vol'] / 1e8:>7,.0f} ≥ {s['dump_vol'] / 1e8:,.0f} {ok(s['vol_ok'])}",
             ]))
+            out.append(
+                f"前低出現在 {s['prior_low_date']:%m/%d}｜爆量下跌日 {s['dump_date']:%m/%d}\n"
+                f"近 3 日 = {s['recent_start']:%m/%d}–{s['recent_end']:%m/%d}"
+            )
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
         out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明，請縮小部位" if mk["risk"] else ""))
@@ -202,6 +206,16 @@ def run():
     if parts[-1].endswith(LINE):       # 後面沒有內容時，不要留一條多餘的分隔線
         parts[-1] = parts[-1][:-len(LINE)].rstrip()
     send_telegram(parts)
+
+    # 每天都傳一張大盤線圖；空頭層級會多標出前低、爆量下跌日、近 3 日
+    try:
+        from chart_png import market_chart
+        cap = "加權指數 K 線、均線與成交金額"
+        if mk["layer"] in (4, 5) and mk["stab"]:
+            cap += "｜黃色區 = 近 3 日｜虛線 = 止跌確認的門檻"
+        send_photo(market_chart(mk), cap)
+    except Exception as e:
+        print("線圖產生失敗：", repr(e))
 
 
 if __name__ == "__main__":
