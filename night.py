@@ -164,7 +164,7 @@ def strategy_block(name, items, names, risk, note=""):
         broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
         labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else ""))
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    cols = ["現價", "突破", "停損", "目標"]
+    cols = ["現價", "突破價", "停損價", "目標價"]
     lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
     for h, lab in zip(shown, labels):
         p = h["plan"]
@@ -241,10 +241,7 @@ def run():
     # 每天都傳一張大盤線圖；空頭層級會多標出前低、爆量下跌日、近 3 日
     try:
         from chart_png import market_chart
-        cap = "加權指數 K 線、均線與成交金額"
-        if mk["layer"] in (4, 5) and mk["stab"]:
-            cap += "｜黃色區 = 近 3 日｜虛線 = 止跌確認的門檻"
-        send_photo(market_chart(mk), cap)
+        send_photo(market_chart(mk))
     except Exception as e:
         print("線圖產生失敗：", repr(e))
 
