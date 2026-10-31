@@ -174,7 +174,7 @@ def strategy_block(name, items, names, risk, note=""):
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
     links = "　".join(tv_link(h["sym"]) for h in shown)
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    legend = "\n壓＝60日最大量當天最低點在現價之上（短線壓力）\n撐＝在現價之下（支撐、出場參考）"
+    legend = "\n壓＝180日第1大量當天最低點在現價之上（短線壓力）\n撐＝在現價之下（支撐、出場參考）"
     return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
 
 
