@@ -141,38 +141,73 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                           x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.18)",
                           line_width=0, layer="above")
 
-        def mark(day, val, text, color, ax, ay, row=1):
+        def mark(day, val, text, color, ax, ay, row=1, xanchor="right"):
             if day in dates:
-                # 只拉一條細細的箭頭，在末端寫文字（不放標記）
+                # 細箭頭 + 靠右對齊的文字，沒有底色；文字放在圖上空白的位置，避免壓到 K 線
                 fig.add_annotation(x=day, y=val, text=text, showarrow=True, row=row, col=1,
                                    arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
-                                   ax=ax, ay=ay, font=dict(color=color, size=12),
-                                   bgcolor="rgba(17,17,17,0.85)", borderpad=2)
+                                   ax=ax, ay=ay, xanchor=xanchor, font=dict(color=color, size=11))
 
-        # 前低：細虛線橫跨整張圖 + 箭頭
+        # 前低：細虛線橫跨整張圖 + 箭頭，文字放在 K 線下方的空白處
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
-                      line=dict(color="rgba(200,200,200,0.55)", width=1, dash="dash"))
+                      line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dash"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff9f1a", -70, 40)
+             f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff9f1a", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00e5ff", -90, 95)
+                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00e5ff", -4, 108)
 
         # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
         dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
         if dd is not None and dv:
             dv_b = dv / 1e8
             fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 1.35], row=2, col=1)
-            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(200,200,200,0.55)", width=1, dash="dash"))
+            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(200,200,200,0.5)", width=1, dash="dash"))
             dkey = f"{dd:%m/%d}"
             if dkey in dates:
                 i = dates.index(dkey)
                 fig.add_shape(type="rect", x0=i - 0.5, x1=i + 0.5, y0=0, y1=dv_b, row=2, col=1,
                               line=dict(color="#ff9f1a", width=1.5), fillcolor="rgba(0,0,0,0)")
-                mark(dkey, dv_b, f"爆量下跌日（{dkey}）", "#ff9f1a", -75, -22, row=2)
+                # 文字放在橘框左邊、虛線上方（那一帶沒有其他長條）
+                fig.add_annotation(x=dkey, y=dv_b, row=2, col=1, text=f"爆量日 {dkey}", showarrow=False,
+                                   xanchor="right", xshift=-8, yshift=9, font=dict(color="#ff9f1a", size=11))
             if rv:
-                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量＝爆量日的 {rv / dv * 100:.0f}%",
-                     "#dddddd", -80, -45, row=2)
+                # 文字在右側長條上方的空白處，只往左伸展，不會碰到橘框
+                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量 {rv / dv * 100:.0f}%",
+                     "#dddddd", -4, -26, row=2)
+
+    # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
+    hi_i = int(p["High"].to_numpy().argmax())
+    hi_v = float(p["High"].iloc[hi_i])
+    last_c = float(p["Close"].iloc[-1])
+    n_bar = len(dates)
+
+    def side(i):
+        return "right" if i > n_bar - 9 else ("left" if i < 8 else "center")
+
+    fig.add_hline(y=hi_v, row=1, col=1, line=dict(color="rgba(200,200,200,0.35)", width=1, dash="dot"))
+    fig.add_annotation(x=dates[hi_i], y=hi_v, row=1, col=1, text=f"前高 {px(hi_v)}（{dates[hi_i]}）",
+                       showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#e6e6e6",
+                       ax=-4 if side(hi_i) == "right" else 4, ay=-22, xanchor=side(hi_i),
+                       font=dict(color="#e6e6e6", size=11))
+    lo_pad = float(p["Low"].min())
+    fig.update_yaxes(range=[lo_pad - (hi_v - lo_pad) * 0.04, hi_v + (hi_v - lo_pad) * 0.10], row=1, col=1)
+
+    if not is_market:
+        band = 0.10
+        cand = p[(p["Low"] >= last_c * (1 - band)) & (p["Low"] <= last_c * (1 + band)) & (p["Plot_Vol"] > 0)]
+        if len(cand) < 2:
+            cand = p[p["Plot_Vol"] > 0]
+        top2 = cand.nlargest(2, "Plot_Vol")
+        for rank, (day, row_) in enumerate(top2.iterrows()):
+            i = dates.index(day.strftime("%m/%d")) if day.strftime("%m/%d") in dates else None
+            if i is None:
+                continue
+            fig.add_annotation(x=dates[i], y=float(row_["Low"]), row=1, col=1,
+                               text=f"{'量最大' if rank == 0 else '量次大'} 低 {px(float(row_['Low']))}（{dates[i]}）",
+                               showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor="#fd79a8",
+                               ax=-4 if side(i) == "right" else (4 if side(i) == "left" else 0),
+                               ay=38 + 30 * rank, xanchor=side(i), font=dict(color="#fd79a8", size=11))
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
@@ -227,8 +262,8 @@ def html_table(head, rows, wrap=(), left=(), bold_first=False):
         ws = "normal" if i in wrap else "nowrap"
         bg = "background:rgba(128,128,128,0.14);font-weight:600;" if tag == "th" else ""
         bt = f"border-top:{border};" if top else ""
-        return (f'<{tag} style="padding:7px 10px;text-align:{align};white-space:{ws};{bg}{bt}'
-                f'font-size:0.9rem;line-height:1.35;">{esc(text)}</{tag}>')
+        return (f'<{tag} style="padding:6px 7px;text-align:{align};white-space:{ws};{bg}{bt}'
+                f'font-size:0.84rem;line-height:1.35;">{esc(text)}</{tag}>')
 
     out = ['<div style="overflow-x:auto;margin:4px 0 10px 0;"><table style="width:100%;'
            f'border-collapse:separate;border-spacing:0;border:{border};border-radius:8px;overflow:hidden;">']
@@ -275,9 +310,9 @@ def plan_view(p, capital, close):
         exit_p = p["stop1"] if k == 0 else S.tick(cost_k / sh_k, "ceil")
         pnl = sh_k * exit_p - cost_k - cost_k * cfg.FEE_RT
         out.append((lab, px(price), f"{shares[k]:,}", px(avgs[k]), px(exit_p), f"{pnl:+,.0f}"))
-    show_table(["階段", "進場價", "股數", "累計均價", "出場價", "出場損益"], out)
+    show_table(["階段", "進場價", "股數", "均價", "出場價", "損益"], out)
     st.caption(L(f"② 突破＝突破價　③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%",
-                 "出場價與損益＝買到該階段後的累計狀況",
+                 "均價、出場價、損益＝買到該階段後的累計狀況",
                  f"合計投入 {sum(costs):,.0f} 元、{sum(shares):,} 股",
                  f"可用資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元"))
     st.caption(L("買進第 2 筆後，出場價拉到累計均價",
