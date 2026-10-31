@@ -3,6 +3,7 @@
 資料口徑跟夜間掃描完全相同（data.py、strategies.py 共用）。
 """
 import html
+import time
 import json
 import re
 from pathlib import Path
@@ -43,6 +44,7 @@ def _scroll_script(key, title):
     """收合後頁面會變短、瀏覽器停在最底部，所以用小段 JS 把畫面捲回標題那一顆按鈕"""
     t = json.dumps(title)
     components.html(f"""<script>
+    // {time.time()}
     setTimeout(function () {{
       const d = window.parent.document;
       let el = d.querySelector('.st-key-open_{key}');
@@ -343,8 +345,10 @@ def pick(item):
 def rec_buttons(prefix, strategy, items, limit=15):
     for it in items[:limit]:
         arrow = "↑" if it.get("broke") else ""
-        st.button(f"{it['code']} {it['name']}{arrow}　現價 {px(it['close'])}｜突破價 {px(it['key'])}",
-                  key=f"{prefix}_{strategy}_{it['code']}", on_click=pick, args=(it,), use_container_width=True)
+        if st.button(f"{it['code']} {it['name']}{arrow}　現價 {px(it['close'])}｜突破價 {px(it['key'])}",
+                     key=f"{prefix}_{strategy}_{it['code']}", use_container_width=True):
+            pick(it)
+            st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出（依成交金額排序）")
 
@@ -364,11 +368,12 @@ else:
         for name in ORDER:
             if name in active:
                 items = hits.get(name, [])
-                with st.expander(f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔", expanded=bool(items)):
+                def rec_body(name=name, items=items):
                     if items:
                         rec_buttons("rec", name, items)
                     else:
                         st.caption("今天沒有符合的股票。")
+                foldable(f"recfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔", rec_body, default=bool(items))
     else:
         st.error(f"🔴 尚未止跌，不建立多頭部位。已讀取 {scan['data_date']} 的夜間掃描：今日無推薦。")
 
@@ -381,8 +386,8 @@ else:
     if watch:
         st.markdown("**👀 觀察名單**（型態符合，但大盤目前不適用，僅供追蹤）")
         for name, items in watch:
-            with st.expander(f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔", expanded=False):
-                rec_buttons("obs", name, items)
+            foldable(f"obsfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔",
+                     lambda name=name, items=items: rec_buttons("obs", name, items))
 
 # ==================== 資金比例 ====================
 st.divider()
@@ -420,12 +425,14 @@ st.caption("比例會影響「創高拉回」的進場區間；資金會用來�
 st.divider()
 st.subheader("🔍 個股診斷")
 if st.session_state.pop("_scroll_diag", False):
-    components.html("""<script>
-    setTimeout(function () {
-      for (const h of window.parent.document.querySelectorAll('h1,h2,h3')) {
-        if (h.innerText.indexOf('個股診斷') >= 0) { h.scrollIntoView({block: 'start'}); break; }
-      }
-    }, 150);
+    # 每次內容都不同（加時間戳），否則 Streamlit 會沿用上次的 iframe，script 不會再執行
+    components.html(f"""<script>
+    // {time.time()}
+    setTimeout(function () {{
+      for (const h of window.parent.document.querySelectorAll('h1,h2,h3')) {{
+        if (h.innerText.indexOf('個股診斷') >= 0) {{ h.scrollIntoView({{block: 'start'}}); break; }}
+      }}
+    }}, 150);
     </script>""", height=0)
 try:
     directory = load_directory()
