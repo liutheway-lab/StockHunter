@@ -84,6 +84,7 @@ def market_block(mk):
 def scan(prices, mk, ratios):
     """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數)"""
     hits = {k: [] for k in ORDER}
+    watch = {"pullback": [], "flag": []}       # 明日追價名單
     funnel = {k: {"checks": {}, "ok": 0} for k in ORDER}
     liquid = stale = 0
     last_date = mk["date"]
@@ -114,11 +115,20 @@ def scan(prices, mk, ratios):
                     funnel[name]["ok"] += 1
                     plan = st.plan_for(name, r, ratios)
                     hits[name].append({"sym": sym, "r": r, "plan": plan, "turnover": r["turnover"], "vl": st.vol_low(df)})
+            for name in watch:                    # 今天還沒攻擊、但盤整條件已成立 → 明天的追價點
+                if results[name] is not None and results[name]["ok"]:
+                    continue
+                w = st.watch_tomorrow(raw, name)
+                if w:
+                    plan = st.attack_plan(w, entry=w["chase_px"])
+                    watch[name].append({"sym": sym, "r": w, "plan": plan, "turnover": w["turnover"]})
         except Exception as e:   # 單一股票出錯不影響整體
             print(f"{sym} 分析失敗：{e!r}")
     for k in hits:
         hits[k].sort(key=lambda x: -x["turnover"])
-    return hits, liquid, stale, funnel
+    for k in watch:
+        watch[k].sort(key=lambda x: -x["turnover"])
+    return hits, liquid, stale, funnel, watch
 
 
 def funnel_lines(funnel, liquid):
@@ -166,7 +176,7 @@ def strategy_block(name, items, names, risk, note=""):
         vl = h.get("vl")
         labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else "") + (f" {vl['side']}" if vl else ""))
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    cols = ["現價", "突破價", "停損價", "目標價"]
+    cols = ["現價", "突破價", "出場價", "目標價"]
     lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
     for h, lab in zip(shown, labels):
         p = h["plan"]
@@ -178,10 +188,29 @@ def strategy_block(name, items, names, risk, note=""):
     return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
 
 
+def watch_block(name, items, names, note=""):
+    """明日追價名單：明天盤中漲 4% 且突破盤整高點，就是追價點"""
+    title = f"*👀 明日追價名單・{cfg.STRATEGY_NAMES[name]}*　{len(items)} 檔" + note
+    shown = items[:MAX_LIST]
+    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" for h in shown]
+    W = max([_w("代號 名稱")] + [_w(x) for x in labels])
+    cols = ["現價", "追價點", "出場價", "目標價"]
+    lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
+    for h, lab in zip(shown, labels):
+        p = h["plan"]
+        nums = [h["r"]["close"], p["e"], p["stop1"], p["targets"][0][1]]
+        lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
+    more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
+    legend = (f"\n追價點＝明天漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點的價格"
+              f"\n盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天、離前高 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%，盤中看強弱再決定追不追")
+    links = "　".join(tv_link(h["sym"]) for h in shown)
+    return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
+
+
 RESULT_FILE = "scan_results.json"
 
 
-def save_results(mk, hits, names, directory, now):
+def save_results(mk, hits, names, directory, now, watch=None):
     """把今晚的掃描結果存成 JSON，網頁 app 的『今日推薦』直接讀它"""
     info = {r.sym: (r.industry, r.market) for r in directory.itertuples()}
     out = {
@@ -207,6 +236,17 @@ def save_results(mk, hits, names, directory, now):
                     "vl_side": h["vl"]["side"]} if h.get("vl") else {}),
             })
         out["hits"][name] = rows
+    out["watch"] = {}
+    for name, items in (watch or {}).items():
+        rows = []
+        for h in items:
+            code = h["sym"].split(".")[0]
+            ind, mkt = info.get(h["sym"], ("", ""))
+            rows.append({"code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
+                         "industry": ind or "", "market": mkt or "", "close": round(h["r"]["close"], 2),
+                         "chase": h["plan"]["e"], "stop1": h["plan"]["stop1"], "target": h["plan"]["targets"][0][1],
+                         "key": h["plan"]["key"], "days": int(h["r"].get("n_cons", 0)), "turnover": round(h["turnover"])})
+        out["watch"][name] = rows
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
 
@@ -233,11 +273,11 @@ def run():
     directory = directory.assign(sym=directory["code"] + directory["suffix"])
     names = dict(zip(directory["sym"], directory["name"]))
     prices, failed = fetch_prices(list(directory["sym"]))
-    hits, liquid, stale, funnel = scan(prices, mk, ratios)
+    hits, liquid, stale, funnel, watch = scan(prices, mk, ratios)
 
     print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
     try:
-        save_results(mk, hits, names, directory, now)
+        save_results(mk, hits, names, directory, now, watch)
     except Exception as e:
         print("掃描結果存檔失敗：", repr(e))
 
@@ -265,6 +305,9 @@ def run():
                 shown = True
         if not shown:
             parts.append("今晚沒有符合的股票。")
+    for name in ("pullback", "flag"):              # 明日追價名單（大盤啟用這套策略時才推播）
+        if watch[name] and (name in active or DIAG):
+            parts.append(watch_block(name, watch[name], names, "" if name in active else "　（大盤未啟用）"))
     # 只有出問題時才顯示提醒
     warn = []
     if directory.attrs.get("fallback"):
