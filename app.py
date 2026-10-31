@@ -12,7 +12,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 
-import webcharts as charts
+import webcharts_v5 as charts
 import config as cfg
 import data
 import guide
@@ -59,13 +59,15 @@ _fragment = getattr(st, "fragment", None) or (lambda f: f)
 
 
 @_fragment
-def foldable(key, title, body, default=False):
+def foldable(key, title, body, default=False, status=None):
     """可展開／收合的區塊：標題是一顆按鈕，展開後最下面也有一顆收合鈕（收合後會捲回標題）"""
     if key not in st.session_state:
         st.session_state[key] = default
     opened = st.session_state[key]
     st.button(f"{'▼' if opened else '▶'}　{title}", key=f"open_{key}", on_click=_toggle, args=(key,),
               use_container_width=True)
+    if status:
+        st.caption(status)
     if st.session_state.get("_scroll_to") == key:
         st.session_state["_scroll_to"] = None
         _scroll_script(key, title)
@@ -197,7 +199,10 @@ if mk:
     st.plotly_chart(charts.plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                     use_container_width=True, config={"displayModeBar": False})
     if show_stab:
-        st.caption("橘色虛線＝前低，黃色區＝近 3 日。成交金額採用證交所數據，看相對比例。")
+        st.markdown(f"🟠 前低 {show_stab['prior_low']:,.0f}（{show_stab['prior_low_date']:%m/%d}）  \n"
+                    f"🔵 近 3 日最低 {show_stab['recent_low']:,.0f}（{show_stab['recent_low_date']:%m/%d}）  \n"
+                    f"🟨 黃色底 ＝ 近 3 日")
+        st.caption("成交金額採用證交所數據，看相對比例。")
     if mk["active"]:
         (st.warning if mk["risk"] else st.success)(
             "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
@@ -335,7 +340,7 @@ if target:
                                 st.warning("尚未符合條件，以下試算僅供參考。")
                             show_plan(plan, capital)
 
-                foldable(f"{code}_{sname}", f"{'✅' if r['ok'] else '❌'} {label}｜{'符合' if r['ok'] else '尚未符合'}｜{applicable}",
-                         body, default=r["ok"])
+                foldable(f"{code}_{sname}", label, body, default=r["ok"],
+                         status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
 
 st.caption("最後更新：2026 年 10 月")
