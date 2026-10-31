@@ -182,7 +182,9 @@ def fmt_row(name, symbol, curr, prev, note=""):
 
 
 def code(lines):
-    return "```\n" + "\n".join(lines) + "\n```"
+    # 行尾補幾個「看不見的空格」(U+2800)，讓 Telegram 右上角的 </> 複製鈕不會蓋到最後一個字
+    return "```\n" + "\n".join(ln + "\u2800" * 3 for ln in lines) + "\n```"
+
 
 
 def run():
@@ -239,6 +241,8 @@ def run():
     ]
     if now.weekday() >= 5:
         top.append("📌 週末｜以下為最後交易日資料，非即時行情")
+    top.append("🟢 利多　🔴 利空")
+
 
     icon, text, drows, score, max_score, veto = judge(pcts, levels)
     tbl = [f"{pad(n)} {v:>7} {p:>+3d}" for n, v, p in drows]
