@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import config as cfg
 import strategies as st
-from data import fetch_market, fetch_prices, get_directory, turnover_audit
+from data import fetch_market, fetch_prices, get_directory
 from notify import send_photo, send_telegram
 
 MAX_LIST = 12   # 每套策略最多列出幾檔（依 20 日均成交金額由大到小）
@@ -64,13 +64,13 @@ def market_block(mk):
             ok = lambda b: "✅" if b else "❌"
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             out.append(f"🧱 *止跌確認*　{'✅ 通過' if s['ok'] else '❌ 未通過'}（兩項都要過）")
-            out.append(
-                f"{ok(s['no_break'])} 1. 近 3 日沒有再創新低\n"
-                f"　近 3 日最低 {s['recent_low']:,.0f}（{s['recent_low_date']:%m/%d}）"
-                f"{'高於' if s['no_break'] else '低於或等於'}前低 {s['prior_low']:,.0f}（{s['prior_low_date']:%m/%d}）\n"
-                f"{ok(s['vol_ok'])} 2. 近 3 日有大量承接\n"
-                f"　近 3 日最大量 = 爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需要 100% 以上"
-            )
+            # 兩列的數字欄位寬度一樣、標籤都是 3 個中文字，所以會對齊
+            out.append(code_block([
+                f"不破低　{s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f}　{ok(s['no_break'])}",
+                f"量承接　{ratio:>5.0f}% {'≥' if s['vol_ok'] else '<'} {100:>5}%　{ok(s['vol_ok'])}",
+            ]))
+            out.append(f"不破低＝近 3 日最低 vs 前低（{s['prior_low_date']:%m/%d}）\n"
+                       f"量承接＝近 3 日最大量 vs 爆量下跌日（{s['dump_date']:%m/%d}）")
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
         out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明，請縮小部位" if mk["risk"] else ""))
@@ -134,26 +134,45 @@ def funnel_lines(funnel, liquid):
     return out
 
 
-def _md(t):
-    """名稱裡若有 Telegram Markdown 的特殊符號就跳脫"""
-    for ch in "_*`[":
-        t = t.replace(ch, "\\" + ch)
-    return t
+def _w(t):
+    """估算顯示寬度：中文約 1.68 個半形字寬（iPhone 的等寬字型），其他 1"""
+    return sum(1.68 if ord(c) > 0x2E80 else 1 for c in t)
+
+
+def _padr(t, width):
+    """靠左對齊，用全形空白＋半形空白把寬度補到 width"""
+    d = width - _w(t)
+    if d <= 0:
+        return t
+    n = int(d // 1.68)
+    return t + "\u3000" * n + " " * round(d - n * 1.68)
+
+
+def tv_link(sym):
+    """TradingView 連結（台股：上市 TWSE、上櫃 TPEX）"""
+    code = sym.split(".")[0]
+    ex = "TPEX" if sym.endswith(".TWO") else "TWSE"
+    return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
 
 
 def strategy_block(name, items, names, risk, note=""):
     title = f"*{TITLES[name]}*　{len(items)} 檔" + ("　⚠️標示風險" if risk else "") + note
-    cards = []
-    for h in items[:MAX_LIST]:
+    shown = items[:MAX_LIST]
+    labels = []
+    for h in shown:
         code = h["sym"].split(".")[0]
-        p = h["plan"]
         broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
-        cards.append(
-            f"*{code} {_md(names.get(h['sym'], code))}*　現價 {fp(h['r']['close'])}" + ("　↑已突破" if broke else "") + "\n"
-            f"　突破 {fp(p['key'])}　停損 {fp(p['stop1'])}　目標 {fp(p['targets'][0][1])}"
-        )
+        labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else ""))
+    W = max([_w("代號 名稱")] + [_w(x) for x in labels])
+    cols = ["現價", "突破", "停損", "目標"]
+    lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
+    for h, lab in zip(shown, labels):
+        p = h["plan"]
+        nums = [h["r"]["close"], p["key"], p["stop1"], p["targets"][0][1]]
+        lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
+    links = "　".join(tv_link(h["sym"]) for h in shown)
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    return title + "\n\n" + "\n\n".join(cards) + more
+    return title + "\n" + code_block(lines) + more + "\n📊 TradingView 線圖：" + links
 
 
 def run():
@@ -199,13 +218,6 @@ def run():
                 shown = True
         if not shown:
             parts.append("今晚沒有符合的股票。")
-    if DIAG:
-        try:
-            parts.append("🔬 *成交額核對（暫時，找看盤軟體的算法）*\n" + "\n".join(turnover_audit()))
-        except Exception as e:
-            print("成交額對照失敗：", repr(e))
-        parts.append("🔬 *各條件通過檔數*\n" + "\n".join(funnel_lines(funnel, liquid)))
-
     # 只有出問題時才顯示提醒
     warn = []
     if directory.attrs.get("fallback"):
