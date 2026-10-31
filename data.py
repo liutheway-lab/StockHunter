@@ -107,23 +107,23 @@ def fetch_mi_index_amounts(day):
     return out
 
 
-def turnover_compare(mkt_df, n=3):
-    """診斷用：最近 n 個交易日，FMTQIK 成交金額與 MI_INDEX 各口徑並排（億元）。每個日期一行文字"""
-    lines = []
-    for day in list(mkt_df.index[-n:]):
-        base = mkt_df["Volume"].get(day)
-        parts = [f"FMTQIK {base / 1e8:,.0f}" if base == base and base else "FMTQIK -"]
-        try:
-            amts = fetch_mi_index_amounts(day)
-            for name, v in amts.items():
-                if any(k in name for k in ("總計", "合計", "一般股票")):
-                    parts.append(f"{name} {v / 1e8:,.0f}")
-            if len(parts) == 1:
-                parts.append("MI_INDEX 沒有對應項目")
-        except Exception as e:
-            parts.append(f"MI_INDEX 失敗 {type(e).__name__}")
-        lines.append(f"{day:%m/%d}　" + "｜".join(parts))
-        time.sleep(2)
+def turnover_audit(day="2026-10-30", target_yi=8777.3, tol=0.15):
+    """暫時的診斷：列出證交所當天所有成交金額項目，並找出哪些項目加起來等於看盤軟體的數字"""
+    from itertools import combinations
+    day = pd.Timestamp(day)
+    amts = fetch_mi_index_amounts(day)
+    lines = [f"{day:%Y/%m/%d} 看盤軟體 {target_yi:,.1f} 億", "證交所各項目（億）："]
+    names = list(amts)
+    for n in names:
+        lines.append(f"・{n}　{amts[n] / 1e8:,.1f}")
+    found = []
+    for k in range(1, min(len(names), 4) + 1):
+        for combo in combinations(names, k):
+            if abs(sum(amts[n] for n in combo) / 1e8 - target_yi) <= tol:
+                found.append(" ＋ ".join(combo))
+    lines.append("")
+    lines.append("加起來等於看盤軟體數字的組合：" if found else "沒有任何組合等於看盤軟體數字")
+    lines += [f"・{f}" for f in found[:10]]
     return lines
 
 
