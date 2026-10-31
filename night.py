@@ -179,6 +179,13 @@ def run():
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     ratios = cfg.TRANCHES
 
+    if now.weekday() == 0:       # 每週一：掃描前先附上說明書（新加入的人才看得到）
+        try:
+            from guide import build
+            send_telegram(build())
+        except Exception as e:
+            print("說明書傳送失敗：", repr(e))
+
     try:
         mkt = fetch_market()
         mk = st.market_summary(mkt)
