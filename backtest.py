@@ -44,16 +44,17 @@ def market_states(mkt):
 
 
 # ================= 單筆交易模擬 =================
-def simulate(O, H, L, C, i, plan, mode, max_hold=MAX_HOLD, fee=None):
+def simulate(O, H, L, C, i, plan, mode, max_hold=MAX_HOLD, fee=None, entry_px=None):
     """訊號在第 i 天收盤後出現，第 i+1 天開盤進場。回傳交易 dict，不能進場則回傳 None。
+    entry_px：當天盤中就買（追價或收盤買）時給買價，這時第 i 天就是進場日，當天不檢查出場（不知道低點是在買之前還是之後）。
     O/H/L/C 是 numpy 陣列。plan 來自 strategies.plan_for。"""
     fee = cfg.FEE_RT if fee is None else fee
     n = len(C)
-    j = i + 1
+    j = i if entry_px is not None else i + 1
     if j >= n:
         return None
     stop1, target = float(plan["stop1"]), float(plan["targets"][0][1])
-    p1 = float(O[j])
+    p1 = float(entry_px) if entry_px is not None else float(O[j])
     if p1 <= stop1 or p1 >= target:       # 開盤就跳空到出場價下或目標價上，不進場
         return None
     if mode == "single":
@@ -77,6 +78,14 @@ def simulate(O, H, L, C, i, plan, mode, max_hold=MAX_HOLD, fee=None):
     last = min(j + max_hold - 1, n - 1)
     for d in range(j, last + 1):
         o, h, l, c = float(O[d]), float(H[d]), float(L[d]), float(C[d])
+        if entry_px is not None and d == j:                # 盤中買進的那天：只處理加碼，不判斷出場
+            while filled < len(weights) and h >= levels[filled]:
+                fill(filled, max(levels[filled], p1))
+                if filled >= 2 and plan.get("stop_after2") and mode != "ladder_stop1":
+                    stop = max(stop, float(plan["stop_after2"]))
+            if d == last:
+                exit_px, reason, d_exit = c, "time", d
+            continue
         if l <= stop:                                     # 先看出場（保守）
             exit_px = o if (d > j and o <= stop) else stop
             reason, d_exit = "stop", d
@@ -89,7 +98,9 @@ def simulate(O, H, L, C, i, plan, mode, max_hold=MAX_HOLD, fee=None):
         while filled < len(weights) and h >= levels[filled]:
             price = max(levels[filled], o) if d > j or levels[filled] <= o else levels[filled]
             fill(filled, price)
-            if mode == "ladder_avg" and filled >= 2:
+            if filled >= 2 and plan.get("stop_after2") and mode != "ladder_stop1":
+                stop = max(stop, float(plan["stop_after2"]))     # 創高拉回、噴後整理：上移到前波高點下 5%
+            elif mode == "ladder_avg" and filled >= 2:
                 stop = max(stop, st.tick(cs / sh, "ceil"))
             elif mode == "ladder_stop2" and filled >= 2:
                 stop = max(stop, float(plan["stop2"]))
@@ -111,11 +122,12 @@ def prescreen(df, ratios):
     c, h, l, v = (df[x] for x in ("Close", "High", "Low", "Volume"))
     mav20, ema20, ema60 = df["MAV20"], df["EMA20"], df["EMA60"]
     n, k = cfg.STAB_LOOKBACK, cfg.STAB_DAYS
-    t = st.norm_ratios(ratios)
-    max_ratio = st.solve_max_entry_ratio(t[0], t[1])
     pre = {}
-    roll_hi = h.rolling(cfg.PB_LOOKBACK + 3).max()
-    pre["pullback"] = ((ema20 > ema60) & (c >= ema60 * 0.98) & (v <= mav20) & (c <= max_ratio * roll_hi))
+    o = df["Open"]
+    attack = (c > o) & (c > h.shift(1))                  # 攻擊日一定是紅 K，且收盤高於昨天最高（盤整高點至少是昨天的高）
+    chase = h >= c.shift(1) * (1 + cfg.CHASE_GAIN)      # 盤中有漲到 4%
+    pre["pullback"] = attack & (ema20 > ema60) & (c >= c.shift(1) * (1 + cfg.ATTACK_MIN_GAIN))
+    pre["pullback_chase"] = chase & (ema20 > ema60)
     neck = h.shift(1).rolling(cfg.BO_PLATFORM).max()
     pre["breakout"] = ((c > neck) & (v >= cfg.BO_VOL_MULT * mav20) & (c >= ema60) & (ema20 > ema20.shift(1))
                        & (c <= (1 + cfg.BO_MAX_RISE) * l.rolling(60).min()))
@@ -124,15 +136,20 @@ def prescreen(df, ratios):
     pre["dry"] = ((vol3 <= cfg.DRY_VOL_RATIO * mav20) & (l.rolling(k).min() > prior_low))
     burst = ((c / c.shift(3) - 1) >= cfg.FLAG_BURST_3D) | ((c / c.shift(1) - 1) >= cfg.FLAG_BURST_1D)
     span = cfg.FLAG_WINDOW - cfg.FLAG_MIN_CONSOL
-    pre["flag"] = burst.astype(float).rolling(span).max().shift(cfg.FLAG_MIN_CONSOL + 1).fillna(0) > 0
+    had_burst = burst.astype(float).rolling(span + 2).max().shift(cfg.FLAG_MIN_CONSOL + 1).fillna(0) > 0
+    pre["flag"] = attack & had_burst & (c >= c.shift(1) * (1 + cfg.ATTACK_MIN_GAIN))
+    pre["flag_chase"] = chase & had_burst
     return {k_: v_.fillna(False).to_numpy(bool) for k_, v_ in pre.items()}
 
 
 
 # ================= 單一股票回測 =================
-def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_active=False):
+def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_active=False, entry_mode="chase"):
     """raw：個股日線（不還原）；mkt：加權指數日線；mstate：market_states(mkt)。
-    回傳每一筆交易的 DataFrame（日期、策略、進出場價、報酬…）"""
+    entry_mode（只影響創高拉回、噴後整理）：
+      chase＝你的習慣：盤整條件成立時，盤中漲到 4% 且突破盤整高點就追（不管收盤是不是攻擊日）
+      close＝收盤確認是攻擊日才用收盤價買
+    其他兩套策略一律訊號隔天開盤買。回傳每一筆交易的 DataFrame"""
     df = st.add_indicators(raw)
     n = len(df)
     if n < 80:
@@ -142,27 +159,41 @@ def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_acti
     dates = df.index
     pre = prescreen(df, ratios)
     busy, rows = {}, []
+    funcs = {"pullback": lambda i: st.check_pullback(df, i, ratios), "flag": lambda i: st.check_flag(df, i),
+             "breakout": lambda i: st.check_breakout(df, i), "dry": lambda i: st.check_dry(df, i, mkt)}
     for i in range(69, n - 1):
         if not liq[i] or (start is not None and dates[i] < start):
             continue
         layer, active, _ = mstate.get(dates[i], (0, frozenset(), False))
         for name in STRATS:
-            if not pre[name][i] or busy.get(name, -1) >= i:
+            if busy.get(name, -1) >= i or (only_active and name not in active):
                 continue
-            if only_active and name not in active:
+            attack_strat = name in ("pullback", "flag")
+            key = f"{name}_chase" if attack_strat and entry_mode == "chase" else name
+            if not pre[key][i]:
                 continue
-            if name == "pullback":
-                r = st.check_pullback(df, i, ratios)
-            elif name == "flag":
-                r = st.check_flag(df, i)
-            elif name == "breakout":
-                r = st.check_breakout(df, i)
+            r = funcs[name](i)
+            if r is None:
+                continue
+            entry_px = None
+            if attack_strat and entry_mode == "chase":
+                if not r.get("pre_ok") or "chase_px" not in r:
+                    continue
+                trig = float(r["chase_px"])
+                if H[i] < trig:
+                    continue
+                entry_px = max(trig, float(O[i]))               # 開盤就跳空超過追價點 → 用開盤價買
+                plan = st.attack_plan(r, entry=entry_px)
+            elif attack_strat:
+                if not r["ok"]:
+                    continue
+                entry_px = float(C[i])                           # 收盤確認攻擊日，用收盤價買
+                plan = st.attack_plan(r, entry=entry_px)
             else:
-                r = st.check_dry(df, i, mkt)
-            if r is None or not r["ok"]:
-                continue
-            plan = st.plan_for(name, r, ratios)
-            t = simulate(O, H, L, C, i, plan, mode)
+                if not r["ok"]:
+                    continue
+                plan = st.plan_for(name, r, ratios)
+            t = simulate(O, H, L, C, i, plan, mode, entry_px=entry_px)
             if t is None:
                 continue
             busy[name] = t["exit_idx"]
