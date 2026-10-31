@@ -27,8 +27,23 @@ def guide_markdown():
     return t.replace("\n", "  \n")
 
 
-with st.expander("📖 規則說明書"):
-    st.markdown(guide_markdown())
+def _toggle(key):
+    st.session_state[key] = not st.session_state.get(key, False)
+
+
+def foldable(key, title, body, default=False):
+    """可展開／收合的區塊：標題是一顆按鈕，展開後最下面也有一顆收合鈕"""
+    if key not in st.session_state:
+        st.session_state[key] = default
+    opened = st.session_state[key]
+    st.button(f"{'▼' if opened else '▶'}　{title}", key=f"open_{key}", on_click=_toggle, args=(key,),
+              use_container_width=True)
+    if opened:
+        body()
+        st.button("▲　收合", key=f"close_{key}", on_click=_toggle, args=(key,), use_container_width=True)
+
+
+foldable("guide", "📖 規則說明書", lambda: st.markdown(guide_markdown()))
 
 
 # ---------- 資料（快取，避免每次操作都重抓） ----------
@@ -48,18 +63,37 @@ def load_directory():
     return lookup.load_directory()
 
 
-def plan_table(p):
+def shares_text(n):
+    """股數 → 『2 張 300 股』"""
+    if n <= 0:
+        return "資金不足 1 股"
+    lots, odd = divmod(n, 1000)
+    parts = ([f"{lots} 張"] if lots else []) + ([f"{odd} 股"] if odd else [])
+    return " ".join(parts) + f"（{n:,} 股）" if lots else f"{n:,} 股"
+
+
+def plan_cards(p, capital):
+    """每一筆：價位、投入金額、可買股數、累計均價"""
     r = p["ratios"]
-    return (
-        "| 階段 | 動作 | 價位 | 資金比例 | 累計均價 |\n| :--- | :--- | :--- | :--- | :--- |\n"
-        f"| **第 1 筆** | 進場 | `{p['e']:.2f}` | {r[0] * 100:.0f}% | `{p['e']:.2f}` |\n"
-        f"| **第 2 筆** | {p['key_label']} | `{p['b']:.2f}` | {r[1] * 100:.0f}% | `{p['avg2']:.2f}` |\n"
-        f"| **第 3 筆** | 突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}% | `{p['b2']:.2f}` | {r[2] * 100:.0f}% | `{p['avg3']:.2f}` |"
-    )
+    rows = [("① 進場", p["e"], r[0], p["e"]),
+            ("② 突破價", p["b"], r[1], p["avg2"]),
+            (f"③ 突破價+{(cfg.EXT_RATIO - 1) * 100:.0f}%", p["b2"], r[2], p["avg3"])]
+    out, total_sh, total_cost = [], 0, 0.0
+    for label, price, ratio, avg in rows:
+        amt = capital * ratio
+        sh = int(amt // price) if price > 0 else 0
+        total_sh += sh
+        total_cost += sh * price
+        out.append(f"**{label}　{price:.2f}**  \n"
+                   f"　投入 {amt:,.0f} 元（{ratio * 100:.0f}%）  \n"
+                   f"　可買 {shares_text(sh)}  \n"
+                   f"　累計均價 {avg:.2f}")
+    out.append(f"**合計**　約 {total_sh:,} 股，實際投入 {total_cost:,.0f} 元（剩 {capital - total_cost:,.0f} 元）")
+    return "\n\n".join(out)
 
 
-def show_plan(p):
-    st.markdown(plan_table(p))
+def show_plan(p, capital):
+    st.markdown(plan_cards(p, capital))
     c1, c2, c3 = st.columns(3)
     c1.metric("第 1 筆停損價", f"{p['stop1']:.2f}")
     c2.metric("第 2 筆防守價", f"{p['stop2']:.2f}")
@@ -85,26 +119,55 @@ except Exception as e:
     mkt_df = None
     st.error(f"大盤資料取得失敗：{e}")
 
+LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
+
 if mk:
     c1, c2 = st.columns(2)
     c1.metric("加權指數", f"{mk['close']:,.1f}")
-    c2.metric("大盤層級", f"第 {mk['layer']} 層", mk["layer_name"], delta_color="off")
-    for line in S.describe_market(mk):
-        st.markdown(line)
+    c2.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
+    ma = mk["ma"]
+    st.markdown(f"收盤 `{mk['close']:,.0f}`　MA5 `{ma[5]:,.0f}`  \n"
+                f"MA10 `{ma[10]:,.0f}`　MA20 `{ma[20]:,.0f}`  \n"
+                f"MA60 `{ma[60]:,.0f}`")
+
     show_stab = mk["stab"] if mk["layer"] in (4, 5) else None
+    if show_stab is not None or mk["layer"] in (4, 5):
+        s_ = mk["stab"]
+        if s_ is None:
+            st.markdown("🧱 **止跌確認**：資料不足")
+        elif s_["vol_missing"]:
+            st.markdown("🧱 **止跌確認**：❌ 無法確認（大盤成交金額抓不到）")
+        else:
+            ok = lambda b: "✅" if b else "❌"
+            ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
+            st.markdown(f"🧱 **止跌確認**　{'✅ 通過' if s_['ok'] else '🔴 尚未止跌'}（兩項都要通過）")
+            st.markdown(
+                f"{ok(s_['no_break'])} **1. 不破低**  \n"
+                f"　近 3 日最低 {s_['recent_low']:,.0f}（{s_['recent_low_date']:%m/%d}）  \n"
+                f"　前低 {s_['prior_low']:,.0f}（{s_['prior_low_date']:%m/%d}）  \n"
+                f"　{'沒有跌破前低' if s_['no_break'] else '已跌破或貼近前低'}"
+            )
+            st.markdown(
+                f"{ok(s_['vol_ok'])} **2. 量承接**  \n"
+                f"　近 3 日最大量 ＝ 爆量下跌日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%  \n"
+                f"　需要 100% 以上"
+            )
+
     st.plotly_chart(charts.plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                     use_container_width=True, config={"displayModeBar": False})
     if show_stab:
-        st.caption("虛線＝前低，黃色區＝近 3 日。成交金額採用證交所數據，看相對比例。")
+        st.caption("橘色虛線＝前低，黃色區＝近 3 日。成交金額採用證交所數據，看相對比例。")
     if mk["active"]:
         (st.warning if mk["risk"] else st.success)(
             "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
     else:
-        st.error("🛑 大盤空頭尚未止跌確認，目前不新進場。")
+        st.error("🔴 尚未止跌，不建立多頭部位")
 
 # ==================== 資金比例 ====================
 st.divider()
-st.subheader("⚙️ 三段投入資金比例")
+st.subheader("⚙️ 資金與三段投入比例")
+capital = st.number_input("可用資金（元）", min_value=10000, max_value=100_000_000, value=1_000_000,
+                          step=50000, key="capital")
 if "w1" not in st.session_state:
     st.session_state.w1 = int(round(cfg.TRANCHES[0] * 100))
     st.session_state.w2 = int(round(cfg.TRANCHES[1] * 100))
@@ -115,16 +178,20 @@ def set_w(a, b):
 
 
 b1, b2, b3 = st.columns(3)
-b1.button("平衡 30/40/30", use_container_width=True, on_click=set_w, args=(30, 40))
-b2.button("重壓 30/50/20", use_container_width=True, on_click=set_w, args=(30, 50))
-b3.button("右側 20/50/30", use_container_width=True, on_click=set_w, args=(20, 50))
+b1.button("平衡策略 30/40/30", use_container_width=True, on_click=set_w, args=(30, 40))
+b2.button("突破策略 30/50/20", use_container_width=True, on_click=set_w, args=(30, 50))
+b3.button("順勢策略 20/50/30", use_container_width=True, on_click=set_w, args=(20, 50))
 cw1, cw2, cw3 = st.columns(3)
 w1 = cw1.number_input("第 1 筆 (%)", 5, 90, step=5, key="w1")
 w2 = cw2.number_input("第 2 筆 (%)", 0, max(0, 100 - w1), step=5, key="w2")
 w3 = max(0, 100 - w1 - w2)
 cw3.metric("第 3 筆 (%)", f"{w3}%")
 ratios = S.norm_ratios((w1, w2, w3))
-st.caption(f"{w1}% + {w2}% + {w3}% = 100%。比例會影響「創高拉回」的進場區間和所有價位試算。")
+st.markdown(f"**各階段可投入**  \n"
+            f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）  \n"
+            f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）  \n"
+            f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）")
+st.caption("比例會影響「創高拉回」的進場區間；資金會用來試算每一筆可以買幾股。")
 
 # ==================== 個股診斷 ====================
 st.divider()
@@ -153,10 +220,14 @@ elif query:
         st.warning("找不到符合的股票，請確認名稱，或改用 4 碼代號。")
 
 if st.button("🚀 開始診斷", use_container_width=True, disabled=choice is None):
-    code = choice["code"]
-    with st.spinner(f"載入 {code} {choice['name']} 的行情..."):
+    st.session_state["target"] = choice      # 記住結果，按收合鈕時才不會消失
+
+target = st.session_state.get("target")
+if target:
+    code = target["code"]
+    with st.spinner(f"載入 {code} {target['name']} 的行情..."):
         df = None
-        for sfx in ([choice["suffix"]] if choice["suffix"] else [".TW", ".TWO"]):
+        for sfx in ([target["suffix"]] if target["suffix"] else [".TW", ".TWO"]):
             try:
                 h = load_stock(code, sfx)
             except Exception:
@@ -171,13 +242,13 @@ if st.button("🚀 開始診斷", use_container_width=True, disabled=choice is N
         st.error(f"查無代號【{code}】的歷史資料，請確認是否為有效掛牌標的。")
     else:
         ev = S.evaluate(df, mkt_df, ratios)
-        name = choice["name"] or code
+        name = target["name"] or code
         close = float(df["Close"].iloc[-1])
         chg = (close / float(df["Close"].iloc[-2]) - 1) * 100
         st.markdown(f"### {'🔴' if chg > 0 else '🟢'} {code} {name}｜現價 `{close:.2f}`（{chg:+.2f}%）")
-        if choice["industry"]:
-            st.caption(f"產業別：{choice['industry']}")
-        ex = "TPEX" if choice.get("suffix") == ".TWO" else "TWSE"
+        if target["industry"]:
+            st.caption(f"產業別：{target['industry']}")
+        ex = "TPEX" if target.get("suffix") == ".TWO" else "TWSE"
         st.markdown(f"[📊 在 TradingView 開啟線圖](https://www.tradingview.com/chart/?symbol={ex}%3A{code})")
 
         if "error" in ev:
@@ -194,14 +265,14 @@ if st.button("🚀 開始診斷", use_container_width=True, disabled=choice is N
                 if r is None:
                     st.caption(f"{label}：資料不足，無法判斷")
                     continue
-                applicable = "大盤目前適用" if r["active"] else "大盤目前不適用"
-                with st.expander(f"{'✅' if r['ok'] else '❌'} {label}｜{'符合' if r['ok'] else '尚未符合'}｜{applicable}",
-                                 expanded=r["ok"] or sname == "pullback"):
+                applicable = "大盤適用" if r["active"] else "大盤不適用"
+
+                def body(r=r, sname=sname):
                     for i, (cname, cok, detail) in enumerate(r["checks"], 1):
-                        st.markdown(f"{'✅' if cok else '❌'} {i}. **{cname}**：{detail}")
+                        st.markdown(f"{'✅' if cok else '❌'} **{i}. {cname}**  \n　{detail}")
                     if sname == "pullback":
-                        st.markdown(f"🎯 **理想第 1 筆進場區**：`{r['zone_lo']}` ~ `{r['zone_hi']}`"
-                                    f"（依你的比例 {w1}/{w2}/{w3} 推算，前高 `{r['key']:.2f}`）")
+                        st.markdown(f"🎯 **理想第 1 筆進場區**　`{r['zone_lo']}` ~ `{r['zone_hi']}`  \n"
+                                    f"　依你的比例 {w1}/{w2}/{w3} 推算，前高 `{r['key']:.2f}`")
                         if r["in_zone"]:
                             st.caption("現價已在進場區內，以下以現價為第 1 筆試算。")
                         elif r["close"] > r["zone_hi"]:
@@ -211,4 +282,7 @@ if st.button("🚀 開始診斷", use_container_width=True, disabled=choice is N
                     if r["ok"] or sname == "pullback":
                         if not r["active"] and r["ok"]:
                             st.warning("型態符合，但目前大盤層級不適用這套策略。")
-                        show_plan(S.plan_for(sname, r, ratios))
+                        show_plan(S.plan_for(sname, r, ratios), capital)
+
+                foldable(f"{code}_{sname}", f"{'✅' if r['ok'] else '❌'} {label}｜{'符合' if r['ok'] else '尚未符合'}｜{applicable}",
+                         body, default=r["ok"])
