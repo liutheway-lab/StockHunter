@@ -23,7 +23,7 @@ import strategies as S
 
 st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="centered")
 st.title("📈 台股戰情室")
-st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}｜大盤五層 × 四套策略")
+st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}")
 
 def guide_markdown():
     """說明書原本是 Telegram 格式；轉成網頁 Markdown：*粗體* → **粗體**，每個換行都保留"""
@@ -56,6 +56,16 @@ def _scroll_script(key, title):
       if (el) el.scrollIntoView({{block: 'center'}});
     }}, 40);
     </script>""", height=0)
+
+
+def L(*parts):
+    """把一段話拆成幾行，每行都短，手機上不會被硬切斷"""
+    return "  \n".join(p for p in parts if p)
+
+
+def brk(t):
+    """在逗號、分號後面換行，避免長句被螢幕寬度切在奇怪的地方"""
+    return re.sub(r"([，；])", r"\1  \n", t)
 
 
 _fragment = getattr(st, "fragment", None) or (lambda f: f)
@@ -131,19 +141,38 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                           x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.18)",
                           line_width=0, layer="above")
 
-        def mark(day, val, text, color, ax, ay):
+        def mark(day, val, text, color, ax, ay, row=1):
             if day in dates:
-                # 只拉一條細細的箭頭，在末端寫數字（不放標記）
-                fig.add_annotation(x=day, y=val, xref="x", yref="y", text=text, showarrow=True,
+                # 只拉一條細細的箭頭，在末端寫文字（不放標記）
+                fig.add_annotation(x=day, y=val, text=text, showarrow=True, row=row, col=1,
                                    arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=color,
                                    ax=ax, ay=ay, font=dict(color=color, size=12),
                                    bgcolor="rgba(17,17,17,0.85)", borderpad=2)
 
-        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"], f"前低 {stab['prior_low']:,.0f}",
-             "#ff9f1a", -70, 40)
+        # 前低：細虛線橫跨整張圖 + 箭頭
+        fig.add_hline(y=stab["prior_low"], row=1, col=1,
+                      line=dict(color="rgba(200,200,200,0.55)", width=1, dash="dash"))
+        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
+             f"前低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff9f1a", -70, 40)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"近3日低 {stab['recent_low']:,.0f}", "#00e5ff", -90, 95)
+                 f"近3日最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00e5ff", -90, 95)
+
+        # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
+        dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
+        if dd is not None and dv:
+            dv_b = dv / 1e8
+            fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 1.35], row=2, col=1)
+            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(200,200,200,0.55)", width=1, dash="dash"))
+            dkey = f"{dd:%m/%d}"
+            if dkey in dates:
+                i = dates.index(dkey)
+                fig.add_shape(type="rect", x0=i - 0.5, x1=i + 0.5, y0=0, y1=dv_b, row=2, col=1,
+                              line=dict(color="#ff9f1a", width=1.5), fillcolor="rgba(0,0,0,0)")
+                mark(dkey, dv_b, f"爆量下跌日（{dkey}）", "#ff9f1a", -75, -22, row=2)
+            if rv:
+                mark(f"{stab['recent_end']:%m/%d}", rv / 1e8, f"近3日最大量＝爆量日的 {rv / dv * 100:.0f}%",
+                     "#dddddd", -80, -45, row=2)
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
@@ -247,19 +276,21 @@ def plan_view(p, capital, close):
         pnl = sh_k * exit_p - cost_k - cost_k * cfg.FEE_RT
         out.append((lab, px(price), f"{shares[k]:,}", px(avgs[k]), px(exit_p), f"{pnl:+,.0f}"))
     show_table(["階段", "進場價", "股數", "累計均價", "出場價", "出場損益"], out)
-    st.caption(f"② 突破＝突破價；③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%。"
-               f"出場價與損益是買到該階段後的累計狀況。合計投入 {sum(costs):,.0f} 元、{sum(shares):,} 股，"
-               f"可用資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元。")
-    st.caption("買進第 2 筆（突破）後，出場價拉到累計均價，損益只剩手續費與證交稅（來回約 "
-               f"{cfg.FEE_RT * 100:.1f}%）。若跳空跌破出場價，實際虧損會比表上多。")
+    st.caption(L(f"② 突破＝突破價　③ 加碼＝突破價 +{(cfg.EXT_RATIO - 1) * 100:.0f}%",
+                 "出場價與損益＝買到該階段後的累計狀況",
+                 f"合計投入 {sum(costs):,.0f} 元、{sum(shares):,} 股",
+                 f"可用資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元"))
+    st.caption(L("買進第 2 筆後，出場價拉到累計均價",
+                 f"損益只剩手續費與證交稅（來回約 {cfg.FEE_RT * 100:.1f}%）",
+                 "若跳空跌破出場價，實際虧損會比表上多"))
 
     st.markdown(f"🎯 **目標價　{px(p['targets'][0][1])}**（距現價 {gap(p['targets'][0][1])}）")
     if p.get("stop1_note"):
-        st.caption(f"第 1 筆出場依據：{p['stop1_note']}")
+        st.caption(L("第 1 筆出場依據：", brk(p["stop1_note"])))
     if len(p["targets"]) > 1:
-        st.caption("目標價：" + "；".join(f"{lbl} {px(v)}" for lbl, v in p["targets"]))
+        st.caption(L(*[f"{lbl} {px(v)}" for lbl, v in p["targets"]]))
     for n in p.get("notes", []):
-        st.caption(n)
+        st.caption(brk(n))
 
 
 def show_plan(p, capital, close):
@@ -310,8 +341,7 @@ if mk:
     st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                     use_container_width=True, config={"displayModeBar": False})
     if show_stab:
-        st.caption("黃色底＝近 3 日。")
-        st.caption("成交金額採用證交所數據，看相對比例。")
+        st.caption(L("黃色底＝近 3 日　虛線＝止跌確認的門檻", "成交金額採用證交所數據，看相對比例"))
     if mk["active"]:
         (st.warning if mk["risk"] else st.success)(
             "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
@@ -339,6 +369,7 @@ def get_scan():
 def pick(item):
     """點推薦清單的股票：帶入下面的個股診斷"""
     st.session_state["target"] = {k: item.get(k, "") for k in ("code", "name", "industry", "suffix", "market")}
+    st.session_state["query"] = item["code"]      # 同步換掉查詢欄，避免之後按「開始診斷」又跳回舊的
     st.session_state["_scroll_diag"] = True
 
 
@@ -350,21 +381,22 @@ def rec_buttons(prefix, strategy, items, limit=15):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
     if len(items) > limit:
-        st.caption(f"還有 {len(items) - limit} 檔未列出（依成交金額排序）")
+        st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
 st.divider()
 st.subheader("🌟 今日推薦")
 scan = get_scan()
 if not scan:
-    st.info("還沒有夜間掃描資料。每個交易日 22:30 掃描完成後，這裡就會出現推薦。")
+    st.info(L("還沒有夜間掃描資料", "每個交易日 22:30 掃描完成後，這裡就會出現推薦"))
 else:
     hits, active = scan["hits"], scan["active"]
-    st.caption(f"資料日 {scan['data_date']}｜夜間掃描 {scan['generated_at']}｜依成交金額由大到小｜點股票會帶入下方診斷")
+    st.caption(L(f"資料日 {scan['data_date']}｜夜間掃描 {scan['generated_at']}",
+                 "依成交金額由大到小｜點股票會帶入下方診斷"))
     if active:
         names_on = "、".join(cfg.STRATEGY_NAMES[a] for a in active)
         (st.warning if scan["risk"] else st.success)(
-            f"大盤第 {scan['layer']} 層・{scan['layer_name']}，啟用：{names_on}" + ("（方向未明，請縮小部位）" if scan["risk"] else ""))
+            L(f"大盤第 {scan['layer']} 層・{scan['layer_name']}", f"啟用：{names_on}" + ("（方向未明，請縮小部位）" if scan["risk"] else "")))
         for name in ORDER:
             if name in active:
                 items = hits.get(name, [])
@@ -375,16 +407,16 @@ else:
                         st.caption("今天沒有符合的股票。")
                 foldable(f"recfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔", rec_body, default=bool(items))
     else:
-        st.error(f"🔴 尚未止跌，不建立多頭部位。已讀取 {scan['data_date']} 的夜間掃描：今日無推薦。")
+        st.error(L("🔴 尚未止跌，不建立多頭部位", f"已讀取 {scan['data_date']} 夜間掃描：今日無推薦"))
 
     watch = [(n, hits.get(n, [])) for n in ORDER if n not in active and hits.get(n)]
     n_active = sum(len(hits.get(a_, [])) for a_ in active)
     if active and n_active == 0:
-        st.info(f"✅ 已讀取 {scan['data_date']} 的夜間掃描：今日無推薦（啟用的策略都沒有符合的股票）。")
+        st.info(L(f"✅ 已讀取 {scan['data_date']} 夜間掃描", "今日無推薦：啟用的策略都沒有符合的股票"))
     if not watch:
         st.caption("👀 觀察名單：無。" if not active else "")
     if watch:
-        st.markdown("**👀 觀察名單**（型態符合，但大盤目前不適用，僅供追蹤）")
+        st.markdown(L("**👀 觀察名單**", "型態符合，但大盤目前不適用，僅供追蹤"))
         for name, items in watch:
             foldable(f"obsfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔",
                      lambda name=name, items=items: rec_buttons("obs", name, items))
@@ -395,7 +427,7 @@ st.subheader("⚙️ 資金與三段投入比例")
 capital = st.number_input("可用資金（元）", min_value=10000, max_value=100_000_000, value=1_000_000,
                           step=50000, key="capital",
                           help="可以直接輸入金額，或按 + / − 調整，每次 5 萬")
-st.caption("💡 可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）。選好標的後，各策略的分批計畫會依這筆資金換算每一筆可買的股數與出場損益。")
+st.caption(L("可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）", "選好標的後，各策略會依這筆資金", "換算每一筆可買的股數與出場損益"))
 if "w1" not in st.session_state:
     st.session_state.w1 = int(round(cfg.TRANCHES[0] * 100))
     st.session_state.w2 = int(round(cfg.TRANCHES[1] * 100))
@@ -419,7 +451,7 @@ st.markdown(f"**各階段可投入**  \n"
             f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）  \n"
             f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）  \n"
             f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）")
-st.caption("比例會影響「創高拉回」的進場區間；資金會用來試算每一筆可以買幾股。")
+st.caption(L("比例會影響「創高拉回」的進場區間", "資金用來試算每一筆可以買幾股"))
 
 # ==================== 個股診斷 ====================
 st.divider()
@@ -438,24 +470,25 @@ try:
     directory = load_directory()
 except Exception as e:
     directory = None
-    st.warning(f"官方股票清單暫時抓不到（{e}），目前只能用代號查詢。")
+    st.warning(L("官方股票清單暫時抓不到", "目前只能用代號查詢"))
 
-query = st.text_input("輸入股票代號或中文名稱（例：2330、台積電）", "台積電").strip()
+st.session_state.setdefault("query", "台積電")
+query = st.text_input("輸入股票代號或中文名稱", key="query", help="例：2330、台積電").strip()
 choice = None
 matches = lookup.resolve(query, directory) if (directory is not None and query) else []
 if len(matches) == 1:
     choice = matches[0]
 elif len(matches) > 1:
     labels = [f"{m['code']} {m['name']}（{m['industry'] or m['market']}）" for m in matches]
-    pick = st.selectbox("找到多檔，請選擇", labels)
-    choice = matches[labels.index(pick)]
+    sel = st.selectbox("找到多檔，請選擇", labels)
+    choice = matches[labels.index(sel)]
 elif query:
     q = re.sub(r"\.(TWO|TW)$", "", query.upper())
     if re.fullmatch(r"\d{4,6}", q):
         choice = {"code": q, "name": "", "industry": "", "suffix": None, "market": ""}
-        st.caption("官方清單查不到這個代號（可能是 ETF 或特別股），仍會嘗試抓行情。")
+        st.caption(L("官方清單查不到這個代號", "（可能是 ETF 或特別股），仍會嘗試抓行情"))
     else:
-        st.warning("找不到符合的股票，請確認名稱，或改用 4 碼代號。")
+        st.warning(L("找不到符合的股票", "請確認名稱，或改用 4 碼代號"))
 
 if st.button("🚀 開始診斷", use_container_width=True, disabled=choice is None):
     st.session_state["target"] = choice      # 記住結果，按收合鈕時才不會消失
@@ -477,7 +510,7 @@ if target:
             df = data._clean(df)
 
     if df is None:
-        st.error(f"查無代號【{code}】的歷史資料，請確認是否為有效掛牌標的。")
+        st.error(L(f"查無代號【{code}】的歷史資料", "請確認是否為有效掛牌標的"))
     else:
         ev = S.evaluate(df, mkt_df, ratios)
         name = target["name"] or code
@@ -493,11 +526,11 @@ if target:
             st.error(ev["error"])
         else:
             level, text = S.verdict(ev)
-            {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](text)
+            {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](brk(text))
             st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
                             config={"displayModeBar": False})
 
-            st.caption(f"以下依可用資金 {capital:,.0f} 元、比例 {w1}/{w2}/{w3} 換算股數與出場損益")
+            st.caption(L(f"以下依可用資金 {capital:,.0f} 元", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
                 label = cfg.STRATEGY_NAMES[sname]
@@ -511,17 +544,18 @@ if target:
                     md_cond([("✅" if cok else "❌", cname, detail) for cname, cok, detail in r["checks"]])
                     if sname == "pullback":
                         st.markdown(f"🎯 **理想第 1 筆進場區　{px(r['zone_lo'])} ~ {px(r['zone_hi'])}**")
-                        st.caption(f"前高 {px(r['key'])}。上緣＝第 1 筆買在這個價、第 2 筆買在前高時，前兩筆平均成本剛好是前高的 "
-                                   f"{cfg.PB_MAX_AVG_RATIO * 100:.0f}%（依你的比例 {w1}/{w2}/{w3} 推算）；"
-                                   f"下緣＝前高回檔 {cfg.PB_PULLBACK_MAX * 100:.0f}%，再跌更深視為轉弱。")
+                        st.caption(L(f"前高 {px(r['key'])}（依你的比例 {w1}/{w2}/{w3} 推算）",
+                                     f"上緣：第 1 筆買在這個價、第 2 筆買在前高時，",
+                                     f"前兩筆平均成本剛好是前高的 {cfg.PB_MAX_AVG_RATIO * 100:.0f}%",
+                                     f"下緣：前高回檔 {cfg.PB_PULLBACK_MAX * 100:.0f}%，再深就視為轉弱"))
                         if r["in_zone"]:
-                            st.caption("現價已在進場區內，以下以現價為第 1 筆試算。")
+                            st.caption("現價已在進場區內，以現價為第 1 筆試算")
                         elif r["close"] > r["zone_hi"]:
-                            st.caption(f"現價還沒回檔到進場區，以下假設第 1 筆掛在 {px(r['zone_hi'])} 試算。")
+                            st.caption(L("現價還沒回檔到進場區", f"以下假設第 1 筆掛在 {px(r['zone_hi'])} 試算"))
                         else:
-                            st.caption("回檔已超過上限，規則上不進場；以下仍以進場區上緣試算供參考。")
+                            st.caption(L("回檔已超過上限，規則上不進場", "以下仍以進場區上緣試算供參考"))
                     if r["ok"] and not r["active"]:
-                        st.warning("型態符合，但目前大盤層級不適用這套策略。")
+                        st.warning(L("型態符合", "但目前大盤層級不適用這套策略"))
                     if "key" not in r or ("stop1" not in r and sname != "pullback"):
                         st.info("目前沒有符合的型態，無法試算。")
                     else:
@@ -530,7 +564,7 @@ if target:
                             st.info("現價已低於出場價，無法試算。")
                         else:
                             if not r["ok"]:
-                                st.warning("尚未符合條件，以下試算僅供參考。")
+                                st.warning(L("尚未符合條件", "以下試算僅供參考"))
                             show_plan(plan, capital, close)
 
                 foldable(f"{code}_{sname}", label, body, default=r["ok"],
