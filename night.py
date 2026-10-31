@@ -113,7 +113,7 @@ def scan(prices, mk, ratios):
                 if r["ok"]:
                     funnel[name]["ok"] += 1
                     plan = st.plan_for(name, r, ratios)
-                    hits[name].append({"sym": sym, "r": r, "plan": plan, "turnover": r["turnover"]})
+                    hits[name].append({"sym": sym, "r": r, "plan": plan, "turnover": r["turnover"], "vl": st.vol_low(df)})
         except Exception as e:   # 單一股票出錯不影響整體
             print(f"{sym} 分析失敗：{e!r}")
     for k in hits:
@@ -163,7 +163,8 @@ def strategy_block(name, items, names, risk, note=""):
     for h in shown:
         code = h["sym"].split(".")[0]
         broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
-        labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else ""))
+        vl = h.get("vl")
+        labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else "") + (f" {vl['side']}" if vl else ""))
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
     cols = ["現價", "突破價", "停損價", "目標價"]
     lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
@@ -173,7 +174,8 @@ def strategy_block(name, items, names, risk, note=""):
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
     links = "　".join(tv_link(h["sym"]) for h in shown)
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    return title + "\n" + code_block(lines) + more + "\n📊 TradingView 線圖：" + links
+    legend = "\n壓＝60日最大量當天最低點在現價之上（短線壓力）\n撐＝在現價之下（支撐、出場參考）"
+    return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
 
 
 RESULT_FILE = "scan_results.json"
@@ -201,6 +203,8 @@ def save_results(mk, hits, names, directory, now):
                 "close": round(h["r"]["close"], 2), "key": h["plan"]["key"], "stop1": h["plan"]["stop1"],
                 "target": h["plan"]["targets"][0][1], "turnover": round(h["turnover"]),
                 "broke": bool(name == "flag" and h["r"].get("status", "").startswith("已突破")),
+                **({"vl_low": h["vl"]["low"], "vl_date": f"{h['vl']['date']:%m/%d}", "vl_vol": round(h["vl"]["vol"]),
+                    "vl_side": h["vl"]["side"]} if h.get("vl") else {}),
             })
         out["hits"][name] = rows
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
