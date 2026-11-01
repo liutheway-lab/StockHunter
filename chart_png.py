@@ -36,7 +36,7 @@ def market_chart(mk, bars=45):
     stab_mode = mk.get("layer") in (4, 5) and bool(mk.get("stab"))   # 空頭層級才畫止跌確認的標註
     s = (mk.get("stab") or {}) if stab_mode else {}
     has_vol = bool(d["Volume"].notna().any())
-    nm = "反彈日" if (s.get("vol_ok") and s.get("shape_ok")) else "最接近的一天"
+    nm = "低點日"
 
     fig, axes = plt.subplots(2 if has_vol else 1, 1, figsize=(8, 6.2 if has_vol else 4.2), dpi=150,
                              sharex=True, gridspec_kw={"height_ratios": [3, 1.3]} if has_vol else None)
@@ -109,7 +109,7 @@ def market_chart(mk, bars=45):
         rv = s.get("recent_vol")
         sp = _pos(idx, s.get("vol_date", pld))
         if rv and dv and sp is not None:
-            axv.annotate(f"近3天最大量 = 爆量日的 {rv / dv * 100:.0f}%", xy=(sp, rv / 1e8),
+            axv.annotate(f"低點日量 = 爆量日的 {rv / dv * 100:.0f}%", xy=(sp, rv / 1e8),
                          xytext=(sp, max(float(v.max()), dv / 1e8) * 1.14), fontsize=9, color="#333", ha="right",
                          arrowprops=dict(arrowstyle="->", color="#555"))
         axv.set_ylabel("成交金額（證交所，億）")
