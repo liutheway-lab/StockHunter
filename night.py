@@ -76,7 +76,7 @@ def market_block(mk):
             sig = s["vol_ok"] and s["shape_ok"]
             blk1 = [f"量能　{ratio:>4.0f}%　要 ≥ 100%　{ok(s['vol_ok'])}"]
             if da == 0:
-                blk1.append("不破低　　　待觀察　　❌")
+                blk1.append("不破低　　　待觀察　　　　❌")
             else:
                 blk1.append(f"不破低 {s['recent_low']:,.0f} 要 > {s['prior_low']:,.0f}　{low_ok}")
             blk2 = [f"下影線 {s['shadow'] * 100:>4.0f}%　要 ≥ {cfg.STAB_SHADOW * 100:.0f}%　{ok(s['shadow_ok'])}",
