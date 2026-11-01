@@ -1,0 +1,28 @@
+name: intraday
+
+on:
+  schedule:
+    - cron: "50 0 * * 1-5"   # 台灣時間 週一到週五 08:50 啟動，一路監控到 13:30
+  workflow_dispatch:          # 也可以手動執行：Actions → intraday → Run workflow
+
+concurrency:
+  group: tg-bot              # 跟 commands 輪流，不會同時讀 Telegram 訊息
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 盤中監控
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
+        run: python intraday.py
