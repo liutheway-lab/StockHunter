@@ -82,7 +82,7 @@ def market_block(mk):
             out.append(f"📅 爆量日：{s['dump_date']:%m/%d}\n（這波成交額最大的下跌日）\n"
                        + (f"📅 反彈日：{s['signal_date']:%m/%d}\n" if sig else
                           f"📅 反彈日：還沒出現\n（目前最接近 {s['signal_date']:%m/%d}）\n"))
-            out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝反彈日成交額÷爆量日\n不破低＝反彈日後最低點\n　　　　要高於反彈日最低點")
+            out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝最近3天最大成交額\n　　　÷爆量日成交額\n不破低＝反彈日後最低點\n　　　　要高於反彈日最低點")
             out.append(code_block(blk1, lang="text"))
             out.append("*② K棒*　二擇一，有一項 ✅ 就過")
             out.append(code_block(blk2, lang="text"))
