@@ -138,12 +138,11 @@ def layer_series(df):
 
 def stabilization(df, i):
     """止跌確認（日線）。先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
-    再找它「之後」的「反彈日」（最多最近 STAB_MAX_AGE 天內），三項都過才算止跌走穩：
-    ① 量能：最近 3 天裡最大的成交額 ≥ 爆量下跌日
-    ② K 棒：長下影線（下影線 ≥ 當天高低差的 1/2，開低走高）或長紅（收紅、漲幅 ≥ 1.5%）
-    ③ 三日不破低：反彈日之後至少 3 天，最低點都高於反彈日的最低點
-    沒有完全符合的，就回傳爆量日之後成交額最大的那天，讓人看得出差在哪一項。
-    字典欄位沿用舊名稱（prior_low＝反彈日最低點、prior_low_date＝反彈日、recent_*＝反彈日之後），畫圖直接沿用。"""
+    再找「低點日」＝最近 STAB_DAYS 天股價最低點那天（要在爆量日之後），三項都過才算止跌走穩：
+    ① 量能：低點日成交額 ≥ 爆量下跌日
+    ② K 棒：長下影線（下影線 ≥ 當天高低差的 1/2）或長紅（收紅、漲幅 ≥ 1.5%），二擇一
+    ③ 不破低：低點日之後的低點都高於低點日的最低點（低點日就是今天＝觀察中）
+    字典欄位沿用舊名稱（prior_low＝低點日最低點、prior_low_date＝低點日、recent_*＝低點日之後）。"""
     n, k, age = cfg.STAB_LOOKBACK, cfg.STAB_DAYS, cfg.STAB_MAX_AGE
     if i < n + age + 1 or i >= len(df):
         return None
@@ -151,7 +150,7 @@ def stabilization(df, i):
     idx = df.index
     down = np.r_[False, C[1:] < C[:-1]]
     w0 = i - n - age
-    seg = slice(w0, i)                                           # 不含今天：爆量日一定在反彈日之前
+    seg = slice(w0, i)                                           # 不含今天：爆量日一定在低點日之前
     m = down[seg] & ~np.isnan(V[seg]) & (V[seg] > 0)
     if not m.any():
         return {"ok": False, "no_break": False, "vol_ok": None, "vol_missing": True, "prior_low": float(L[i]),
@@ -160,44 +159,32 @@ def stabilization(df, i):
     P = w0 + int(np.where(m, V[seg], -1.0).argmax())             # 爆量下跌日
     dv, dd = float(V[P]), idx[P]
 
-    v3 = V[i - 2:i + 1]                                          # 最近 3 天的成交額，取最大的那天跟爆量日比
-    v3d = i - 2 + int(np.nan_to_num(v3, nan=-1.0).argmax())
-    vmax3 = float(V[v3d]) if not np.isnan(V[v3d]) else 0.0
-    cands = []
-    for d in range(i, max(P, i - age - 1), -1):                  # 只看爆量日之後、最近 STAB_MAX_AGE 天內
-        if np.isnan(V[d]) or np.isnan(L[d]):
-            continue
-        rng = H[d] - L[d]
-        shadow = (min(O[d], C[d]) - L[d]) / rng if rng > 0 else 0.0
-        gain = float(C[d] / C[d - 1] - 1) if C[d - 1] > 0 else 0.0
-        shadow_ok = bool(shadow >= cfg.STAB_SHADOW)                      # 長下影線（開低走高）
-        red_ok = bool(C[d] > O[d] and gain >= cfg.STAB_RED_GAIN)         # 或長紅
-        after = L[d + 1:i + 1]
-        days_after = len(after)
-        no_break = bool(days_after > 0 and after.min() > L[d])
-        vol_ok = bool(vmax3 >= dv)
-        shape_ok = shadow_ok or red_ok
-        cands.append({"d": d, "shadow": float(shadow), "gain": gain, "shadow_ok": shadow_ok, "red_ok": red_ok, "after": after, "days_after": days_after,
-                      "no_break": no_break, "vol_ok": vol_ok, "shape_ok": shape_ok,
-                      "full": vol_ok and shape_ok and no_break and days_after >= k,
-                      "pending": vol_ok and shape_ok and no_break and days_after < k,
-                      "sig": vol_ok and shape_ok})
-    if not cands:
+    # 低點日＝最近 STAB_DAYS 天（含今天）股價最低點那天；量能、K 棒、不破低都看這一天
+    w = max(i - k + 1, P + 1)
+    d = w + int(np.nan_to_num(L[w:i + 1], nan=1e18).argmin())
+    if np.isnan(V[d]) or np.isnan(L[d]):
         return None
-    c = (next((x for x in cands if x["full"]), None) or next((x for x in cands if x["pending"]), None)
-         or next((x for x in cands if x["sig"]), None)
-         or max(cands, key=lambda x: (int(x["vol_ok"]) + int(x["shape_ok"]) + int(x["no_break"]), x["d"])))   # 都不符合：挑「最接近」的一天，一樣分數取最近的
-    d = c["d"]
-    after = c["after"]
-    rl = float(after.min()) if len(after) else None
-    rld = idx[d + 1 + int(after.argmin())] if len(after) else None
-    return {"ok": bool(c["full"]), "watching": bool(c["pending"]), "signal_date": idx[d],
-            "vol_ok": c["vol_ok"], "shape_ok": c["shape_ok"], "no_break": c["no_break"], "vol_missing": False,
-            "shadow": c["shadow"], "gain": c["gain"], "shadow_ok": c["shadow_ok"], "red_ok": c["red_ok"],
-            "days_after": c["days_after"], "need_days": k,
+    rng = H[d] - L[d]
+    shadow = float((min(O[d], C[d]) - L[d]) / rng) if rng > 0 else 0.0
+    gain = float(C[d] / C[d - 1] - 1) if C[d - 1] > 0 else 0.0
+    shadow_ok = bool(shadow >= cfg.STAB_SHADOW)                      # 長下影線（開低走高）
+    red_ok = bool(C[d] > O[d] and gain >= cfg.STAB_RED_GAIN)         # 或長紅
+    shape_ok = shadow_ok or red_ok
+    vol_ok = bool(V[d] >= dv)
+    after = L[d + 1:i + 1]
+    days_after = len(after)
+    no_break = bool(days_after > 0 and after.min() > L[d])           # 低點日之後的低點都沒跌破它
+    full = vol_ok and shape_ok and no_break
+    pending = vol_ok and shape_ok and days_after == 0                # 低點日就是今天：還要再觀察
+    rl = float(after.min()) if days_after else None
+    rld = idx[d + 1 + int(after.argmin())] if days_after else None
+    return {"ok": bool(full), "watching": bool(pending), "signal_date": idx[d],
+            "vol_ok": vol_ok, "shape_ok": shape_ok, "no_break": no_break, "vol_missing": False,
+            "shadow": shadow, "gain": gain, "shadow_ok": shadow_ok, "red_ok": red_ok,
+            "days_after": days_after, "need_days": 1,
             "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
             "recent_start": idx[d], "recent_end": idx[i],
-            "dump_vol": dv, "dump_date": dd, "recent_vol": vmax3, "vol_date": idx[v3d]}
+            "dump_vol": dv, "dump_date": dd, "recent_vol": float(V[d]), "vol_date": idx[d]}
 
 
 def vol_low(df, days=65):
@@ -260,12 +247,12 @@ def describe_market(mk):
         else:
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             ok = lambda b: "✅" if b else "❌"
-            state = "✅ 通過" if s["ok"] else (f"⏳ 觀察中・第 {s['days_after']}／{s['need_days']} 天" if s.get("watching") else "❌ 未通過")
+            state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
             lines.append(
                 f"🧱 止跌確認：{state}（三項都要通過）\n"
-                f"　{ok(s['vol_ok'])} 量能：最近3天最大成交額是爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上\n"
+                f"　{ok(s['vol_ok'])} 量能：低點日成交額是爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上\n"
                 f"　{ok(s['shape_ok'])} K 棒：下影線占 {s['shadow'] * 100:.0f}%（需 ≥{cfg.STAB_SHADOW * 100:.0f}%），或收紅漲 {s['gain'] * 100:+.1f}%（需 ≥{cfg.STAB_RED_GAIN * 100:.1f}%）\n"
-                f"　{ok(s['no_break'] and s['days_after'] >= s['need_days'])} 三日不破低：反彈日最低 {s['prior_low']:,.0f}，"
+                f"　{ok(s['no_break'])} 不破低：低點日最低 {s['prior_low']:,.0f}，"
                 f"之後 {s['days_after']} 天最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}"
             )
             if s["ok"]:
