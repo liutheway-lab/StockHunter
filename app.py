@@ -213,10 +213,10 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
                       line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dot"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"反彈日低點 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff8c00", -4, 62)
+             f"低點日最低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff8c00", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"反彈日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00a8d6", -4, 108)
+                 f"低點日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00a8d6", -4, 108)
 
         # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
         dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
@@ -238,7 +238,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                 mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -6, row=2)
             if rv:
                 # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
-                mark(f"{stab.get('vol_date', stab['prior_low_date']):%m/%d}", rv / 1e8, f"近3天最大量<br>約為爆量日 {rv / dv * 100:.0f}%",
+                mark(f"{stab.get('vol_date', stab['prior_low_date']):%m/%d}", rv / 1e8, f"低點日量<br>約為爆量日 {rv / dv * 100:.0f}%",
                      "#00a8d6", -4, -40, row=2, yanchor="bottom")
 
     # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
@@ -394,7 +394,7 @@ def load_market_hist():
     layers = S.layer_series(mkt)
     months = set()
     for d in mkt.index[layers.isin([4, 5]).to_numpy()]:
-        for back in (0, 1, 2, 3):                    # 止跌確認要往回看約 41 個交易日（爆量日 30 天＋反彈日最多 10 天）
+        for back in (0, 1, 2, 3):                    # 止跌確認要往回看約 41 個交易日（爆量日 30 天＋低點日最多 10 天）
             p_ = (d - pd.DateOffset(months=back))
             months.add((p_.year, p_.month))
     vol = {}
@@ -560,18 +560,18 @@ if mk:
             ok = lambda b: "✅" if b else "❌"
             ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
             da, nd = s_["days_after"], s_["need_days"]
-            state = "✅ 通過" if s_["ok"] else (f"⏳ 觀察中・第 {da}／{nd} 天" if s_.get("watching") else "🔴 尚未止跌")
+            state = "✅ 通過" if s_["ok"] else ("⏳ 觀察中" if s_.get("watching") else "🔴 尚未止跌")
             st.markdown(f"🧱 **止跌確認**　{state}（三項都要通過）")
-            low_txt = ("才剛反彈，還要再看幾天" if da == 0 else
-                       f"{'反彈日' if s_.get('shape_ok') and s_.get('vol_ok') else '最接近的一天'}（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
-                       f"之後 {da} 天最低 {s_['recent_low']:,.0f}，需連續 {nd} 天不破")
+            low_txt = ("低點日就是今天，還要再觀察" if da == 0 else
+                       f"低點日（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
+                       f"之後 {da} 天最低 {s_['recent_low']:,.0f}，要保持不破")
             md_cond([
                 (ok(s_["vol_ok"]), "量能",
-                 f"爆量下跌日 {s_['dump_date']:%m/%d}；最近3天最大成交額約為它的 {ratio:.0f}%，需 100% 以上"),
+                 f"爆量下跌日 {s_['dump_date']:%m/%d}；低點日成交額約為它的 {ratio:.0f}%，需 100% 以上"),
                 (ok(s_["shape_ok"]), "K 棒",
                  f"下影線占當天區間 {s_['shadow'] * 100:.0f}%（需 {cfg.STAB_SHADOW * 100:.0f}% 以上），"
                  f"或收紅且漲 {s_['gain'] * 100:+.1f}%（需 {cfg.STAB_RED_GAIN * 100:.1f}% 以上）"),
-                ("⏳" if (da == 0 or (s_["no_break"] and da < nd)) else ok(s_["no_break"]), "三日不破低", low_txt),
+                ("⏳" if (da == 0) else ok(s_["no_break"]), "不破低", low_txt),
             ])
             if s_["ok"]:
                 st.success("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
@@ -579,7 +579,7 @@ if mk:
     st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                     use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
     if show_stab:
-        st.caption(L("黃色底＝反彈日起　虛線＝反彈日最低點、爆量日的量", "成交金額採用證交所數據，看相對比例"))
+        st.caption(L("黃色底＝低點日起　虛線＝低點日最低點、爆量日的量", "成交金額採用證交所數據，看相對比例"))
     if mk["active"]:
         (st.warning if mk["risk"] else st.success)(
             "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
