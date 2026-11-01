@@ -35,10 +35,10 @@ def fp(x):
     return f"{x:.2f}"
 
 
-def code_block(lines, header=False):
+def code_block(lines, header=False, lang=""):
     # 行尾補「看不見的空格」，避免 Telegram 右上角的 </> 複製鈕蓋到最後一個字
     # header=True：第一行是表頭，不補空格（表頭本來就比資料行寬，再補會被切到下一行）
-    return "```\n" + "\n".join(ln + ("" if header and k == 0 else "⠀" * 3) for k, ln in enumerate(lines)) + "\n```"
+    return "```" + lang + "\n" + "\n".join(ln + ("" if header and k == 0 else "⠀" * 3) for k, ln in enumerate(lines)) + "\n```"
 
 
 # ---------- 大盤區塊 ----------
@@ -67,30 +67,25 @@ def market_block(mk):
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             da, nd = s["days_after"], s["need_days"]
             state = "✅ 通過" if s["ok"] else (f"⏳ 觀察中・第 {da}／{nd} 天" if s.get("watching") else "❌ 未通過")
-            out.append(f"🧱 *止跌確認*　{state}（三項都要過）")
-            mk_ = lambda b: "✅" if b else "❌"
+            out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 都過才算止跌")
             cmp_ = lambda b, ge="≥", lt="<": ge if b else lt
             low_ok = "✅" if s["no_break"] and da >= nd else "⏳" if (s["no_break"] or da == 0) else "❌"
-            rows = [
-                f"量　能　{ratio:>6.0f}% {cmp_(s['vol_ok'])} {100:>5}%　{mk_(s['vol_ok'])}",
-                f"下影線　{s['shadow'] * 100:>6.0f}% {cmp_(s['shadow_ok'])} {cfg.STAB_SHADOW * 100:>5.0f}%　{mk_(s['shadow_ok'])}",
-                f"長　紅　{s['gain'] * 100:>+6.1f}% {cmp_(s['red_ok'])} {cfg.STAB_RED_GAIN * 100:>+5.1f}%　{mk_(s['red_ok'])}",
-            ]
-            if da == 0:
-                rows.append("不破低　才剛反彈　⏳")
-            else:
-                rows.append(f"不破低　{s['recent_low']:>7,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f}　{low_ok}")
-            out.append(code_block(rows))
             sig = s["vol_ok"] and s["shape_ok"]
-            out.append(f"爆量下跌日：{s['dump_date']:%m/%d}\n"
-                       "（這波成交額最大的下跌日）\n"
-                       + (f"反彈日：{s['signal_date']:%m/%d}\n（爆量日之後，量大又夠強的那天）\n" if sig else
-                          f"反彈日：還沒出現\n（目前最接近的是 {s['signal_date']:%m/%d}）\n")
-                       + "量能＝反彈日成交額 ÷ 爆量日\n"
-                       "K棒＝下影線或長紅\n"
-                       "　　　有一項 ✅ 就過\n"
-                       "不破低＝反彈日之後的最低點\n"
-                       "　　　　vs 反彈日的最低點")
+            blk1 = [f"量能　{ratio:>5.0f}% {cmp_(s['vol_ok'])} {100:>3}%　{ok(s['vol_ok'])}"]
+            if da == 0:
+                blk1.append("不破低　才剛反彈　⏳")
+            else:
+                blk1.append(f"不破低 {s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f} {low_ok}")
+            blk2 = [f"下影線 {s['shadow'] * 100:>4.0f}% {cmp_(s['shadow_ok'])} {cfg.STAB_SHADOW * 100:>3.0f}%　{ok(s['shadow_ok'])}",
+                    "",
+                    f"長　紅 {s['gain'] * 100:>+5.1f}% {cmp_(s['red_ok'])} {cfg.STAB_RED_GAIN * 100:>+4.1f}%　{ok(s['red_ok'])}"]
+            out.append(f"📅 爆量日：{s['dump_date']:%m/%d}\n（這波成交額最大的下跌日）\n"
+                       + (f"📅 反彈日：{s['signal_date']:%m/%d}\n" if sig else
+                          f"📅 反彈日：還沒出現\n（目前最接近 {s['signal_date']:%m/%d}）\n"))
+            out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝反彈日成交額÷爆量日\n不破低＝反彈日後最低點\n　　　　要高於反彈日最低點")
+            out.append(code_block(blk1, lang="text"))
+            out.append("*② K棒*　二擇一，有一項 ✅ 就過")
+            out.append(code_block(blk2, lang="text"))
             if s["ok"]:
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
