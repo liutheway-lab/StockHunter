@@ -74,21 +74,21 @@ def market_chart(mk, bars=45):
     lowest = min([v for v in (bot_v, pl, rl) if v is not None])
     ax.set_ylim(lowest - rng_v * (0.20 if stab_mode else 0.04), top_v + rng_v * 0.04)    # 空頭時下方留白放標註
     if pl is not None:
-        ax.axhline(pl, color="#555", linestyle="--", linewidth=1)
+        ax.axhline(pl, color="#00a8d6", linestyle="--", linewidth=1)
         p = _pos(idx, pld)
         if p is not None:
-            ax.scatter([p], [pl], marker="^", color="#333", zorder=5, s=30)
+            ax.scatter([p], [pl], marker="^", color="#00a8d6", zorder=5, s=34)
             ax.annotate(f"{nm}最低 {pl:,.0f}（{pld:%m/%d}）", xy=(p, pl),
-                        xytext=(max(p - 20, 0.5), lowest - rng_v * 0.05), fontsize=9, color="#333",
-                        arrowprops=dict(arrowstyle="->", color="#333", linewidth=0.9))
+                        xytext=(max(p - 20, 0.5), lowest - rng_v * 0.05), fontsize=9, color="#0086ad",
+                        arrowprops=dict(arrowstyle="->", color="#00a8d6", linewidth=0.9))
         else:
             ax.text(0.5, pl + rng_v * 0.02, f"{nm}最低 {pl:,.0f}", fontsize=9, color="#333")
     if rl is not None and _pos(idx, rld) is not None:
         rp = _pos(idx, rld)
-        ax.scatter([rp], [rl], color="#d35400", zorder=5, s=28)
+        ax.scatter([rp], [rl], color="#8e6bd8", zorder=5, s=28)
         ax.annotate(f"之後最低 {rl:,.0f}（{rld:%m/%d}）", xy=(rp, rl),
-                    xytext=(max(rp - 15, 0), lowest - rng_v * 0.13), fontsize=9, color="#d35400",
-                    arrowprops=dict(arrowstyle="->", color="#d35400"))
+                    xytext=(max(rp - 15, 0), lowest - rng_v * 0.13), fontsize=9, color="#8e6bd8",
+                    arrowprops=dict(arrowstyle="->", color="#8e6bd8"))
     last_o, last_c = float(d["Open"].iloc[-1]), float(d["Close"].iloc[-1])
     ax.add_patch(plt.Rectangle((x[-1] - 0.6, float(d["Low"].iloc[-1])), 1.2,
                                float(d["High"].iloc[-1] - d["Low"].iloc[-1]), fill=False,
@@ -116,8 +116,8 @@ def market_chart(mk, bars=45):
         sp = _pos(idx, s.get("vol_date", pld))
         if rv and dv and sp is not None:
             axv.annotate(f"低點日量 = 爆量日的 {rv / dv * 100:.0f}%", xy=(sp, rv / 1e8),
-                         xytext=(sp, max(float(v.max()), dv / 1e8) * 1.14), fontsize=9, color="#333", ha="right",
-                         arrowprops=dict(arrowstyle="->", color="#555"))
+                         xytext=(sp, max(float(v.max()), dv / 1e8) * 1.14), fontsize=9, color="#0086ad", ha="right",
+                         arrowprops=dict(arrowstyle="->", color="#00a8d6"))
         axv.set_ylabel("成交金額（證交所，億）")
         axv.grid(alpha=0.15)
         axv.set_ylim(0, max(float(v.max()), (dv or 0) / 1e8) * 1.3)
