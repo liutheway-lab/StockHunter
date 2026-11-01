@@ -238,7 +238,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                 mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -6, row=2)
             if rv:
                 # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
-                mark(f"{stab['prior_low_date']:%m/%d}", rv / 1e8, f"反彈日量<br>約為爆量日 {rv / dv * 100:.0f}%",
+                mark(f"{stab.get('vol_date', stab['prior_low_date']):%m/%d}", rv / 1e8, f"近3天最大量<br>約為爆量日 {rv / dv * 100:.0f}%",
                      "#00a8d6", -4, -40, row=2, yanchor="bottom")
 
     # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
@@ -567,7 +567,7 @@ if mk:
                        f"之後 {da} 天最低 {s_['recent_low']:,.0f}，需連續 {nd} 天不破")
             md_cond([
                 (ok(s_["vol_ok"]), "量能",
-                 f"爆量下跌日 {s_['dump_date']:%m/%d}；反彈日 {s_['signal_date']:%m/%d} 的成交額約為它的 {ratio:.0f}%，需 100% 以上"),
+                 f"爆量下跌日 {s_['dump_date']:%m/%d}；最近3天最大成交額約為它的 {ratio:.0f}%，需 100% 以上"),
                 (ok(s_["shape_ok"]), "K 棒",
                  f"下影線占當天區間 {s_['shadow'] * 100:.0f}%（需 {cfg.STAB_SHADOW * 100:.0f}% 以上），"
                  f"或收紅且漲 {s_['gain'] * 100:+.1f}%（需 {cfg.STAB_RED_GAIN * 100:.1f}% 以上）"),
