@@ -139,7 +139,7 @@ def layer_series(df):
 def stabilization(df, i):
     """止跌確認（日線）。先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
     再找它「之後」的「反彈日」（最多最近 STAB_MAX_AGE 天內），三項都過才算止跌走穩：
-    ① 量能：反彈日成交額 ≥ 爆量下跌日
+    ① 量能：最近 3 天裡最大的成交額 ≥ 爆量下跌日
     ② K 棒：長下影線（下影線 ≥ 當天高低差的 1/2，開低走高）或長紅（收紅、漲幅 ≥ 1.5%）
     ③ 三日不破低：反彈日之後至少 3 天，最低點都高於反彈日的最低點
     沒有完全符合的，就回傳爆量日之後成交額最大的那天，讓人看得出差在哪一項。
@@ -160,6 +160,9 @@ def stabilization(df, i):
     P = w0 + int(np.where(m, V[seg], -1.0).argmax())             # 爆量下跌日
     dv, dd = float(V[P]), idx[P]
 
+    v3 = V[i - 2:i + 1]                                          # 最近 3 天的成交額，取最大的那天跟爆量日比
+    v3d = i - 2 + int(np.nan_to_num(v3, nan=-1.0).argmax())
+    vmax3 = float(V[v3d]) if not np.isnan(V[v3d]) else 0.0
     cands = []
     for d in range(i, max(P, i - age - 1), -1):                  # 只看爆量日之後、最近 STAB_MAX_AGE 天內
         if np.isnan(V[d]) or np.isnan(L[d]):
@@ -172,7 +175,7 @@ def stabilization(df, i):
         after = L[d + 1:i + 1]
         days_after = len(after)
         no_break = bool(days_after > 0 and after.min() > L[d])
-        vol_ok = bool(V[d] >= dv)
+        vol_ok = bool(vmax3 >= dv)
         shape_ok = shadow_ok or red_ok
         cands.append({"d": d, "shadow": float(shadow), "gain": gain, "shadow_ok": shadow_ok, "red_ok": red_ok, "after": after, "days_after": days_after,
                       "no_break": no_break, "vol_ok": vol_ok, "shape_ok": shape_ok,
@@ -194,7 +197,7 @@ def stabilization(df, i):
             "days_after": c["days_after"], "need_days": k,
             "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
             "recent_start": idx[d], "recent_end": idx[i],
-            "dump_vol": dv, "dump_date": dd, "recent_vol": float(V[d])}
+            "dump_vol": dv, "dump_date": dd, "recent_vol": vmax3, "vol_date": idx[v3d]}
 
 
 def vol_low(df, days=65):
@@ -260,7 +263,7 @@ def describe_market(mk):
             state = "✅ 通過" if s["ok"] else (f"⏳ 觀察中・第 {s['days_after']}／{s['need_days']} 天" if s.get("watching") else "❌ 未通過")
             lines.append(
                 f"🧱 止跌確認：{state}（三項都要通過）\n"
-                f"　{ok(s['vol_ok'])} 量能：反彈日 {s['signal_date']:%m/%d} 成交額是爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上\n"
+                f"　{ok(s['vol_ok'])} 量能：最近3天最大成交額是爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上\n"
                 f"　{ok(s['shape_ok'])} K 棒：下影線占 {s['shadow'] * 100:.0f}%（需 ≥{cfg.STAB_SHADOW * 100:.0f}%），或收紅漲 {s['gain'] * 100:+.1f}%（需 ≥{cfg.STAB_RED_GAIN * 100:.1f}%）\n"
                 f"　{ok(s['no_break'] and s['days_after'] >= s['need_days'])} 三日不破低：反彈日最低 {s['prior_low']:,.0f}，"
                 f"之後 {s['days_after']} 天最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}"
