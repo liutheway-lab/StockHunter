@@ -70,7 +70,22 @@ def to_group(text):
 
 
 # ================= 持股（存在私人對話的置頂訊息） =================
-LINE_RE = re.compile(r"^(\d{4,6})\s+(\S+)｜([\d.]+) 張｜均價 ([\d.]+)｜出場 ([\d.]+|—)｜目標 ([\d.]+|—)｜前高 ([\d.]+|—)｜加碼 (未|已)$")
+LINE_RE = re.compile(r"^(\d{4,6})\s+(\S+)｜([\d,.]+) (張|股)｜均價 ([\d.]+)｜出場 ([\d.]+|—)｜目標 ([\d.]+|—)｜前高 ([\d.]+|—)｜加碼 (未|已)$")
+
+
+def fmt_qty(shares):
+    """2000 → 2 張；2500 → 2,500 股"""
+    shares = int(round(shares))
+    return f"{shares // 1000} 張" if shares % 1000 == 0 and shares > 0 else f"{shares:,} 股"
+
+
+def parse_qty(tok):
+    """「2張」「2 張」「500股」→ 股數；沒寫單位回傳 None（要使用者講清楚）"""
+    m = re.fullmatch(r"([\d,]+(?:\.\d+)?)\s*(張|股)", tok.replace(" ", ""))
+    if not m:
+        return None
+    n = float(m.group(1).replace(",", ""))
+    return int(round(n * 1000)) if m.group(2) == "張" else int(round(n))
 
 
 def _num(x):
@@ -109,8 +124,9 @@ def load_holdings(cid):
             continue
         m = LINE_RE.match(ln)
         if m:
-            code, name, lots, avg, stop, target, key, added = m.groups()
-            h[code] = {"name": name, "lots": float(lots), "avg": float(avg), "stop": _num(stop),
+            code, name, qty, unit, avg, stop, target, key, added = m.groups()
+            shares = float(qty.replace(",", "")) * (1000 if unit == "張" else 1)
+            h[code] = {"name": name, "shares": int(round(shares)), "avg": float(avg), "stop": _num(stop),
                        "target": _num(target), "key": _num(key), "added": added == "已"}
     return h, pm.get("message_id"), users
 
@@ -118,7 +134,7 @@ def load_holdings(cid):
 def holdings_text(h, users=None):
     lines = [HOLD_TAG + "（機器人自動維護，請勿刪除或取消置頂）"]
     for code, x in sorted(h.items()):
-        lines.append(f"{code} {x['name']}｜{_fmt(x['lots'])} 張｜均價 {_fmt(x['avg'])}｜出場 {_fmt(x['stop'])}"
+        lines.append(f"{code} {x['name']}｜{x['shares']:,} 股｜均價 {_fmt(x['avg'])}｜出場 {_fmt(x['stop'])}"
                      f"｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}｜加碼 {'已' if x['added'] else '未'}")
     if not h:
         lines.append("（目前沒有持股）")
@@ -194,16 +210,19 @@ def levels_for(code, suffix, price):
 MENU = [("help", "使用說明"), ("holdings", "查看目前持股"), ("buy", "買進　例：/buy 2330 2 950"),
         ("sell", "賣出　例：/sell 2330"), ("set", "修改價位　例：/set 2330 出場 920")]
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設"}
-KEYBOARD = {"keyboard": [[{"text": "持股"}, {"text": "說明"}]], "resize_keyboard": True, "is_persistent": True}
+KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "說明"}]],
+            "resize_keyboard": True, "is_persistent": True}
 FORMAT = {
-    "買": "買進格式：買 2330 2 950\n（代號 張數 價格）\n可以再加：出場 900 目標 1100",
-    "賣": "賣出格式：賣 2330（全部）\n或 賣 2330 1（賣 1 張）",
-    "設": "修改格式：設 2330 出場 920\n也可以改：目標 1100、前高 1000",
+    "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 目標 1100\n（也可以按下方「買進」按鈕，一步一步輸入）",
+    "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
+    "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000",
 }
-HELP = ("🤖 *持股指令*（中文直接打，或按輸入框旁的「/」選單）\n"
-        "買 2330 2 950　買進 2 張、950 元\n"
-        "買 2330 2 950 出場 900 目標 1100\n"
-        "賣 2330　全部賣出（賣 2330 1＝賣 1 張）\n"
+HELP = ("🤖 *持股指令*\n"
+        "按下方按鈕最簡單：買進／賣出／持股\n"
+        "也可以直接打一行：\n"
+        "買 2330 2張 950　（張、股都可以：500股）\n"
+        "買 2330 2張 950 出場 900 目標 1100\n"
+        "賣 2330　全部賣出；賣 2330 1張、賣 2330 500股\n"
         "設 2330 出場 920　改出場價（也可改 目標、前高）\n"
         "持股　看目前持股")
 
@@ -236,16 +255,19 @@ def handle(text, h):
         return holdings_report(h, quotes_for(h)), False
     if cmd == "買" and len(w) >= 4:
         code = w[1]
+        qty = parse_qty(w[2])
         try:
-            lots, price = float(w[2]), float(w[3])
+            price = float(w[3])
         except ValueError:
-            return "格式：買 2330 2 950（代號 張數 價格）", False
+            price = None
+        if qty is None or not price or qty <= 0:
+            return "數量要寫單位，例如：買 2330 2張 950 或 買 2330 500股 950", False
         opt = _opts(w[4:])
         if code in h:                                   # 加碼：算均價；買在前高之上 → 出場價移到前高下 5%
             x = h[code]
-            x["avg"] = st.tick((x["avg"] * x["lots"] + price * lots) / (x["lots"] + lots))
-            x["lots"] += lots
-            msg = f"✅ 加碼 {code} {x['name']} {_fmt(lots)} 張 @{_fmt(price)}，共 {_fmt(x['lots'])} 張、均價 {_fmt(x['avg'])}"
+            x["avg"] = round((x["avg"] * x["shares"] + price * qty) / (x["shares"] + qty), 2)
+            x["shares"] += qty
+            msg = f"✅ 加碼 {code} {x['name']} {fmt_qty(qty)} @{_fmt(price)}\n共 {fmt_qty(x['shares'])}、均價 {_fmt(x['avg'])}"
             if x["key"] and price >= x["key"] and not x["added"]:
                 x["added"] = True
                 new_stop = st.tick(x["key"] * (1 - cfg.ATTACK_STOP2_PCT))
@@ -256,30 +278,29 @@ def handle(text, h):
         else:
             name, sfx = stock_name_suffix(code)
             lv = levels_for(code, sfx, price)
-            x = {"name": name, "lots": lots, "avg": price, "stop": lv["stop"], "target": lv["target"],
+            x = {"name": name, "shares": qty, "avg": price, "stop": lv["stop"], "target": lv["target"],
                  "key": lv["key"], "added": False, "suffix": sfx}
             x.update(opt)
             h[code] = x
-            msg = (f"✅ 買進 {code} {name} {_fmt(lots)} 張 @{_fmt(price)}\n"
-                   f"出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}\n{lv['note']}")
+            msg = (f"✅ 買進 {code} {name} {fmt_qty(qty)} @{_fmt(price)}\n"
+                   f"出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}\n{lv['note']}\n"
+                   "價位要改的話：設 " + code + " 出場 價格")
         return msg, True
     if cmd == "賣" and len(w) >= 2:
         code = w[1]
         if code not in h:
             return f"持股裡沒有 {code}", False
-        if len(w) >= 3:
-            try:
-                n = float(w[2])
-            except ValueError:
-                n = h[code]["lots"]
-        else:
-            n = h[code]["lots"]
+        n = h[code]["shares"]
+        if len(w) >= 3 and w[2] != "全部":
+            n = parse_qty(w[2])
+            if n is None:
+                return "數量要寫單位，例如：賣 2330 1張 或 賣 2330 500股（全部賣出就打：賣 2330）", False
         name = h[code]["name"]
-        h[code]["lots"] -= n
-        if h[code]["lots"] <= 0:
+        h[code]["shares"] -= n
+        if h[code]["shares"] <= 0:
             del h[code]
             return f"✅ {code} {name} 全部賣出，已從持股移除", True
-        return f"✅ {code} {name} 賣出 {_fmt(n)} 張，剩 {_fmt(h[code]['lots'])} 張", True
+        return f"✅ {code} {name} 賣出 {fmt_qty(n)}，剩 {fmt_qty(h[code]['shares'])}", True
     if cmd == "設" and len(w) >= 4:
         code = w[1]
         if code not in h:
@@ -322,69 +343,163 @@ def admin(text, users):
     return None, False
 
 
-def process_commands():
-    """讀取新訊息並處理。管理者和被允許的朋友可以用持股指令；陌生人私訊時通知管理者決定要不要開通"""
-    if not _OFFSET_FILE.exists():                    # 每次啟動設定一次「/」選單（只在私訊顯示）
-        tg("setMyCommands", commands=[{"command": c, "description": d} for c, d in MENU],
-           scope={"type": "all_private_chats"})
-    offset = int(_OFFSET_FILE.read_text()) if _OFFSET_FILE.exists() else None
-    j = tg("getUpdates", offset=offset, timeout=0, allowed_updates=["message"])
-    ups = j.get("result") or []
-    if not ups:
-        return
-    state = {}                                       # 每個人的 (持股, 置頂 id, 名單)，這一輪讀一次就好
-    asked = set()
+SESSIONS = {}          # 按鈕一步一步輸入時，記住每個人目前問到哪一步
 
+
+def send_kb(cid, text, kb=None):
+    """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）"""
+    tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or KEYBOARD)
+
+
+def _kb(rows):
+    return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True, "one_time_keyboard": True}
+
+
+def guided(cid, text, h):
+    """按鈕流程：買進 → 代號 → 數量 → 價格；賣出 → 選股票 → 數量。
+    回傳要執行的一行指令（例如「買 2330 2000股 950」），還在問問題時回傳 None"""
+    t = text.strip()
+    if t == "取消":
+        SESSIONS.pop(cid, None)
+        send_kb(cid, "已取消")
+        return None
+    if t == "買進":
+        SESSIONS[cid] = {"flow": "buy", "step": "code"}
+        send_kb(cid, "要買哪一檔？請輸入股票代號\n例：2330", _kb([["取消"]]))
+        return None
+    if t == "賣出":
+        if not h:
+            send_kb(cid, "目前沒有持股")
+            return None
+        SESSIONS[cid] = {"flow": "sell", "step": "code"}
+        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
+        send_kb(cid, "要賣哪一檔？", _kb(rows))
+        return None
+    s_ = SESSIONS[cid]
+    code_m = re.search(r"\d{4,6}", t)
+    if s_["step"] == "code":
+        if not code_m:
+            send_kb(cid, "請輸入股票代號，例如 2330（打「取消」可以中止）", _kb([["取消"]]))
+            return None
+        s_["code"] = code_m.group(0)
+        if s_["flow"] == "sell":
+            if s_["code"] not in h:
+                send_kb(cid, f"持股裡沒有 {s_['code']}", _kb([["取消"]]))
+                return None
+            s_["step"] = "qty"
+            x = h[s_["code"]]
+            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？按「全部」，或輸入「1張」「500股」",
+                    _kb([["全部"], ["取消"]]))
+            return None
+        name, _ = stock_name_suffix(s_["code"])
+        s_["step"] = "qty"
+        send_kb(cid, f"{s_['code']} {name}\n買了多少？輸入「2張」或「500股」", _kb([["1張", "2張", "5張"], ["取消"]]))
+        return None
+    if s_["step"] == "qty":
+        if s_["flow"] == "sell" and t == "全部":
+            SESSIONS.pop(cid, None)
+            return f"賣 {s_['code']}"
+        q = parse_qty(t)
+        if q is None:
+            send_kb(cid, "要寫單位喔：例如「2張」或「500股」", _kb([["取消"]]))
+            return None
+        if s_["flow"] == "sell":
+            SESSIONS.pop(cid, None)
+            return f"賣 {s_['code']} {q}股"
+        s_["qty"], s_["step"] = q, "price"
+        send_kb(cid, f"成交價是多少？例：950", _kb([["取消"]]))
+        return None
+    if s_["step"] == "price":
+        try:
+            price = float(t.replace(",", ""))
+        except ValueError:
+            send_kb(cid, "請輸入數字，例如 950", _kb([["取消"]]))
+            return None
+        SESSIONS.pop(cid, None)
+        return f"買 {s_['code']} {s_['qty']}股 {price:g}"
+    SESSIONS.pop(cid, None)
+    return None
+
+
+def handle_message(m, state, asked):
+    """處理一則訊息（GitHub 輪詢和 bot_server.py 的即時模式共用）"""
     def get(cid):
         if cid not in state:
             state[cid] = list(load_holdings(cid))
         return state[cid]
 
+    chat = m.get("chat") or {}
+    text = (m.get("text") or "").strip()
+    if chat.get("type") in ("group", "supergroup") and text.split("@")[0] in ("/id", "/start"):
+        send_to(str(chat["id"]), f"這個群組的 ID 是 `{chat['id']}`\n"
+                                 "請到 GitHub → Settings → Secrets and variables → Actions\n"
+                                 "把 TG\\_CHAT\\_ID 改成這串數字（含前面的負號）")
+        return
+    if chat.get("type") != "private" or not text:
+        return
+    cid = str(chat["id"])
+    if not OWNER:
+        send_to(cid, f"你的 Telegram ID 是 `{cid}`\n"
+                     "請到 GitHub → Settings → Secrets and variables → Actions\n"
+                     "新增 TG\\_OWNER\\_ID，值填這串數字，之後就能用持股指令")
+        return
+    owner = get(OWNER)                               # 管理者的置頂訊息裡存著朋友名單
+    users = owner[2]
+    if cid != OWNER and cid not in users:            # 還沒開通的人：通知管理者
+        frm = m.get("from") or {}
+        name = (frm.get("first_name") or "") + (f"（@{frm['username']}）" if frm.get("username") else "")
+        send_to(cid, "已經通知管理者，開通後就能使用持股追蹤。\n追價提醒、夜間掃描會發在群組裡。")
+        if cid not in asked:
+            asked.add(cid)
+            send_to(OWNER, f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n"
+                           f"同意的話回覆：允許 {cid} {frm.get('first_name') or ''}".rstrip())
+        return
+    if cid == OWNER:
+        reply, changed = admin(text, users)
+        if reply:
+            if changed:
+                owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
+            send_to(OWNER, reply)
+            return
+    me = get(cid)
+    if text in ("買進", "賣出", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+        line = guided(cid, text, me[0])
+        if line is None:
+            return
+        text = line
+    reply, changed = handle(text, me[0])
+    if changed:
+        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
+    if reply == HELP:
+        send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
+    elif reply:
+        send_kb(cid, reply)
+
+
+def setup_menu():
+    tg("setMyCommands", commands=[{"command": c, "description": d} for c, d in MENU],
+       scope={"type": "all_private_chats"})
+
+
+def process_commands():
+    """（GitHub 輪詢模式）讀取新訊息並處理。如果已經架了 bot_server.py（webhook），就交給它，這裡不處理"""
+    info = tg("getWebhookInfo").get("result") or {}
+    if info.get("url"):
+        return
+    if not _OFFSET_FILE.exists():                    # 每次啟動設定一次「/」選單（只在私訊顯示）
+        setup_menu()
+    offset = int(_OFFSET_FILE.read_text()) if _OFFSET_FILE.exists() else None
+    j = tg("getUpdates", offset=offset, timeout=0, allowed_updates=["message"])
+    ups = j.get("result") or []
+    if not ups:
+        return
+    state, asked = {}, set()
     for u in ups:
         offset = u["update_id"] + 1
-        m = u.get("message") or {}
-        chat = m.get("chat") or {}
-        text = (m.get("text") or "").strip()
-        if chat.get("type") in ("group", "supergroup") and text.split("@")[0] in ("/id", "/start"):
-            send_to(str(chat["id"]), f"這個群組的 ID 是 `{chat['id']}`\n"
-                                     "請到 GitHub → Settings → Secrets and variables → Actions\n"
-                                     "把 TG\\_CHAT\\_ID 改成這串數字（含前面的負號）")
-            continue
-        if chat.get("type") != "private" or not text:
-            continue
-        cid = str(chat["id"])
-        if not OWNER:
-            send_to(cid, f"你的 Telegram ID 是 `{cid}`\n"
-                         "請到 GitHub → Settings → Secrets and variables → Actions\n"
-                         "新增 TG\\_OWNER\\_ID，值填這串數字，之後就能用持股指令")
-            continue
-        owner = get(OWNER)                           # 管理者的置頂訊息裡存著朋友名單
-        users = owner[2]
-        if cid != OWNER and cid not in users:        # 還沒開通的人：通知管理者
-            frm = m.get("from") or {}
-            name = (frm.get("first_name") or "") + (f"（@{frm['username']}）" if frm.get("username") else "")
-            send_to(cid, "已經通知管理者，開通後就能使用持股追蹤。\n追價提醒、夜間掃描會發在群組裡。")
-            if cid not in asked:
-                asked.add(cid)
-                send_to(OWNER, f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n"
-                               f"同意的話回覆：允許 {cid} {frm.get('first_name') or ''}".rstrip())
-            continue
-        if cid == OWNER:
-            reply, changed = admin(text, users)
-            if reply:
-                if changed:
-                    owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
-                send_to(OWNER, reply)
-                continue
-        me = get(cid)
-        reply, changed = handle(text, me[0])
-        if changed:
-            me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
-        if reply and reply == HELP:                  # 說明：順便在輸入框下方放「持股」「說明」兩個按鈕
-            text_out = (HELP + (ADMIN_HELP if cid == OWNER else "")).replace("*", "")
-            tg("sendMessage", chat_id=cid, text=text_out, reply_markup=KEYBOARD)
-        elif reply:
-            send_to(cid, reply)
+        try:
+            handle_message(u.get("message") or {}, state, asked)
+        except Exception as e:
+            print("處理訊息失敗：", repr(e))
     tg("getUpdates", offset=offset, timeout=0)          # 告訴 Telegram 這些訊息處理完了
     _OFFSET_FILE.write_text(str(offset))
 
@@ -440,10 +555,11 @@ def holdings_report(h, q):
         if p:
             pnl = (p / x["avg"] - 1) * 100
             dist = f"，距出場 {(x['stop'] / p - 1) * 100:+.1f}%" if x["stop"] else ""
-            lines.append(f"{code} {x['name']} {_fmt(x['lots'])} 張　現價 {p:g}（{pnl:+.1f}%）{dist}")
+            money = (p - x["avg"]) * x["shares"]
+            lines.append(f"{code} {x['name']} {fmt_qty(x['shares'])}　現價 {p:g}（{pnl:+.1f}%，{money:+,.0f} 元）{dist}")
         else:
-            lines.append(f"{code} {x['name']} {_fmt(x['lots'])} 張　均價 {_fmt(x['avg'])}")
-        lines.append(f"　出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}")
+            lines.append(f"{code} {x['name']} {fmt_qty(x['shares'])}　均價 {_fmt(x['avg'])}")
+        lines.append(f"　均價 {_fmt(x['avg'])}｜出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}")
     return "\n".join(lines)
 
 
@@ -504,7 +620,7 @@ def check_once(watch, books, sent, today):
                 sent.add(("add", cid, code))
                 send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
                              f"可以加碼第二筆；加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
-                             f"加碼後回覆：買 {code} 張數 價格")
+                             f"加碼後回覆：買 {code} 數量 價格（例：買 {code} 1張 價格）")
             if x["target"] and p >= x["target"] and ("target", cid, code) not in sent:
                 sent.add(("target", cid, code))
                 send_to(cid, f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
