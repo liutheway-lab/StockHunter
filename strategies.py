@@ -170,14 +170,15 @@ def stabilization(df, i):
 
 
 def vol_low(df, days=65):
-    """近 65 個交易日成交量最大那天的最低點。低點在現價之上＝短線壓力（壓），在現價之下＝支撐參考（撐）"""
+    """近 65 個交易日成交量最大的那天。最高點在現價之上＝短線壓力（壓，看最高點）；否則＝支撐參考（撐，看最低點）"""
     d = df[df["Volume"] > 0].iloc[-days:]
     if d.empty:
         return None
     day = d["Volume"].idxmax()
-    low, close = float(d.loc[day, "Low"]), float(df["Close"].iloc[-1])
-    return {"date": day, "low": low, "vol": float(d.loc[day, "Volume"]) / 1000.0,
-            "side": "壓" if low > close else "撐"}
+    low, high, close = float(d.loc[day, "Low"]), float(d.loc[day, "High"]), float(df["Close"].iloc[-1])
+    pressure = high > close                      # 壓力看最高點，支撐看最低點
+    return {"date": day, "low": low, "high": high, "level": high if pressure else low,
+            "vol": float(d.loc[day, "Volume"]) / 1000.0, "side": "壓" if pressure else "撐"}
 
 
 def active_strategies(layer, stab_ok):
@@ -428,16 +429,22 @@ def check_dry(df, i, mkt=None):
     low20 = float(w20["Low"].min())
     stop1 = tick(float(df["Low"].iloc[i - cfg.DRY_STOP_DAYS + 1:i + 1].min()))        # 出場價＝近 5 日最低點
     below = (key - close) / key if key > 0 else 1.0
-    checks.append((f"離20日高點 ≤ {cfg.DRY_MAX_BELOW_HIGH * 100:.0f}%（才算抗跌）", bool(below <= cfg.DRY_MAX_BELOW_HIGH),
-                   f"20日高點 {key:.2f}、現價 {close:.2f}（低 {below * 100:.1f}%）"))
+    vl0 = vol_low(df.iloc[:i + 1])
+    if vl0 and vl0["side"] == "壓":
+        dist = (vl0["high"] - close) / vl0["high"]
+        checks.append((f"離上方大量壓力 ≤ {cfg.DRY_MAX_PRESSURE_DIST * 100:.0f}%", bool(dist <= cfg.DRY_MAX_PRESSURE_DIST),
+                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {vl0['high']:.2f}、現價 {close:.2f}（差 {dist * 100:.1f}%）"))
+    elif vl0:
+        checks.append((f"離上方大量壓力 ≤ {cfg.DRY_MAX_PRESSURE_DIST * 100:.0f}%", True,
+                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {vl0['high']:.2f} 已在現價之下，上方沒有這個壓力"))
     checks.append(("出場價低於買價", bool(stop1 < E), f"出場 {stop1}、買價 {E}"))
     target = tick(key)                                                                # 第一目標＝前高（突破價）
-    # 第二目標（參考）：依序找上方最近的壓力 → 65 日第 1 大量日最低點（要在前高之上）→ 近 60 日高點 → 買價＋2.5 倍風險
+    # 第二目標（參考）：依序找上方最近的壓力 → 65 日第 1 大量日最高點（要在前高之上）→ 近 60 日高點 → 買價＋2.5 倍風險
     t2, t2_note = None, ""
     vl = vol_low(df.iloc[:i + 1])
     h60 = float(df["High"].iloc[max(0, i - cfg.DRY_T2_HIGH_DAYS + 1):i + 1].max())
-    if vl and vl["low"] > key * 1.001:
-        t2, t2_note = tick(vl["low"]), "65日第1大量日最低點"
+    if vl and vl["side"] == "壓" and vl["high"] > key * 1.001:
+        t2, t2_note = tick(vl["high"]), "65日第1大量日最高點"
     elif h60 > key * 1.001:
         t2, t2_note = tick(h60), f"近{cfg.DRY_T2_HIGH_DAYS}日高點"
     elif E > stop1:
