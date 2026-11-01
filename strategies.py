@@ -185,9 +185,9 @@ def active_strategies(layer, stab_ok):
     if not cfg.USE_REGIME:
         return ["pullback", "breakout", "dry", "flag"], False
     if layer in (1, 2):
-        return ["pullback", "flag"], False
+        return ["pullback", "flag", "breakout"], False       # 盤整後噴出：底部起漲不限空頭，各種行情都可能出現
     if layer == 3:
-        return ["pullback", "flag"], True
+        return ["pullback", "flag", "breakout"], True
     if layer in (4, 5):
         return (["breakout", "dry"] if stab_ok else []), False
     return [], False
@@ -365,9 +365,14 @@ def check_breakout(df, i):
     neck = float(df["High"].iloc[i - cfg.BO_PLATFORM:i].max())
     rise = (close - low60) / low60 if low60 > 0 else float("nan")
     volx = _ratio(vol, mav20)
+    bd = cfg.BO_BOX_DAYS
+    box_hi = float(df["High"].iloc[i - bd:i].max())
+    box_lo = float(df["Low"].iloc[i - bd:i].min())
 
     checks = [
         _liq(row),
+        (f"盤整：近 {bd} 日低點 ≥ 高點 {cfg.BO_BOX_RATIO * 100:.0f}%", bool(box_lo >= cfg.BO_BOX_RATIO * box_hi),
+         f"近 {bd} 日高 {box_hi:.2f}、低 {box_lo:.2f}（低點是高點的 {box_lo / box_hi * 100:.0f}%）"),
         (f"離60日低點漲幅 ≤ {cfg.BO_MAX_RISE * 100:.0f}%", bool(rise <= cfg.BO_MAX_RISE), f"目前 +{rise * 100:.1f}%"),
         (f"突破 {cfg.BO_PLATFORM} 日頸線", close > neck, f"頸線 {neck:.2f}、收盤 {close:.2f}"),
         (f"爆量 ≥ {cfg.BO_VOL_MULT:.1f} 倍", bool(volx >= cfg.BO_VOL_MULT), f"今日 {volx:.1f} 倍 20 日均量"),
