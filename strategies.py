@@ -168,7 +168,8 @@ def stabilization(df, i):
     shadow = float((min(O[d], C[d]) - L[d]) / rng) if rng > 0 else 0.0
     gain = float(C[d] / C[d - 1] - 1) if C[d - 1] > 0 else 0.0
     shadow_ok = bool(shadow >= cfg.STAB_SHADOW)                      # 長下影線（開低走高）
-    red_ok = bool(C[d] > O[d] and gain >= cfg.STAB_RED_GAIN)         # 或長紅
+    body = float((C[d] - O[d]) / rng) if rng > 0 else 0.0              # 實體占整根 K 棒（收黑為負）
+    red_ok = bool(C[d] > O[d] and body >= cfg.STAB_RED_BODY)         # 或長紅
     shape_ok = shadow_ok or red_ok
     vol_ok = bool(V[d] >= dv)
     after = L[d + 1:i + 1]
@@ -180,7 +181,7 @@ def stabilization(df, i):
     rld = idx[d + 1 + int(after.argmin())] if days_after else None
     return {"ok": bool(full), "watching": bool(pending), "signal_date": idx[d],
             "vol_ok": vol_ok, "shape_ok": shape_ok, "no_break": no_break, "vol_missing": False,
-            "shadow": shadow, "gain": gain, "shadow_ok": shadow_ok, "red_ok": red_ok,
+            "shadow": shadow, "gain": gain, "body": body, "shadow_ok": shadow_ok, "red_ok": red_ok,
             "days_after": days_after, "need_days": 1,
             "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
             "recent_start": idx[d], "recent_end": idx[i],
@@ -251,7 +252,7 @@ def describe_market(mk):
             lines.append(
                 f"🧱 止跌確認：{state}（三項都要通過）\n"
                 f"　{ok(s['vol_ok'])} 量能：低點日成交額是爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上\n"
-                f"　{ok(s['shape_ok'])} K 棒：下影線占 {s['shadow'] * 100:.0f}%（需 ≥{cfg.STAB_SHADOW * 100:.0f}%），或收紅漲 {s['gain'] * 100:+.1f}%（需 ≥{cfg.STAB_RED_GAIN * 100:.1f}%）\n"
+                f"　{ok(s['shape_ok'])} K 棒：下影線占 {s['shadow'] * 100:.0f}%（需 ≥{cfg.STAB_SHADOW * 100:.0f}%），或收紅實體占 {s['body'] * 100:.0f}%（需 ≥{cfg.STAB_RED_BODY * 100:.0f}%）\n"
                 f"　{ok(s['no_break'])} 不破低：低點日最低 {s['prior_low']:,.0f}，"
                 f"之後 {s['days_after']} 天最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}"
             )
