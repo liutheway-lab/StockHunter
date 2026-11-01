@@ -1,3 +1,9 @@
+"""ping.py — 第 1 步：連線測試
+檢查三件事，並把結果傳到你的 Telegram：
+1. Telegram 能不能發訊息
+2. Yahoo 行情抓不抓得到（加權指數）
+3. 證交所官方股票清單抓不抓得到
+"""
 import io
 import os
 from datetime import datetime
@@ -26,14 +32,13 @@ def check_yahoo():
 
 def check_twse():
     try:
-        url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
-        r = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-        r.encoding = "ms950"
-        df = pd.read_html(io.StringIO(r.text))[0]
-        df.columns = df.iloc[0]
-        df = df.iloc[1:]
-        df = df[df["CFICode"] == "ESVUFR"]
-        return f"✅ 證交所清單：上市股票 {len(df)} 檔"
+        import lookup
+        d = lookup.load_directory()
+        n1 = int((d["market"] == "上市").sum())
+        n2 = int((d["market"] == "上櫃").sum())
+        if n1 == 0 or n2 == 0:
+            return f"❌ 證交所清單：上市 {n1} 檔、上櫃 {n2} 檔（有一邊抓不到）"
+        return f"✅ 證交所清單：上市 {n1} 檔、上櫃 {n2} 檔"
     except Exception as e:
         return f"❌ 證交所清單：{e}"
 
