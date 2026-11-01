@@ -197,6 +197,8 @@ def levels_for(code, suffix, price):
                 r = fn(df, i)
                 if r and "cons_hi" in r:
                     stop, _ = st.attack_stop(r, price)
+                    if stop >= price or r["target"] <= price:      # 輸入的成交價跟現在的盤整區對不上（價位差太多），不能套用
+                        break
                     return {"stop": stop, "target": r["target"], "key": st.tick(r["key"]),
                             "note": f"依{cfg.STRATEGY_NAMES[r['name']]}的盤整型態計算"}
     except Exception as e:
