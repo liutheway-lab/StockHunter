@@ -182,7 +182,8 @@ def stabilization(df, i):
     if not cands:
         return None
     c = (next((x for x in cands if x["full"]), None) or next((x for x in cands if x["pending"]), None)
-         or next((x for x in cands if x["sig"]), None) or max(cands, key=lambda x: V[x["d"]]))
+         or next((x for x in cands if x["sig"]), None)
+         or max(cands, key=lambda x: (int(x["vol_ok"]) + int(x["shape_ok"]) + int(x["no_break"]), x["d"])))   # 都不符合：挑「最接近」的一天，一樣分數取最近的
     d = c["d"]
     after = c["after"]
     rl = float(after.min()) if len(after) else None
