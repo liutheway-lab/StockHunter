@@ -66,23 +66,22 @@ def market_block(mk):
             ok = lambda b: "✅" if b else "❌"
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             da, nd = s["days_after"], s["need_days"]
-            state = "✅ 通過" if s["ok"] else (f"⏳ 觀察中・第 {da}／{nd} 天" if s.get("watching") else "❌ 未通過")
+            state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
             out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 都過才算止跌")
             cmp_ = lambda b, ge="≥", lt="<": ge if b else lt
-            low_ok = "✅" if s["no_break"] and da >= nd else "⏳" if (s["no_break"] or da == 0) else "❌"
+            low_ok = "✅" if s["no_break"] else "⏳" if da == 0 else "❌"
             sig = s["vol_ok"] and s["shape_ok"]
             blk1 = [f"量能　{ratio:>5.0f}% {cmp_(s['vol_ok'])} {100:>3}%　{ok(s['vol_ok'])}"]
             if da == 0:
-                blk1.append("不破低　才剛反彈　⏳")
+                blk1.append("不破低　今天是低點　⏳")
             else:
                 blk1.append(f"不破低 {s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f} {low_ok}")
             blk2 = [f"下影線 {s['shadow'] * 100:>4.0f}% {cmp_(s['shadow_ok'])} {cfg.STAB_SHADOW * 100:>3.0f}%　{ok(s['shadow_ok'])}",
                     "",
                     f"長　紅 {s['gain'] * 100:>+5.1f}% {cmp_(s['red_ok'])} {cfg.STAB_RED_GAIN * 100:>+4.1f}%　{ok(s['red_ok'])}"]
-            out.append(f"📅 爆量日：{s['dump_date']:%m/%d}\n（這波成交額最大的下跌日）\n"
-                       + (f"📅 反彈日：{s['signal_date']:%m/%d}\n" if sig else
-                          f"📅 反彈日：還沒出現\n（目前最接近 {s['signal_date']:%m/%d}）\n"))
-            out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝最近3天最大成交額\n　　　÷爆量日成交額\n不破低＝反彈日後最低點\n　　　　要高於反彈日最低點")
+            out.append(f"爆量日：{s['dump_date']:%m/%d}\n（這波成交額最大的下跌日）\n"
+                       f"低點日：{s['signal_date']:%m/%d}\n（最近 3 天股價最低的那天）")
+            out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝低點日成交額\n　　　÷爆量日成交額\n不破低＝低點日之後的最低點\n　　　　要高於低點日最低點")
             out.append(code_block(blk1, lang="text"))
             out.append("*② K棒*　二擇一，有一項 ✅ 就過")
             out.append(code_block(blk2, lang="text"))
