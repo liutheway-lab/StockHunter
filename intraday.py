@@ -345,6 +345,11 @@ def process_commands():
         m = u.get("message") or {}
         chat = m.get("chat") or {}
         text = (m.get("text") or "").strip()
+        if chat.get("type") in ("group", "supergroup") and text.split("@")[0] in ("/id", "/start"):
+            send_to(str(chat["id"]), f"這個群組的 ID 是 `{chat['id']}`\n"
+                                     "請到 GitHub → Settings → Secrets and variables → Actions\n"
+                                     "把 TG\\_CHAT\\_ID 改成這串數字（含前面的負號）")
+            continue
         if chat.get("type") != "private" or not text:
             continue
         cid = str(chat["id"])
