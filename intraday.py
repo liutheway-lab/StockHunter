@@ -195,7 +195,7 @@ def levels_for(code, suffix, price):
             i = len(df) - 1
             for fn in (st.check_pullback, st.check_flag):
                 r = fn(df, i)
-                if r and "cons_hi" in r:
+                if r and "cons_hi" in r and r.get("pre_ok"):     # 盤整條件真的成立才套用（還沒攻擊也行）
                     stop, _ = st.attack_stop(r, price)
                     if stop >= price or r["target"] <= price:      # 輸入的成交價跟現在的盤整區對不上（價位差太多），不能套用
                         break
@@ -204,7 +204,7 @@ def levels_for(code, suffix, price):
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
     return {"stop": st.tick(price * (1 - cfg.ATTACK_MAX_LOSS), "ceil"), "target": None, "key": None,
-            "note": f"找不到盤整型態，出場價先設買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%，可用「設」指令修改"}
+            "note": f"這檔目前不符合創高拉回／噴後整理的盤整條件，出場價先設買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%，目標、前高留空，可用「設」指令修改"}
 
 
 # ================= 指令 =================
@@ -397,7 +397,7 @@ def guided(cid, text, h):
             return None
         name, _ = stock_name_suffix(s_["code"])
         s_["step"] = "qty"
-        send_kb(cid, f"{s_['code']} {name}\n買了多少？輸入「2張」或「500股」", _kb([["1張", "2張", "5張"], ["取消"]]))
+        send_kb(cid, f"{s_['code']} {name}\n買了多少？輸入「2張」或「500股」", _kb([["取消"]]))
         return None
     if s_["step"] == "qty":
         if s_["flow"] == "sell" and t == "全部":
