@@ -65,14 +65,27 @@ def market_block(mk):
         else:
             ok = lambda b: "✅" if b else "❌"
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
-            out.append(f"🧱 *止跌確認*　{'✅ 通過' if s['ok'] else '❌ 未通過'}（兩項都要過）")
-            # 兩列的數字欄位寬度一樣、標籤都是 3 個中文字，所以會對齊
+            da, nd = s["days_after"], s["need_days"]
+            state = "✅ 通過" if s["ok"] else (f"⏳ 觀察中・第 {da}／{nd} 天" if s.get("watching") else "❌ 未通過")
+            out.append(f"🧱 *止跌確認*　{state}（三項都要過）")
+            if da == 0:
+                low_row = f"不破低　訊號日剛出現　⏳"
+            else:
+                low_row = (f"不破低　{s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f}　"
+                           + ("✅" if s["no_break"] and da >= nd else "⏳" if s["no_break"] else "❌"))
+            # 三列標籤都是 3 個中文字、數字欄位寬度一樣，所以會對齊
             out.append(code_block([
-                f"不破低　{s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f}　{ok(s['no_break'])}",
-                f"量承接　{ratio:>5.0f}% {'≥' if s['vol_ok'] else '<'} {100:>5}%　{ok(s['vol_ok'])}",
+                f"大量日　{ratio:>5.0f}% {'≥' if s['vol_ok'] else '<'} {100:>5}%　{ok(s['vol_ok'])}",
+                f"長下影　{s['shadow'] * 100:>5.0f}% {'≥' if s['shape_ok'] else '<'} {cfg.STAB_SHADOW * 100:>5.0f}%　{ok(s['shape_ok'])}",
+                low_row,
             ]))
-            out.append(f"不破低＝近 3 日最低 vs 前低（{s['prior_low_date']:%m/%d}）\n"
-                       f"量承接＝近 3 日最大量 vs 爆量下跌日（{s['dump_date']:%m/%d}）")
+            out.append(f"訊號日＝{s['signal_date']:%m/%d}\n"
+                       f"大量日＝成交額 vs 爆量日 {s['dump_date']:%m/%d}\n"
+                       "長下影＝下影線占當天區間\n"
+                       "不破低＝訊號日之後的最低\n"
+                       "　　　　vs 訊號日的最低")
+            if s["ok"]:
+                out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
         out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明，請縮小部位" if mk["risk"] else ""))
