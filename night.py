@@ -51,10 +51,13 @@ def market_block(mk):
         return s + (f"   {l2:<5}{v2:>8,.0f}" if v2 is not None else "")
 
     # 全部是半形字，所以一定對齊
-    tbl = [two("Close", mk["close"], "MA5", ma[5]),
-           two("MA10", ma[10], "MA20", ma[20]),
-           two("MA60", ma[60])]
-    out = [head, code_block(tbl)]
+    tbl = [two("MA5", ma[5], "MA10", ma[10]),
+           two("MA20", ma[20], "MA60", ma[60])]
+    cc = mk["df"]["Close"]
+    chg = float(cc.iloc[-1] - cc.iloc[-2]) if len(cc) > 1 else 0.0
+    pct = chg / float(cc.iloc[-2]) * 100 if len(cc) > 1 else 0.0
+    arrow = "🔴 ▲" if chg > 0 else "🟢 ▼" if chg < 0 else "⚪ ─"          # 台股習慣：紅漲、綠跌
+    out = [head, f"收盤　{mk['close']:,.0f}\n{arrow} {abs(chg):,.0f} 點（{pct:+.2f}%）", code_block(tbl)]
 
     if mk["layer"] in (4, 5):
         s = mk["stab"]
@@ -71,20 +74,23 @@ def market_block(mk):
             cmp_ = lambda b, ge="≥", lt="<": ge if b else lt
             low_ok = "✅" if s["no_break"] else "⏳" if da == 0 else "❌"
             sig = s["vol_ok"] and s["shape_ok"]
-            blk1 = [f"量能　{ratio:>5.0f}% {cmp_(s['vol_ok'])} {100:>3}%　{ok(s['vol_ok'])}"]
+            blk1 = [f"量能　{ratio:>4.0f}%　要 ≥ 100%　{ok(s['vol_ok'])}"]
             if da == 0:
-                blk1.append("不破低　今天是低點　⏳")
+                blk1.append("不破低　　　待觀察　　⏳")
             else:
-                blk1.append(f"不破低 {s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f} {low_ok}")
-            blk2 = [f"下影線 {s['shadow'] * 100:>4.0f}% {cmp_(s['shadow_ok'])} {cfg.STAB_SHADOW * 100:>3.0f}%　{ok(s['shadow_ok'])}",
+                blk1.append(f"不破低 {s['recent_low']:,.0f} 要 > {s['prior_low']:,.0f}　{low_ok}")
+            blk2 = [f"下影線 {s['shadow'] * 100:>4.0f}%　要 ≥ {cfg.STAB_SHADOW * 100:.0f}%　{ok(s['shadow_ok'])}",
                     "",
-                    f"長　紅 {s['gain'] * 100:>+5.1f}% {cmp_(s['red_ok'])} {cfg.STAB_RED_GAIN * 100:>+4.1f}%　{ok(s['red_ok'])}"]
+                    f"長　紅 {s['body'] * 100:>4.0f}%　要 ≥ {cfg.STAB_RED_BODY * 100:.0f}%　{ok(s['red_ok'])}"]
             out.append(f"爆量日：{s['dump_date']:%m/%d}\n（這波成交額最大的下跌日）\n"
                        f"低點日：{s['signal_date']:%m/%d}\n（最近 3 天股價最低的那天）")
             out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝低點日成交額\n　　　÷爆量日成交額\n不破低＝低點日之後的最低點\n　　　　要高於低點日最低點")
             out.append(code_block(blk1, lang="text"))
+            if da == 0:
+                out.append("⏳ 今天為近 3 日最低點\n待後續觀察")
             out.append("*② K棒*　二擇一，有一項 ✅ 就過")
             out.append(code_block(blk2, lang="text"))
+            out.append("下影線＝下影線占當天高低差的比例\n長紅＝紅K實體占當天整根K棒\n　　　的比例（收黑為負數）")
             if s["ok"]:
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
