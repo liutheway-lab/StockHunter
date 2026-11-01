@@ -17,13 +17,14 @@ import intraday as I
 
 SECRET = hashlib.sha256(I.TG_TOKEN.encode()).hexdigest()[:32]     # 網址裡的暗號，避免別人亂打這個網址
 HOOK_PATH = f"/tg/{SECRET}"
+_asked = set()                    # 已經通知過管理者的人，不要每則訊息都重複通知
 _lock = threading.Lock()          # 一次處理一則，避免兩則訊息同時改到同一份持股
 
 
 def on_update(u):
     with _lock:
         try:
-            I.handle_message(u.get("message") or {}, {}, set())
+            I.handle_message(u.get("message") or {}, {}, _asked)
         except Exception as e:
             print("處理訊息失敗：", repr(e), flush=True)
 
