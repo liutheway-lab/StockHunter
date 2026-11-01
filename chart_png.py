@@ -89,12 +89,12 @@ def market_chart(mk, bars=45):
         ax.annotate(f"之後最低 {rl:,.0f}（{rld:%m/%d}）", xy=(rp, rl),
                     xytext=(max(rp - 15, 0), lowest - rng_v * 0.13), fontsize=9, color="#8e6bd8",
                     arrowprops=dict(arrowstyle="->", color="#8e6bd8"))
-    last_o, last_c = float(d["Open"].iloc[-1]), float(d["Close"].iloc[-1])
-    ax.add_patch(plt.Rectangle((x[-1] - 0.6, float(d["Low"].iloc[-1])), 1.2,
-                               float(d["High"].iloc[-1] - d["Low"].iloc[-1]), fill=False,
-                               edgecolor="#111", linewidth=1.4, linestyle="--", zorder=6))   # 最新一天框起來
-    ax.annotate("最新一天", xy=(x[-1], float(d["High"].iloc[-1])), xytext=(x[-1] - 7, float(d["High"].iloc[-1]) + rng_v * 0.17),
-                fontsize=9, color="#111", ha="center", arrowprops=dict(arrowstyle="->", color="#111", linewidth=0.8))
+    dd0 = s.get("dump_date")
+    dpp = _pos(idx, dd0) if dd0 is not None else None
+    if dpp is not None:                                   # 爆量下跌日那根 K 線也用橘色粗框框起來
+        ax.add_patch(plt.Rectangle((dpp - 0.6, float(d["Low"].iloc[dpp]) - rng_v * 0.01), 1.2,
+                                   float(d["High"].iloc[dpp] - d["Low"].iloc[dpp]) + rng_v * 0.02, fill=False,
+                                   edgecolor="#ff8c00", linewidth=2.6, zorder=6))
     ax.set_ylabel("指數")
     ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
     ax.grid(alpha=0.15)
@@ -109,9 +109,9 @@ def market_chart(mk, bars=45):
             dp = _pos(idx, dd)
             axv.axhline(dv / 1e8, color="#555", linestyle="--", linewidth=1)
             if dp is not None:
-                axv.bar([dp], [dv / 1e8], color="none", edgecolor="#1a237e", linewidth=3.2, width=0.65)
+                axv.bar([dp], [dv / 1e8], color="none", edgecolor="#ff8c00", linewidth=3.2, width=0.65)
                 axv.annotate(f"爆量下跌日（{dd:%m/%d}）", xy=(dp, dv / 1e8),
-                             xytext=(dp - 1, dv / 1e8 * 1.03), fontsize=9, color="#1a237e", ha="right", fontweight="bold")
+                             xytext=(dp - 1, dv / 1e8 * 1.03), fontsize=9, color="#e67300", ha="right", fontweight="bold")
         rv = s.get("recent_vol")
         sp = _pos(idx, s.get("vol_date", pld))
         if rv and dv and sp is not None:
