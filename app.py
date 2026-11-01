@@ -136,7 +136,7 @@ def rank_name(r):
 
 
 def vol_low_info(df):
-    """近 65 個交易日依成交量排名。main＝量最大那天；若它的最低點比現價高（壓力），
+    """近 65 個交易日依成交量排名。main＝量最大那天；若它的最高點比現價高（壓力，標最高點），
     sup＝排名最前、而且最低點在現價之下的那天（短線支撐，標示它是第幾大量）"""
     d = df[df["Volume"] > 0].iloc[-VOL_DAYS:]
     if d.empty:
@@ -145,11 +145,14 @@ def vol_low_info(df):
     order = list(d["Volume"].sort_values(ascending=False).index)
 
     def pack(day, rank):
-        return {"key": f"{day:%m/%d}", "low": float(d.loc[day, "Low"]), "vol": float(d.loc[day, "Volume"]) / 1000.0,
+        lo_, hi_ = float(d.loc[day, "Low"]), float(d.loc[day, "High"])
+        return {"key": f"{day:%m/%d}", "low": lo_, "high": hi_, "level": lo_, "vol": float(d.loc[day, "Volume"]) / 1000.0,
                 "rank": rank, "name": rank_name(rank)}
 
     main = pack(order[0], 1)
-    main["pressure"] = main["low"] > close
+    main["pressure"] = main["high"] > close          # 壓力看最高點、支撐看最低點
+    if main["pressure"]:
+        main["level"] = main["high"]
     sup = None
     if main["pressure"]:
         for r, day in enumerate(order[1:VOL_SUP_RANK], start=2):
@@ -276,15 +279,15 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
 
         main, sup = info["main"], info["sup"]
         labels = [(main, RED if main["pressure"] else GREEN,
-                   f"{main['name']}（{main['key']}）<br>最低點 {px(main['low'])}")]
+                   f"{main['name']}（{main['key']}）<br>{'最高點' if main['pressure'] else '最低點'} {px(main['level'])}")]
         if sup:
             labels.append((sup, GREEN, f"{sup['name']}（{sup['key']}）<br>最低點 {px(sup['low'])}"))
         # 那天太久以前、不在這張圖的範圍內：只畫一條同色點線，文字放在線的左上方（寫明日期）
         far = [(it, c, t) for it, c, t in labels if it["key"] not in dates]
         labels = [(it, c, t) for it, c, t in labels if it["key"] in dates]
         for it, c, t in far:
-            fig.add_hline(y=it["low"], row=1, col=1, line=dict(color=c, width=1, dash="dot"))
-            fig.add_annotation(x=dates[0], y=it["low"], row=1, col=1, text=t.replace("<br>", "　"), showarrow=False,
+            fig.add_hline(y=it["level"], row=1, col=1, line=dict(color=c, width=1, dash="dot"))
+            fig.add_annotation(x=dates[0], y=it["level"], row=1, col=1, text=t.replace("<br>", "　"), showarrow=False,
                                xanchor="left", yanchor="bottom", font=dict(color=c, size=11))
         W, bar_px = 318.0, 318.0 / max(n_bar, 1)
         xs = [dates.index(it["key"]) * bar_px if it["key"] in dates else None for it, _, _ in labels]
@@ -328,11 +331,11 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                 continue
             text_y = band_top - (24 + 46 * row_i) / ppu          # 兩排文字各自固定高度
             anc = ancs[row_i]
-            fig.add_annotation(x=it["key"], y=it["low"], row=1, col=1, text=text,
+            fig.add_annotation(x=it["key"], y=it["level"], row=1, col=1, text=text,
                                showarrow=True, arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=soft(color),
-                               ax={"right": -4, "left": 4, "center": 0}[anc], ay=max(18.0, (it["low"] - text_y) * ppu),
+                               ax={"right": -4, "left": 4, "center": 0}[anc], ay=max(18.0, (it["level"] - text_y) * ppu),
                                xanchor=anc, font=dict(color=color, size=12))
-            fig.add_hline(y=it["low"], row=1, col=1, line=dict(color=color, width=1, dash="dot"))
+            fig.add_hline(y=it["level"], row=1, col=1, line=dict(color=color, width=1, dash="dot"))
 
     fig.update_layout(
         xaxis_rangeslider_visible=False, margin=dict(l=5, r=5, t=35, b=5), height=440,
@@ -608,7 +611,7 @@ def rec_buttons(prefix, strategy, items, limit=15):
                      key=f"{prefix}_{strategy}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
-    st.caption(L("🔴壓＝近 65 交易日第 1 大量當天最低點在現價之上（短線壓力）", "🟢撐＝在現價之下（支撐、出場參考）"))
+    st.caption(L("🔴壓＝近 65 交易日第 1 大量當天最高點在現價之上（短線壓力）", "🟢撐＝最低點在現價之下（支撐、出場參考）"))
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
@@ -911,7 +914,7 @@ if target:
                 m_ = vi["main"]
                 head = f"**近 65 交易日{m_['name']}　{m_['key']}（{m_['vol']:,.0f} 張）**"
                 if m_["pressure"]:
-                    st.markdown(L(head, f"最低點 {px(m_['low'])}，高於現價 {px(close)}",
+                    st.markdown(L(head, f"最高點 {px(m_['high'])}，高於現價 {px(close)}",
                                   "🔴 很可能是短線壓力，不利上攻"))
                     sp = vi["sup"]
                     if sp:
