@@ -209,8 +209,7 @@ def levels_for(code, suffix, price):
 
 # ================= 指令 =================
 # 輸入框按「/」會跳出的選單（Telegram 規定指令只能用英文，中文直接打也可以）
-MENU = [("help", "使用說明"), ("holdings", "查看目前持股"), ("buy", "買進　例：/buy 2330 2 950"),
-        ("sell", "賣出　例：/sell 2330"), ("set", "修改價位　例：/set 2330 出場 920")]
+MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設"}
 KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "說明"}]],
             "resize_keyboard": True, "is_persistent": True}
@@ -219,14 +218,15 @@ FORMAT = {
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
     "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000",
 }
-HELP = ("🤖 *持股指令*\n"
-        "按下方按鈕最簡單：買進／賣出／持股\n"
-        "也可以直接打一行：\n"
-        "買 2330 2張 950　（張、股都可以：500股）\n"
-        "買 2330 2張 950 出場 900 目標 1100\n"
-        "賣 2330　全部賣出；賣 2330 1張、賣 2330 500股\n"
-        "設 2330 出場 920　改出場價（也可改 目標、前高）\n"
-        "持股　看目前持股")
+HELP = ("🤖 *持股追蹤*\n"
+        "按下方按鈕就行：\n"
+        "買進　→ 輸入代號、數量、成交價\n"
+        "賣出　→ 選股票、數量\n"
+        "持股　→ 看目前持股與即時損益\n"
+        "\n"
+        "數量可以打「2張」或「500股」。\n"
+        "改價位：設 2330 出場 920（也可改 目標、前高）\n"
+        "出場、目標價碰到時，機器人會私訊提醒你。")
 
 
 def _opts(words):
@@ -319,8 +319,10 @@ def handle(text, h):
 _OFFSET_FILE = Path("/tmp/tg_offset")
 
 
-ADMIN_HELP = ("\n\n👑 *管理者指令*\n"
-              "允許 12345 小明　讓朋友使用持股追蹤\n"
+ADMIN_HELP = ("\n\n👑 *管理者說明*\n"
+              "朋友想用持股追蹤：請他私訊這個機器人，你會收到通知，\n"
+              "回覆通知裡那行「允許 ID 名字」就開通。\n"
+              "允許 12345 小明　開通\n"
               "移除 12345　取消\n"
               "使用者　看目前有誰可以用")
 
@@ -450,7 +452,10 @@ def handle_message(m, state, asked):
     if cid != OWNER and cid not in users:            # 還沒開通的人：通知管理者
         frm = m.get("from") or {}
         name = (frm.get("first_name") or "") + (f"（@{frm['username']}）" if frm.get("username") else "")
-        send_to(cid, "已經通知管理者，開通後就能使用持股追蹤。\n追價提醒、夜間掃描會發在群組裡。")
+        send_to(cid, f"👋 這是持股追蹤機器人，需要管理者開通才能使用。\n"
+                     f"已經把你的申請（ID {cid}）送給管理者，開通後會通知你，請稍等。\n"
+                     "不用重複傳訊息。\n\n"
+                     "追價提醒、夜間選股結果會發在群組裡，不用開通就能看。")
         if cid not in asked:
             asked.add(cid)
             send_to(OWNER, f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n"
@@ -479,8 +484,10 @@ def handle_message(m, state, asked):
 
 
 def setup_menu():
-    tg("setMyCommands", commands=[{"command": c, "description": d} for c, d in MENU],
-       scope={"type": "all_private_chats"})
+    """清掉輸入框旁的「Menu」指令選單（用下方按鈕就夠了）"""
+    for scope in ({"type": "all_private_chats"}, {"type": "default"}):
+        tg("deleteMyCommands", scope=scope)
+    tg("setChatMenuButton", menu_button={"type": "default"})
 
 
 def process_commands():
