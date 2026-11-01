@@ -89,6 +89,12 @@ def market_chart(mk, bars=45):
         ax.annotate(f"之後最低 {rl:,.0f}（{rld:%m/%d}）", xy=(rp, rl),
                     xytext=(max(rp - 15, 0), lowest - rng_v * 0.13), fontsize=9, color="#d35400",
                     arrowprops=dict(arrowstyle="->", color="#d35400"))
+    last_o, last_c = float(d["Open"].iloc[-1]), float(d["Close"].iloc[-1])
+    ax.add_patch(plt.Rectangle((x[-1] - 0.6, float(d["Low"].iloc[-1])), 1.2,
+                               float(d["High"].iloc[-1] - d["Low"].iloc[-1]), fill=False,
+                               edgecolor="#111", linewidth=1.4, linestyle="--", zorder=6))   # 最新一天框起來
+    ax.annotate("最新一天", xy=(x[-1], float(d["High"].iloc[-1])), xytext=(x[-1] - 7, float(d["High"].iloc[-1]) + rng_v * 0.17),
+                fontsize=9, color="#111", ha="center", arrowprops=dict(arrowstyle="->", color="#111", linewidth=0.8))
     ax.set_ylabel("指數")
     ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
     ax.grid(alpha=0.15)
@@ -103,9 +109,9 @@ def market_chart(mk, bars=45):
             dp = _pos(idx, dd)
             axv.axhline(dv / 1e8, color="#555", linestyle="--", linewidth=1)
             if dp is not None:
-                axv.bar([dp], [dv / 1e8], color="none", edgecolor="#d35400", linewidth=1.8, width=0.65)
+                axv.bar([dp], [dv / 1e8], color="none", edgecolor="#1a237e", linewidth=3.2, width=0.65)
                 axv.annotate(f"爆量下跌日（{dd:%m/%d}）", xy=(dp, dv / 1e8),
-                             xytext=(dp - 1, dv / 1e8 * 1.03), fontsize=9, color="#d35400", ha="right")
+                             xytext=(dp - 1, dv / 1e8 * 1.03), fontsize=9, color="#1a237e", ha="right", fontweight="bold")
         rv = s.get("recent_vol")
         sp = _pos(idx, s.get("vol_date", pld))
         if rv and dv and sp is not None:
