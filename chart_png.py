@@ -36,6 +36,7 @@ def market_chart(mk, bars=45):
     stab_mode = mk.get("layer") in (4, 5) and bool(mk.get("stab"))   # 空頭層級才畫止跌確認的標註
     s = (mk.get("stab") or {}) if stab_mode else {}
     has_vol = bool(d["Volume"].notna().any())
+    nm = "反彈日" if (s.get("vol_ok") and s.get("shape_ok")) else "最接近的一天"
 
     fig, axes = plt.subplots(2 if has_vol else 1, 1, figsize=(8, 6.2 if has_vol else 4.2), dpi=150,
                              sharex=True, gridspec_kw={"height_ratios": [3, 1.3]} if has_vol else None)
@@ -77,15 +78,15 @@ def market_chart(mk, bars=45):
         p = _pos(idx, pld)
         if p is not None:
             ax.scatter([p], [pl], marker="^", color="#333", zorder=5, s=30)
-            ax.annotate(f"訊號日低點 {pl:,.0f}（{pld:%m/%d}）", xy=(p, pl),
+            ax.annotate(f"{nm}最低 {pl:,.0f}（{pld:%m/%d}）", xy=(p, pl),
                         xytext=(max(p - 20, 0.5), lowest - rng_v * 0.05), fontsize=9, color="#333",
                         arrowprops=dict(arrowstyle="->", color="#333", linewidth=0.9))
         else:
-            ax.text(0.5, pl + rng_v * 0.02, f"訊號日低點 {pl:,.0f}", fontsize=9, color="#333")
+            ax.text(0.5, pl + rng_v * 0.02, f"{nm}最低 {pl:,.0f}", fontsize=9, color="#333")
     if rl is not None and _pos(idx, rld) is not None:
         rp = _pos(idx, rld)
         ax.scatter([rp], [rl], color="#d35400", zorder=5, s=28)
-        ax.annotate(f"訊號日後最低 {rl:,.0f}（{rld:%m/%d}）", xy=(rp, rl),
+        ax.annotate(f"之後最低 {rl:,.0f}（{rld:%m/%d}）", xy=(rp, rl),
                     xytext=(max(rp - 15, 0), lowest - rng_v * 0.13), fontsize=9, color="#d35400",
                     arrowprops=dict(arrowstyle="->", color="#d35400"))
     ax.set_ylabel("指數")
@@ -104,16 +105,16 @@ def market_chart(mk, bars=45):
             if dp is not None:
                 axv.bar([dp], [dv / 1e8], color="none", edgecolor="#d35400", linewidth=1.8, width=0.65)
                 axv.annotate(f"爆量下跌日（{dd:%m/%d}）", xy=(dp, dv / 1e8),
-                             xytext=(max(dp - 10, 0), dv / 1e8 * 1.04), fontsize=9, color="#d35400")
+                             xytext=(dp - 1, dv / 1e8 * 1.03), fontsize=9, color="#d35400", ha="right")
         rv = s.get("recent_vol")
-        sp = _pos(idx, pld)
+        sp = _pos(idx, s.get("vol_date", pld))
         if rv and dv and sp is not None:
-            axv.annotate(f"訊號日量 = 爆量日的 {rv / dv * 100:.0f}%", xy=(sp, rv / 1e8),
-                         xytext=(max(sp - 14, 0), max(float(v.max()), dv / 1e8) * 1.12), fontsize=9, color="#333",
+            axv.annotate(f"近3天最大量 = 爆量日的 {rv / dv * 100:.0f}%", xy=(sp, rv / 1e8),
+                         xytext=(sp, max(float(v.max()), dv / 1e8) * 1.14), fontsize=9, color="#333", ha="right",
                          arrowprops=dict(arrowstyle="->", color="#555"))
         axv.set_ylabel("成交金額（證交所，億）")
         axv.grid(alpha=0.15)
-        axv.set_ylim(0, max(float(v.max()), (dv or 0) / 1e8) * 1.25)
+        axv.set_ylim(0, max(float(v.max()), (dv or 0) / 1e8) * 1.3)
 
     # --- X 軸日期 ---
     last_ax = axv if has_vol else ax
@@ -125,12 +126,12 @@ def market_chart(mk, bars=45):
 
     if stab_mode:
         verdict = "通過" if mk["stab"].get("ok") else ("無法確認" if mk["stab"].get("vol_missing") else "未通過")
-        title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}　止跌確認：{verdict}（黃色區 = 訊號日起）"
+        title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}　止跌確認：{verdict}（黃色區 = {nm}起）"
     else:
         title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}"
     fig.suptitle(title, fontsize=11, x=0.02, ha="left")
     if stab_mode:
-        fig.text(0.02, 0.008, "黃色區＝訊號日起　虛線＝訊號日最低點、爆量下跌日的量",
+        fig.text(0.02, 0.008, f"黃色區＝{nm}起　虛線＝{nm}最低點、爆量下跌日的量",
                  fontsize=8, color="#666", ha="left", va="bottom")
     fig.tight_layout(rect=(0, 0.025 if stab_mode else 0, 1, 0.96))
     buf = io.BytesIO()
