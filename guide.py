@@ -54,7 +54,8 @@ def build():
 　　下影線 ≥ 當天高低差的
 　　{pct(cfg.STAB_SHADOW)}
 　長紅
-　　收紅，漲幅 ≥ {cfg.STAB_RED_GAIN * 100:.1f}%
+　　收紅，實體占整根 K 棒
+　　≥ {cfg.STAB_RED_BODY * 100:.0f}%
 　代表：低檔有人用力買
 ③ 不破低
 　低點日之後的最低點，
