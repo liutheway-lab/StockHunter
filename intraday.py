@@ -5,13 +5,16 @@
   🛑／⬆️／🎯 持股提醒（只傳給你）：跌破出場價、站上前波高點可加碼、碰到目標價
 同一檔、同一種提醒，一天只推播一次。
 
-持股用 Telegram 私訊機器人輸入（只接受 TG_OWNER_ID 這個人）：
+持股用 Telegram 私訊機器人輸入。管理者（TG_OWNER_ID）可以開通朋友：
+  朋友私訊機器人 → 管理者收到通知 → 回覆「允許 朋友ID 名字」就開通；「移除 ID」取消；「使用者」看名單
+  每個人的持股分開存在自己跟機器人的私訊裡，提醒也只傳給本人。
+指令：
   買 2330 2 950            買進 2 張、950 元（已有持股就算加碼，自動算均價）
   買 2330 2 950 出場 900 目標 1100   自己指定出場價、目標價
   賣 2330                  全部賣出；賣 2330 1 ＝賣 1 張
   設 2330 出場 920         修改出場價（也可以改 目標、前高）
   持股                     看目前持股與距離出場價多遠
-持股存在你跟機器人的私人對話裡（置頂的那則「📌 持股清單」），repo 是公開的也看不到。
+持股存在各自跟機器人的私人對話裡（置頂的那則「📌 持股清單」），repo 是公開的也看不到。
 
 跑法：
   python intraday.py             盤中監控（給 intraday.yml 用）
@@ -78,46 +81,71 @@ def _fmt(x):
     return "—" if x is None else f"{x:g}"
 
 
-def load_holdings():
-    """回傳 (持股 dict, 置頂訊息 id)"""
-    if not OWNER:
-        return {}, None
-    j = tg("getChat", chat_id=OWNER)
+USERS_TAG = "👥 使用者："
+USER_RE = re.compile(r"(\d+)\s+([^,，]+)")
+
+
+def send_to(cid, text):
+    if cid:
+        tg_send(str(cid), [text])
+    else:
+        print("[沒有對象]", text)
+
+
+def load_holdings(cid):
+    """讀某個人私訊裡置頂的持股清單。回傳 (持股 dict, 置頂訊息 id, 使用者名單 dict)；使用者名單只存在管理者那則"""
+    if not cid:
+        return {}, None, {}
+    j = tg("getChat", chat_id=cid)
     pm = (j.get("result") or {}).get("pinned_message") or {}
     text = pm.get("text") or ""
     if not text.startswith(HOLD_TAG):
-        return {}, None
-    h = {}
+        return {}, None, {}
+    h, users = {}, {}
     for ln in text.splitlines()[1:]:
-        m = LINE_RE.match(ln.strip())
+        ln = ln.strip()
+        if ln.startswith(USERS_TAG):
+            users = {m.group(1): m.group(2).strip() for m in USER_RE.finditer(ln[len(USERS_TAG):])}
+            continue
+        m = LINE_RE.match(ln)
         if m:
             code, name, lots, avg, stop, target, key, added = m.groups()
             h[code] = {"name": name, "lots": float(lots), "avg": float(avg), "stop": _num(stop),
                        "target": _num(target), "key": _num(key), "added": added == "已"}
-    return h, pm.get("message_id")
+    return h, pm.get("message_id"), users
 
 
-def holdings_text(h):
+def holdings_text(h, users=None):
     lines = [HOLD_TAG + "（機器人自動維護，請勿刪除或取消置頂）"]
     for code, x in sorted(h.items()):
         lines.append(f"{code} {x['name']}｜{_fmt(x['lots'])} 張｜均價 {_fmt(x['avg'])}｜出場 {_fmt(x['stop'])}"
                      f"｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}｜加碼 {'已' if x['added'] else '未'}")
     if not h:
         lines.append("（目前沒有持股）")
+    if users:
+        lines.append(USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items()))
     return "\n".join(lines)
 
 
-def save_holdings(h, msg_id):
-    text = holdings_text(h)
+def save_holdings(cid, h, msg_id, users=None):
+    text = holdings_text(h, users)
     if msg_id:
-        j = tg("editMessageText", chat_id=OWNER, message_id=msg_id, text=text)
+        j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=text)
         if j.get("ok") or "not modified" in str(j):
             return msg_id
-    j = tg("sendMessage", chat_id=OWNER, text=text)
+    j = tg("sendMessage", chat_id=cid, text=text)
     mid = (j.get("result") or {}).get("message_id")
     if mid:
-        tg("pinChatMessage", chat_id=OWNER, message_id=mid, disable_notification=True)
+        tg("pinChatMessage", chat_id=cid, message_id=mid, disable_notification=True)
     return mid
+
+
+def allowed_users():
+    """可以使用持股追蹤的人：{chat id: 名字}。管理者（TG_OWNER_ID）＋管理者允許的朋友"""
+    if not OWNER:
+        return {}
+    _, _, users = load_holdings(OWNER)
+    return {OWNER: "管理者", **users}
 
 
 # ================= 股票資料 =================
@@ -194,7 +222,7 @@ def _opts(words):
 
 
 def handle(text, h):
-    """處理一則指令，回傳 (回覆文字, 持股是否有變)"""
+    """處理一則持股指令（每個人自己的持股），回傳 (回覆文字, 持股是否有變)"""
     w = text.replace("/", " ").replace("，", " ").split()
     if not w:
         return None, False
@@ -268,8 +296,34 @@ def handle(text, h):
 _OFFSET_FILE = Path("/tmp/tg_offset")
 
 
+ADMIN_HELP = ("\n\n👑 *管理者指令*\n"
+              "允許 12345 小明　讓朋友使用持股追蹤\n"
+              "移除 12345　取消\n"
+              "使用者　看目前有誰可以用")
+
+
+def admin(text, users):
+    """管理者指令。回傳 (回覆, 名單是否有變)；不是管理者指令回傳 (None, False)"""
+    w = text.replace("/", " ").split()
+    if not w:
+        return None, False
+    if w[0] == "允許" and len(w) >= 2 and w[1].isdigit():
+        users[w[1]] = " ".join(w[2:]) or "朋友"
+        send_to(w[1], "✅ 管理者已開通你的持股追蹤\n" + HELP.replace("*", ""))
+        return f"✅ 已允許 {w[1]} {users[w[1]]}", True
+    if w[0] == "移除" and len(w) >= 2:
+        if users.pop(w[1], None) is None:
+            return f"名單裡沒有 {w[1]}", False
+        return f"✅ 已移除 {w[1]}", True
+    if w[0] == "使用者":
+        if not users:
+            return "目前只有你自己在用。\n朋友私訊機器人後，你會收到通知，回覆「允許 他的ID」就能開通。", False
+        return "👥 可以使用持股追蹤的人：\n" + "\n".join(f"{u} {n}" for u, n in users.items()), False
+    return None, False
+
+
 def process_commands():
-    """讀取新訊息並處理。只接受 TG_OWNER_ID 的私訊；沒設定時，回覆對方的 ID 讓你去設定"""
+    """讀取新訊息並處理。管理者和被允許的朋友可以用持股指令；陌生人私訊時通知管理者決定要不要開通"""
     if not _OFFSET_FILE.exists():                    # 每次啟動設定一次「/」選單（只在私訊顯示）
         tg("setMyCommands", commands=[{"command": c, "description": d} for c, d in MENU],
            scope={"type": "all_private_chats"})
@@ -278,7 +332,14 @@ def process_commands():
     ups = j.get("result") or []
     if not ups:
         return
-    h, mid = None, None
+    state = {}                                       # 每個人的 (持股, 置頂 id, 名單)，這一輪讀一次就好
+    asked = set()
+
+    def get(cid):
+        if cid not in state:
+            state[cid] = list(load_holdings(cid))
+        return state[cid]
+
     for u in ups:
         offset = u["update_id"] + 1
         m = u.get("message") or {}
@@ -286,23 +347,39 @@ def process_commands():
         text = (m.get("text") or "").strip()
         if chat.get("type") != "private" or not text:
             continue
+        cid = str(chat["id"])
         if not OWNER:
-            tg_send(str(chat["id"]), [f"你的 Telegram ID 是 `{chat['id']}`\n"
-                                       "請到 GitHub → Settings → Secrets and variables → Actions\n"
-                                       "新增 TG\\_OWNER\\_ID，值填這串數字，之後就能用持股指令"])
+            send_to(cid, f"你的 Telegram ID 是 `{cid}`\n"
+                         "請到 GitHub → Settings → Secrets and variables → Actions\n"
+                         "新增 TG\\_OWNER\\_ID，值填這串數字，之後就能用持股指令")
             continue
-        if str(chat["id"]) != OWNER:
-            tg_send(str(chat["id"]), ["這個機器人的持股功能目前只開放給管理者使用。\n追價提醒、夜間掃描會發在群組裡。"])
+        owner = get(OWNER)                           # 管理者的置頂訊息裡存著朋友名單
+        users = owner[2]
+        if cid != OWNER and cid not in users:        # 還沒開通的人：通知管理者
+            frm = m.get("from") or {}
+            name = (frm.get("first_name") or "") + (f"（@{frm['username']}）" if frm.get("username") else "")
+            send_to(cid, "已經通知管理者，開通後就能使用持股追蹤。\n追價提醒、夜間掃描會發在群組裡。")
+            if cid not in asked:
+                asked.add(cid)
+                send_to(OWNER, f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n"
+                               f"同意的話回覆：允許 {cid} {frm.get('first_name') or ''}".rstrip())
             continue
-        if h is None:
-            h, mid = load_holdings()
-        reply, changed = handle(text, h)
+        if cid == OWNER:
+            reply, changed = admin(text, users)
+            if reply:
+                if changed:
+                    owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
+                send_to(OWNER, reply)
+                continue
+        me = get(cid)
+        reply, changed = handle(text, me[0])
         if changed:
-            mid = save_holdings(h, mid)
+            me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
         if reply and reply == HELP:                  # 說明：順便在輸入框下方放「持股」「說明」兩個按鈕
-            tg("sendMessage", chat_id=OWNER, text=reply.replace("*", ""), reply_markup=KEYBOARD)
+            text_out = (HELP + (ADMIN_HELP if cid == OWNER else "")).replace("*", "")
+            tg("sendMessage", chat_id=cid, text=text_out, reply_markup=KEYBOARD)
         elif reply:
-            to_owner(reply)
+            send_to(cid, reply)
     tg("getUpdates", offset=offset, timeout=0)          # 告訴 Telegram 這些訊息處理完了
     _OFFSET_FILE.write_text(str(offset))
 
@@ -387,19 +464,20 @@ def tv(code, sfx):
     return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
 
 
-def check_once(watch, h, sent, today):
-    """查一次報價，送出該送的提醒。sent：今天已經送過的 (種類, 代號)"""
+def check_once(watch, books, sent, today):
+    """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)"""
     items = [(w["code"], w["suffix"]) for w in watch]
-    for code, x in h.items():
-        items.append((code, x.get("suffix") or stock_name_suffix(code)[1]))
+    for h in books.values():
+        for code, x in h.items():
+            items.append((code, x.get("suffix") or stock_name_suffix(code)[1]))
     q = get_quotes(list(dict.fromkeys(items)))
     traded = [v for v in q.values() if v.get("date") == today]
     for w in watch:                                         # 🎯 追價提醒（群組）
         v = q.get(w["code"])
-        if not v or v.get("date") != today or ("chase", w["code"]) in sent:
+        if not v or v.get("date") != today or ("chase", "group", w["code"]) in sent:
             continue
         if v["high"] >= w["chase"]:
-            sent.add(("chase", w["code"]))
+            sent.add(("chase", "group", w["code"]))
             chg = (v["last"] / v["prev"] - 1) * 100 if v.get("prev") else 0
             back = "" if v["last"] >= w["chase"] else "，目前已拉回"
             to_group(f"🎯 *追價提醒*　{w['code']} {w['name']}\n"
@@ -407,25 +485,30 @@ def check_once(watch, h, sent, today):
                      f"現價 {v['last']:g}（{chg:+.1f}%）{back}\n"
                      f"出場 {w['stop1']:g}｜目標 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
                      f"📊 {tv(w['code'], w['suffix'])}")
-    for code, x in h.items():                               # 持股提醒（只給你）
-        v = q.get(code)
-        if not v or v.get("date") != today:
-            continue
-        p = v["last"]
-        if x["stop"] and p <= x["stop"] and ("stop", code) not in sent:
-            sent.add(("stop", code))
-            to_owner(f"🛑 *跌破出場價*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}\n"
-                     f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
-        if x["key"] and not x["added"] and p >= x["key"] and ("add", code) not in sent:
-            sent.add(("add", code))
-            to_owner(f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
-                     f"可以加碼第二筆；加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
-                     f"加碼後回覆：買 {code} 張數 價格")
-        if x["target"] and p >= x["target"] and ("target", code) not in sent:
-            sent.add(("target", code))
-            to_owner(f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
-                     f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
+    for cid, h in books.items():                            # 持股提醒（各自傳給本人）
+        for code, x in h.items():
+            v = q.get(code)
+            if not v or v.get("date") != today:
+                continue
+            p = v["last"]
+            if x["stop"] and p <= x["stop"] and ("stop", cid, code) not in sent:
+                sent.add(("stop", cid, code))
+                send_to(cid, f"🛑 *跌破出場價*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}\n"
+                             f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
+            if x["key"] and not x["added"] and p >= x["key"] and ("add", cid, code) not in sent:
+                sent.add(("add", cid, code))
+                send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
+                             f"可以加碼第二筆；加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
+                             f"加碼後回覆：買 {code} 張數 價格")
+            if x["target"] and p >= x["target"] and ("target", cid, code) not in sent:
+                sent.add(("target", cid, code))
+                send_to(cid, f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
+                             f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
     return len(traded)
+
+
+def all_books():
+    return {cid: load_holdings(cid)[0] for cid in allowed_users()}
 
 
 def run_market():
@@ -441,17 +524,17 @@ def run_market():
             break
         process_commands()
         if (now.hour, now.minute) >= OPEN_AT:
-            h, _ = load_holdings()
-            n = check_once(watch, h, sent, today)
-            if n == 0 and (watch or h):
+            books = all_books()
+            n = check_once(watch, books, sent, today)
+            if n == 0 and (watch or any(books.values())):
                 no_trade_checks += 1
                 if no_trade_checks >= 15:                    # 開盤 15 分鐘都沒有成交資料 → 今天休市
                     print("今天沒有開盤，結束")
                     return
         time.sleep(POLL_SEC)
-    h, _ = load_holdings()
-    if h:                                                   # 收盤後傳一次持股狀況給你
-        to_owner(holdings_report(h, quotes_for(h)).replace("目前持股", "收盤持股"))
+    for cid, h in all_books().items():                      # 收盤後傳一次持股狀況給每個人
+        if h:
+            send_to(cid, holdings_report(h, quotes_for(h)).replace("目前持股", "收盤持股"))
 
 
 if __name__ == "__main__":
