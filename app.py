@@ -211,12 +211,12 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
 
         # 前低：細虛線橫跨整張圖 + 箭頭，文字放在 K 線下方的空白處
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
-                      line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dot"))
+                      line=dict(color="rgba(0,168,214,0.8)", width=1, dash="dot"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"低點日最低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#ff8c00", -4, 62)
+             f"低點日最低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"低點日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#00a8d6", -4, 108)
+                 f"低點日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#b388ff", -4, 108)
 
         # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
         dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
