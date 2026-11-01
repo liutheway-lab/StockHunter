@@ -69,21 +69,31 @@ def market_block(mk):
             state = "✅ 通過" if s["ok"] else (f"⏳ 觀察中・第 {da}／{nd} 天" if s.get("watching") else "❌ 未通過")
             out.append(f"🧱 *止跌確認*　{state}（三項都要過）")
             if da == 0:
-                low_row = f"不破低　訊號日剛出現　⏳"
+                low_row = "不破低　才剛反彈　⏳"
             else:
                 low_row = (f"不破低　{s['recent_low']:>6,.0f} {'>' if s['no_break'] else '≤'} {s['prior_low']:>6,.0f}　"
                            + ("✅" if s["no_break"] and da >= nd else "⏳" if s["no_break"] else "❌"))
+            if s["shadow_ok"]:
+                kbar = f"長下影 {s['shadow'] * 100:.0f}%"
+            elif s["red_ok"]:
+                kbar = f"長紅 {s['gain'] * 100:+.1f}%"
+            else:
+                kbar = f"下影{s['shadow'] * 100:.0f}% 漲{s['gain'] * 100:+.1f}%"
             # 三列標籤都是 3 個中文字、數字欄位寬度一樣，所以會對齊
             out.append(code_block([
-                f"大量日　{ratio:>5.0f}% {'≥' if s['vol_ok'] else '<'} {100:>5}%　{ok(s['vol_ok'])}",
-                f"長下影　{s['shadow'] * 100:>5.0f}% {'≥' if s['shape_ok'] else '<'} {cfg.STAB_SHADOW * 100:>5.0f}%　{ok(s['shape_ok'])}",
+                f"量　能　{ratio:>5.0f}% {'≥' if s['vol_ok'] else '<'} {100:>5}%　{ok(s['vol_ok'])}",
+                f"K　棒　{kbar}　{ok(s['shape_ok'])}",
                 low_row,
             ]))
-            out.append(f"訊號日＝{s['signal_date']:%m/%d}\n"
-                       f"大量日＝成交額 vs 爆量日 {s['dump_date']:%m/%d}\n"
-                       "長下影＝下影線占當天區間\n"
-                       "不破低＝訊號日之後的最低\n"
-                       "　　　　vs 訊號日的最低")
+            out.append(f"爆量下跌日：{s['dump_date']:%m/%d}\n"
+                       "（這波成交額最大的下跌日）\n"
+                       f"反彈日：{s['signal_date']:%m/%d}\n"
+                       "（爆量日之後，量最大的一天）\n"
+                       "量能＝反彈日成交額 ÷ 爆量日\n"
+                       "K棒＝長下影線，或長紅\n"
+                       f"　　（紅K漲幅 ≥ {cfg.STAB_RED_GAIN * 100:.1f}%）\n"
+                       "不破低＝反彈日之後的最低點\n"
+                       "　　　　vs 反彈日的最低點")
             if s["ok"]:
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
