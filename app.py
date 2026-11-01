@@ -563,7 +563,7 @@ if mk:
             state = "✅ 通過" if s_["ok"] else (f"⏳ 觀察中・第 {da}／{nd} 天" if s_.get("watching") else "🔴 尚未止跌")
             st.markdown(f"🧱 **止跌確認**　{state}（三項都要通過）")
             low_txt = ("才剛反彈，還要再看幾天" if da == 0 else
-                       f"反彈日（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
+                       f"{'反彈日' if s_.get('shape_ok') and s_.get('vol_ok') else '最接近的一天'}（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
                        f"之後 {da} 天最低 {s_['recent_low']:,.0f}，需連續 {nd} 天不破")
             md_cond([
                 (ok(s_["vol_ok"]), "量能",
