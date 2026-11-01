@@ -576,10 +576,12 @@ if mk:
             if s_["ok"]:
                 st.success("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
 
-    st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
-                    use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
-    if show_stab:
-        st.caption(L("黃色底＝低點日起　虛線＝低點日最低點、爆量日的量", "成交金額採用證交所數據，看相對比例"))
+    try:                                           # 跟 Telegram 用同一張圖（chart_png.py），兩邊永遠一樣
+        import chart_png
+        st.image(chart_png.market_chart(mk), use_container_width=True)
+    except Exception:                              # 萬一畫圖失敗，退回互動圖
+        st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
+                        use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
     if mk["active"]:
         (st.warning if mk["risk"] else st.success)(
             "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
