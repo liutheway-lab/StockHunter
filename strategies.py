@@ -413,20 +413,40 @@ def check_dry(df, i, mkt=None):
         if len(m) >= 5:
             m_high, m_date, m_now = float(m.max()), m.idxmax(), float(m.iloc[-1])
             m_drop = max(0.0, 1 - m_now / m_high)
-            ref = df["Close"].loc[:m_date]
-            if len(ref):
-                s_drop = max(0.0, 1 - close / float(ref.iloc[-1]))
-                rs_ok = bool(s_drop <= cfg.DRY_RS_RATIO * m_drop)
-                rs_detail = (f"大盤自 {m_date:%m/%d} 高點跌 {m_drop * 100:.1f}%，個股跌 {s_drop * 100:.1f}%"
+            seg = df["Close"].loc[m_date:]                                   # 大盤高點那天起，個股的走勢
+            if len(seg) >= 2:
+                peak = seg.cummax()
+                s_dd = float(((peak - seg) / peak).max())                    # 同一段期間的最大回檔（中間跌很深再反彈也算）
+                rs_ok = bool(s_dd <= cfg.DRY_RS_RATIO * m_drop)
+                rs_detail = (f"大盤自 {m_date:%m/%d} 高點跌 {m_drop * 100:.1f}%，個股同期最大回檔 {s_dd * 100:.1f}%"
                              f"（需 ≤ 大盤的 {cfg.DRY_RS_RATIO * 100:.0f}%）")
     checks.append(("比大盤抗跌", rs_ok, rs_detail))
 
     E = tick(close)
-    stop1 = tick(L)
-    key = float(df["High"].iloc[i - cfg.DRY_KEY_LOOKBACK + 1:i + 1].max())
-    target = tick(E + cfg.DRY_RRR * max(E - stop1, 0.0))
+    w20 = df.iloc[i - cfg.DRY_KEY_LOOKBACK + 1:i + 1]
+    key = float(w20["High"].max())
+    low20 = float(w20["Low"].min())
+    stop1 = tick(float(df["Low"].iloc[i - cfg.DRY_STOP_DAYS + 1:i + 1].min()))        # 出場價＝近 5 日最低點
+    below = (key - close) / key if key > 0 else 1.0
+    checks.append((f"離20日高點 ≤ {cfg.DRY_MAX_BELOW_HIGH * 100:.0f}%（才算抗跌）", bool(below <= cfg.DRY_MAX_BELOW_HIGH),
+                   f"20日高點 {key:.2f}、現價 {close:.2f}（低 {below * 100:.1f}%）"))
+    checks.append(("出場價低於買價", bool(stop1 < E), f"出場 {stop1}、買價 {E}"))
+    target = tick(key)                                                                # 第一目標＝前高（突破價）
+    # 第二目標（參考）：依序找上方最近的壓力 → 65 日第 1 大量日最低點（要在前高之上）→ 近 60 日高點 → 買價＋2.5 倍風險
+    t2, t2_note = None, ""
+    vl = vol_low(df.iloc[:i + 1])
+    h60 = float(df["High"].iloc[max(0, i - cfg.DRY_T2_HIGH_DAYS + 1):i + 1].max())
+    if vl and vl["low"] > key * 1.001:
+        t2, t2_note = tick(vl["low"]), "65日第1大量日最低點"
+    elif h60 > key * 1.001:
+        t2, t2_note = tick(h60), f"近{cfg.DRY_T2_HIGH_DAYS}日高點"
+    elif E > stop1:
+        r2 = tick(E + cfg.DRY_T2_R * (E - stop1))
+        if r2 > target:
+            t2, t2_note = r2, f"買價＋{cfg.DRY_T2_R:g}倍風險"
     return _result("dry", checks, close=close, key=key, prior_low=L, stop1=stop1, target=target,
-                   stop1_note=f"跌破個股前低 {stop1}", date=df.index[i], turnover=float(row["TURN20"]))
+                   target2=t2, target2_note=t2_note,
+                   stop1_note=f"跌破近 {cfg.DRY_STOP_DAYS} 日最低點 {stop1}", date=df.index[i], turnover=float(row["TURN20"]))
 
 
 def check_flag(df, i, max_consol=None):
@@ -507,6 +527,8 @@ def watch_tomorrow(raw, name):
         return None
     if not _liq(df.iloc[i - 1])[1]:
         return None
+    if r["chase_px"] > float(last["Close"]) * (1 + cfg.CHASE_MAX_DIST) + 1e-9:     # 追價點太遠（要大漲才過盤整高點）
+        return None
     r["turnover"] = float(df["TURN20"].iloc[i - 1])
     r["date"] = d.index[-1]
     return r
@@ -523,7 +545,8 @@ def _breakeven(e, p2, stop2, t):
     return tick(e + max(0.0, p2 - stop2) * s2 / s1)
 
 
-def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_note=""):
+def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_note="", first_target=False,
+                target2=None, target2_note=""):
     """其他三套策略的通用分批：第 1 筆 E、第 2 筆突破價 K、第 3 筆 K x 1.08"""
     t = norm_ratios(ratios)
     p1, k = tick(E), tick(K)
@@ -532,10 +555,16 @@ def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_n
     stop2 = tick(k * (1 - cfg.STOP_ADD_PCT))
     notes = []
     tg = tick(target)
-    if p2 > p1 and tg <= p2:
+    if first_target:
+        notes.append(f"ℹ️ 第一目標＝前高 {tg}，到了先獲利了結；突破後要不要續抱請自行判斷")
+    elif p2 > p1 and tg <= p2:
         notes.append(f"⚠️ 目標價 {tg} 不高於第 2 筆加碼價 {p2}，加碼前就可能先到目標")
     elif tg <= p3:
         notes.append(f"⚠️ 目標價 {tg} 不高於第 3 筆加碼價 {p3}，第 3 筆實務上可能不會買進")
+    st1 = tick(stop1)
+    rr = (tg - p1) / (p1 - st1) if p1 > st1 else None                  # 風報比＝賺的空間 ÷ 賠的空間
+    if rr is not None:
+        notes.append(f"⚠️ 風報比 {rr:.1f}，低於 {cfg.RR_MIN}，賺的空間偏小" if rr < cfg.RR_MIN else f"ℹ️ 風報比 {rr:.1f}")
     if p1 >= k:
         notes.append("ℹ️ 現價已在突破價之上，第 2 筆可與第 1 筆一併買進")
     return {
@@ -543,7 +572,8 @@ def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_n
         "avg2": tick(avg_cost([p1, p2], t[:2])), "avg3": tick(avg_cost([p1, p2, p3], t)),
         "stop1": tick(stop1), "stop1_note": stop1_note,
         "stop2": stop2, "breakeven": _breakeven(p1, p2, stop2, t),
-        "targets": [("", tg)], "notes": notes,
+        "targets": ([("第一目標（前高）", tg), (f"第二目標（{target2_note}）", tick(target2))] if target2 else [("", tg)]),
+        "notes": notes, "rr": rr,
         "tranches": [("① 進場", p1, t[0]), ("② 突破", p2, t[1]), ("③ 加碼", p3, t[2])],
     }
 
@@ -576,7 +606,8 @@ def plan_for(name, r, ratios=None):
         return attack_plan(r)
     labels = {"breakout": "突破當天最高價", "dry": "近20日高點"}
     return ladder_plan(r["close"], r["key"], r["stop1"], r["target"], ratios,
-                       key_label=f"突破{labels[name]}", stop1_note=r.get("stop1_note", ""))
+                       key_label=f"突破{labels[name]}", stop1_note=r.get("stop1_note", ""),
+                       first_target=(name == "dry"), target2=r.get("target2"), target2_note=r.get("target2_note", ""))
 
 
 # =====================================================
