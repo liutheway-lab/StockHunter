@@ -35,9 +35,10 @@ def fp(x):
     return f"{x:.2f}"
 
 
-def code_block(lines):
+def code_block(lines, header=False):
     # 行尾補「看不見的空格」，避免 Telegram 右上角的 </> 複製鈕蓋到最後一個字
-    return "```\n" + "\n".join(ln + "⠀" * 3 for ln in lines) + "\n```"
+    # header=True：第一行是表頭，不補空格（表頭本來就比資料行寬，再補會被切到下一行）
+    return "```\n" + "\n".join(ln + ("" if header and k == 0 else "⠀" * 3) for k, ln in enumerate(lines)) + "\n```"
 
 
 # ---------- 大盤區塊 ----------
@@ -184,8 +185,8 @@ def strategy_block(name, items, names, risk, note=""):
         vl = h.get("vl")
         labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else "") + (f" {vl['side']}" if vl else ""))
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    cols = ["現價", "突破價", "出場價", "目標價"]
-    lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
+    cols = [("現價", 3), ("突破價", 1), ("出場價", 1), ("目標", 1)]          # 表頭縮短，整行才不會被切成兩行
+    lines = [_padr("代號 名稱", W) + "".join(" " * pad + c for c, pad in cols)]
     for h, lab in zip(shown, labels):
         p = h["plan"]
         nums = [h["r"]["close"], p["key"], p["stop1"], p["targets"][0][1]]
@@ -203,10 +204,10 @@ def strategy_block(name, items, names, risk, note=""):
     if t2:
         pairs = [f"{n} {fp(v)}" for n, v in t2]
         rr_txt += "\n🎯 第二目標（參考）：\n" + "\n".join("　" + "　".join(pairs[k:k + 2]) for k in range(0, len(pairs), 2))
-    legend = ("\n壓＝第1大量日最低點在現價上"
+    legend = ("\n壓＝第1大量日最高點在現價上"
               "\n撐＝第1大量日最低點在現價下"
               "\n（65 日內成交量最大的那天）")
-    return title + "\n" + code_block(lines) + rr_txt + legend + more + "\n📊 TradingView 線圖：" + links
+    return title + "\n" + code_block(lines, header=True) + rr_txt + legend + more + "\n📊 TradingView 線圖：" + links
 
 
 def watch_block(name, items, names, note=""):
@@ -215,8 +216,8 @@ def watch_block(name, items, names, note=""):
     shown = items[:MAX_LIST]
     labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" for h in shown]
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    cols = ["現價", "追價點", "出場價", "目標價"]
-    lines = [_padr("代號 名稱", W) + "".join(" " * (6 - round(_w(c))) + c for c in cols)]
+    cols = [("現價", 3), ("追價點", 1), ("出場價", 1), ("目標", 1)]
+    lines = [_padr("代號 名稱", W) + "".join(" " * pad + c for c, pad in cols)]
     for h, lab in zip(shown, labels):
         p = h["plan"]
         nums = [h["r"]["close"], p["e"], p["stop1"], p["targets"][0][1]]
@@ -228,7 +229,7 @@ def watch_block(name, items, names, note=""):
               f"\n追價點離現價最多 {cfg.CHASE_MAX_DIST * 100:.0f}%"
               f"\n盤中看強弱再決定追不追")
     links = "　".join(tv_link(h["sym"]) for h in shown)
-    return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
+    return title + "\n" + code_block(lines, header=True) + legend + more + "\n📊 TradingView 線圖：" + links
 
 
 RESULT_FILE = "scan_results.json"
@@ -256,7 +257,7 @@ def save_results(mk, hits, names, directory, now, watch=None):
                 "close": round(h["r"]["close"], 2), "key": h["plan"]["key"], "stop1": h["plan"]["stop1"],
                 "target": h["plan"]["targets"][0][1], "turnover": round(h["turnover"]),
                 "broke": bool(name == "flag" and h["r"].get("status", "").startswith("已突破")),
-                **({"vl_low": h["vl"]["low"], "vl_date": f"{h['vl']['date']:%m/%d}", "vl_vol": round(h["vl"]["vol"]),
+                **({"vl_low": h["vl"]["level"], "vl_date": f"{h['vl']['date']:%m/%d}", "vl_vol": round(h["vl"]["vol"]),
                     "vl_side": h["vl"]["side"]} if h.get("vl") else {}),
             })
         out["hits"][name] = rows
