@@ -137,36 +137,63 @@ def layer_series(df):
 
 
 def stabilization(df, i):
-    """止跌確認：最近 3 天最低點都沒破前低，且這 3 天任一天的量 >= 近 30 日（不含最近 3 天）量最大的下跌日
-    回傳的字典也包含「前低是哪天、爆量下跌日是哪天」，方便畫圖對照。"""
-    n, k = cfg.STAB_LOOKBACK, cfg.STAB_DAYS
-    if i < n + k + 1 or i >= len(df):
+    """止跌確認（日線）：找一個「訊號日」，再看之後 3 天。三項都過才算止跌走穩：
+    ① 大量：訊號日成交額 ≥ 爆量下跌日（訊號日前 30 日、下跌日裡成交額最大的那天）
+    ② 長下影線：下影線 ≥ 當天高低差的 1/2（開低走高）
+    ③ 三日不破低：訊號日之後至少 3 天，最低點都高於訊號日的最低點
+    訊號日只找最近 STAB_MAX_AGE 天內的。找不到完全符合的，回傳最像的那一天，讓人看得出差在哪一項。
+    回傳的字典保留舊欄位名稱（prior_low＝訊號日最低點、prior_low_date＝訊號日、recent_*＝訊號日之後），畫圖直接沿用。"""
+    n, k, age = cfg.STAB_LOOKBACK, cfg.STAB_DAYS, cfg.STAB_MAX_AGE
+    if i < n + age + 1 or i >= len(df):
         return None
-    lo, hi = i - k - n + 1, i - k + 1
-    low_win = df["Low"].iloc[lo:hi]
-    L = float(low_win.min())
-    low_recent_win = df["Low"].iloc[hi:i + 1]
-    low_recent = float(low_recent_win.min())
-    no_break = low_recent > L
-    dates = {"prior_low_date": low_win.idxmin(), "recent_low_date": low_recent_win.idxmin(),
-             "recent_start": df.index[hi], "recent_end": df.index[i], "dump_date": None}
+    O, H, L, C, V = (df[c].to_numpy(float) for c in ("Open", "High", "Low", "Close", "Volume"))
+    idx = df.index
+    down = np.r_[False, C[1:] < C[:-1]]
 
-    close = df["Close"]
-    down = (close < close.shift(1)).iloc[lo:hi].to_numpy()
-    vol_win = df["Volume"].iloc[lo:hi].to_numpy(float)
-    idx_win = df.index[lo:hi]
-    vols, vdates = vol_win[down], idx_win[down]
-    valid = ~np.isnan(vols)
-    vols, vdates = vols[valid], vdates[valid]
-    recent_v = float(df["Volume"].iloc[hi:i + 1].max())
-    if len(vols) == 0 or vols.max() <= 0 or recent_v != recent_v:
-        return {"ok": False, "no_break": no_break, "vol_ok": None, "vol_missing": True,
-                "prior_low": L, "recent_low": low_recent, "dump_vol": None, "recent_vol": None, **dates}
-    dump = float(vols.max())
-    dates["dump_date"] = vdates[int(vols.argmax())]
-    vol_ok = recent_v >= dump
-    return {"ok": bool(no_break and vol_ok), "no_break": no_break, "vol_ok": vol_ok, "vol_missing": False,
-            "prior_low": L, "recent_low": low_recent, "dump_vol": dump, "recent_vol": recent_v, **dates}
+    def dump_before(d):
+        sl = slice(d - n, d)
+        m = down[sl] & ~np.isnan(V[sl]) & (V[sl] > 0)
+        if not m.any():
+            return None, None
+        vv = np.where(m, V[sl], -1.0)
+        j = int(vv.argmax())
+        return float(vv[j]), idx[d - n + j]
+
+    cands = []
+    for d in range(i, i - age - 1, -1):
+        if np.isnan(V[d]) or np.isnan(L[d]):
+            continue
+        dv, dd = dump_before(d)
+        rng = H[d] - L[d]
+        shadow = (min(O[d], C[d]) - L[d]) / rng if rng > 0 else 0.0
+        after = L[d + 1:i + 1]
+        days_after = len(after)
+        no_break = bool(days_after > 0 and after.min() > L[d])
+        vol_ok = bool(dv is not None and V[d] >= dv)
+        shape_ok = bool(shadow >= cfg.STAB_SHADOW)
+        cands.append({"d": d, "dv": dv, "dd": dd, "shadow": float(shadow), "after": after, "days_after": days_after,
+                      "no_break": no_break, "vol_ok": vol_ok, "shape_ok": shape_ok,
+                      "full": vol_ok and shape_ok and no_break and days_after >= k,
+                      "pending": vol_ok and shape_ok and no_break and days_after < k,
+                      "sig": vol_ok and shape_ok})
+    if not cands:
+        return None
+    c = (next((x for x in cands if x["full"]), None) or next((x for x in cands if x["pending"]), None)
+         or next((x for x in cands if x["sig"]), None) or max(cands, key=lambda x: V[x["d"]]))
+    d = c["d"]
+    if c["dv"] is None:
+        return {"ok": False, "no_break": False, "vol_ok": None, "vol_missing": True, "prior_low": float(L[d]),
+                "recent_low": None, "dump_vol": None, "recent_vol": None, "prior_low_date": idx[d],
+                "recent_low_date": None, "recent_start": idx[d], "recent_end": idx[i], "dump_date": None}
+    after = c["after"]
+    rl = float(after.min()) if len(after) else None
+    rld = idx[d + 1 + int(after.argmin())] if len(after) else None
+    return {"ok": bool(c["full"]), "watching": bool(c["pending"]), "signal_date": idx[d],
+            "vol_ok": c["vol_ok"], "shape_ok": c["shape_ok"], "no_break": c["no_break"], "vol_missing": False,
+            "shadow": c["shadow"], "days_after": c["days_after"], "need_days": k,
+            "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
+            "recent_start": idx[d], "recent_end": idx[i],
+            "dump_vol": c["dv"], "dump_date": c["dd"], "recent_vol": float(V[d])}
 
 
 def vol_low(df, days=65):
@@ -228,13 +255,17 @@ def describe_market(mk):
             lines.append("🧱 止跌確認：❌ 大盤成交量資料取不到，無法確認")
         else:
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
+            ok = lambda b: "✅" if b else "❌"
+            state = "✅ 通過" if s["ok"] else (f"⏳ 觀察中・第 {s['days_after']}／{s['need_days']} 天" if s.get("watching") else "❌ 未通過")
             lines.append(
-                f"🧱 止跌確認：{'✅ 通過' if s['ok'] else '❌ 未通過'}（兩項都要通過）\n"
-                f"　{'✅' if s['no_break'] else '❌'} 近 {cfg.STAB_DAYS} 日最低 {s['recent_low']:,.0f}"
-                f"（{s['recent_low_date']:%m/%d}），前低 {s['prior_low']:,.0f}（{s['prior_low_date']:%m/%d}）\n"
-                f"　{'✅' if s['vol_ok'] else '❌'} 近 {cfg.STAB_DAYS} 日最大量是爆量下跌日"
-                f"（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上"
+                f"🧱 止跌確認：{state}（三項都要通過）\n"
+                f"　{ok(s['vol_ok'])} 大量：{s['signal_date']:%m/%d} 成交額是爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上\n"
+                f"　{ok(s['shape_ok'])} 長下影線：下影線占當天區間 {s['shadow'] * 100:.0f}%，需 {cfg.STAB_SHADOW * 100:.0f}% 以上\n"
+                f"　{ok(s['no_break'] and s['days_after'] >= s['need_days'])} 三日不破低：訊號日最低 {s['prior_low']:,.0f}，"
+                f"之後 {s['days_after']} 天最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}"
             )
+            if s["ok"]:
+                lines.append("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
         lines.append(f"✅ 目前啟用的策略：{names}" + ("\n⚠️ 第 3 層方向未明，請標示風險、縮小部位" if mk["risk"] else ""))
