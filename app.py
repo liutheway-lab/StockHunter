@@ -570,7 +570,7 @@ if mk:
                  f"爆量下跌日 {s_['dump_date']:%m/%d}；低點日成交額約為它的 {ratio:.0f}%，需 100% 以上"),
                 (ok(s_["shape_ok"]), "K 棒",
                  f"下影線占當天區間 {s_['shadow'] * 100:.0f}%（需 {cfg.STAB_SHADOW * 100:.0f}% 以上），"
-                 f"或收紅且漲 {s_['gain'] * 100:+.1f}%（需 {cfg.STAB_RED_GAIN * 100:.1f}% 以上）"),
+                 f"或收紅且實體占 {s_['body'] * 100:.0f}%（需 {cfg.STAB_RED_BODY * 100:.0f}% 以上）"),
                 ("⏳" if (da == 0) else ok(s_["no_break"]), "不破低", low_txt),
             ])
             if s_["ok"]:
