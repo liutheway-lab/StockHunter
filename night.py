@@ -166,6 +166,14 @@ def tv_link(sym):
     return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
 
 
+def inactive_note(mk):
+    """策略目前沒有被大盤走勢啟用時，標題下面加的說明（每行都短，手機上不會被切斷）"""
+    return (f"\n⚠️ 大盤走勢篩選：未啟用"
+            f"\n大盤現在是第 {mk['layer']} 層・{mk['layer_name']}"
+            f"\n這套策略目前不建議進場"
+            f"\n名單只供參考")
+
+
 def strategy_block(name, items, names, risk, note=""):
     title = f"*{TITLES[name]}*　{len(items)} 檔" + ("　⚠️標示風險" if risk else "") + note
     shown = items[:MAX_LIST]
@@ -184,8 +192,21 @@ def strategy_block(name, items, names, risk, note=""):
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
     links = "　".join(tv_link(h["sym"]) for h in shown)
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    legend = "\n壓＝65日第1大量當天最低點在現價之上（短線壓力）\n撐＝在現價之下（支撐、出場參考）"
-    return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
+    low_rr = [(names.get(h["sym"], h["sym"].split(".")[0]), h["plan"]["rr"]) for h in shown
+              if h["plan"].get("rr") is not None and h["plan"]["rr"] < cfg.RR_MIN]
+    rr_txt = ""
+    if low_rr:
+        pairs = [f"{n} {r:.1f}" for n, r in low_rr]
+        rr_txt = f"\n⚠️ 風報比低於 {cfg.RR_MIN}：\n" + "\n".join("　" + "　".join(pairs[k:k + 2]) for k in range(0, len(pairs), 2))
+    t2 = [(names.get(h["sym"], h["sym"].split(".")[0]), h["plan"]["targets"][1][1]) for h in shown
+          if len(h["plan"]["targets"]) > 1]
+    if t2:
+        pairs = [f"{n} {fp(v)}" for n, v in t2]
+        rr_txt += "\n🎯 第二目標（參考）：\n" + "\n".join("　" + "　".join(pairs[k:k + 2]) for k in range(0, len(pairs), 2))
+    legend = ("\n壓＝第1大量日最低點在現價上"
+              "\n撐＝第1大量日最低點在現價下"
+              "\n（65 日內成交量最大的那天）")
+    return title + "\n" + code_block(lines) + rr_txt + legend + more + "\n📊 TradingView 線圖：" + links
 
 
 def watch_block(name, items, names, note=""):
@@ -201,8 +222,11 @@ def watch_block(name, items, names, note=""):
         nums = [h["r"]["close"], p["e"], p["stop1"], p["targets"][0][1]]
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    legend = (f"\n追價點＝明天漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點的價格"
-              f"\n盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天、離前高 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%，盤中看強弱再決定追不追")
+    legend = (f"\n追價點＝明天盤中要漲到的價格"
+              f"\n（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）"
+              f"\n盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天、離前高 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%"
+              f"\n追價點離現價最多 {cfg.CHASE_MAX_DIST * 100:.0f}%"
+              f"\n盤中看強弱再決定追不追")
     links = "　".join(tv_link(h["sym"]) for h in shown)
     return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
 
@@ -301,13 +325,13 @@ def run():
                 parts.append(strategy_block(name, hits[name], names, mk["risk"]))
                 shown = True
             elif DIAG:
-                parts.append(strategy_block(name, hits[name], names, False, "　（大盤未啟用）"))
+                parts.append(strategy_block(name, hits[name], names, False, inactive_note(mk)))
                 shown = True
         if not shown:
             parts.append("今晚沒有符合的股票。")
     for name in ("pullback", "flag"):              # 明日追價名單（大盤啟用這套策略時才推播）
         if watch[name] and (name in active or DIAG):
-            parts.append(watch_block(name, watch[name], names, "" if name in active else "　（大盤未啟用）"))
+            parts.append(watch_block(name, watch[name], names, "" if name in active else inactive_note(mk)))
     # 只有出問題時才顯示提醒
     warn = []
     if directory.attrs.get("fallback"):
