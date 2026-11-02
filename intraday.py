@@ -383,12 +383,22 @@ def handle(text, h):
 _OFFSET_FILE = Path("/tmp/tg_offset")
 
 
-ADMIN_HELP = ("\n\n👑 *管理者說明*\n"
-              "朋友想用持股追蹤：請他私訊這個機器人，你會收到通知，\n"
-              "回覆通知裡那行「允許 ID 名字」就開通。\n"
-              "允許 12345 小明　開通\n"
-              "移除 12345　取消\n"
-              "使用者　看目前有誰可以用")
+ADMIN_HELP = ("\n\n👑 管理者\n"
+              "朋友私訊機器人後，你會收到申請，按下方「允許」或「不允許」就好。\n"
+              "「使用者」→ 看名單，也能在那裡移除")
+
+PENDING = {}           # {chat id: 名字}：正在等管理者按「允許／不允許」的申請
+
+
+def keyboard_for(cid):
+    """一般人是四顆主按鈕；管理者平常多一顆「使用者」，有人申請時最上面多出「允許／不允許」"""
+    if not OWNER or str(cid) != OWNER:
+        return KEYBOARD
+    rows = []
+    for u, n in PENDING.items():
+        rows += [[{"text": f"允許 {u} {n}"}], [{"text": f"不允許 {u} {n}"}]]
+    rows += KEYBOARD["keyboard"][:-1] + [[{"text": "說明"}, {"text": "使用者"}]]
+    return {**KEYBOARD, "keyboard": rows}
 
 
 def admin(text, users):
@@ -397,17 +407,22 @@ def admin(text, users):
     if not w:
         return None, False
     if w[0] == "允許" and len(w) >= 2 and w[1].isdigit():
-        users[w[1]] = " ".join(w[2:]) or "朋友"
+        users[w[1]] = " ".join(w[2:]) or PENDING.get(w[1]) or "朋友"
+        PENDING.pop(w[1], None)
         send_kb(w[1], "✅ 管理者已開通你的持股追蹤，請按下方按鈕開始\n\n" + HELP)
         return f"✅ 已允許 {w[1]} {users[w[1]]}", True
+    if w[0] == "不允許" and len(w) >= 2 and w[1].isdigit():
+        PENDING.pop(w[1], None)
+        send_kb(w[1], "管理者暫時沒有開通你的持股追蹤。\n追價提醒、夜間選股結果還是會發在群組裡，不用開通就能看。")
+        return f"已不允許 {w[1]}", False
     if w[0] == "移除" and len(w) >= 2:
         if users.pop(w[1], None) is None:
             return f"名單裡沒有 {w[1]}", False
         return f"✅ 已移除 {w[1]}", True
     if w[0] == "使用者":
         if not users:
-            return "目前只有你自己在用。\n朋友私訊機器人後，你會收到通知，回覆「允許 他的ID」就能開通。", False
-        return "👥 可以使用持股追蹤的人：\n" + "\n".join(f"{u} {n}" for u, n in users.items()), False
+            return "目前只有你自己在用。\n朋友私訊機器人後，你會收到申請，按「允許」就能開通。", False
+        return "👥 可以使用持股追蹤的人：\n" + "\n".join(f"{u} {n}" for u, n in users.items()) + "\n\n要移除的話，按下面那個人", False
     return None, False
 
 
@@ -438,7 +453,7 @@ def _tidy(cid, mark):
 
 def send_kb(cid, text, kb=None):
     """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。傳出去的訊息會記下來，之後自動清掉"""
-    j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or KEYBOARD)
+    j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or keyboard_for(cid))
     mid = (j.get("result") or {}).get("message_id")
     if mid:
         _track(cid)["steps"].append(mid)
@@ -705,15 +720,21 @@ def handle_message(m, state, asked):
                      "追價提醒、夜間選股結果會發在群組裡，不用開通就能看。")
         if cid not in asked:
             asked.add(cid)
-            send_to(OWNER, f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n"
-                           f"同意的話回覆：允許 {cid} {frm.get('first_name') or ''}".rstrip())
+            PENDING[cid] = frm.get("first_name") or frm.get("username") or "朋友"
+            tg("sendMessage", chat_id=OWNER, text=f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n請按下方「允許」或「不允許」",
+               reply_markup=keyboard_for(OWNER))
         return
     if cid == OWNER:
         reply, changed = admin(text, users)
         if reply:
             if changed:
                 owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
-            send_to(OWNER, reply)
+            if m.get("message_id"):                      # 你按的那顆按鈕（其實是一則訊息）不用留在畫面上
+                tg("deleteMessage", chat_id=OWNER, message_id=m["message_id"])
+            kb = None
+            if text.strip().lstrip("/") == "使用者" and users:   # 看名單時，每個人一顆「移除」按鈕
+                kb = _kb([[f"移除 {u} {n}"] for u, n in users.items()] + [["取消"]])
+            send_kb(OWNER, reply, kb)                    # 用 send_kb 傳，順便把鍵盤換回最新的
             return
     me = get(cid)
     c = _track(cid)
