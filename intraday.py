@@ -961,17 +961,31 @@ def process_commands():
 
 
 # ================= 即時報價 =================
-def get_quotes(items, timeout=15, yahoo=True):
-    """items：[(code, suffix)]。回傳 {code: {"last", "high", "prev", "date"}}。證交所即時報價，失敗改用 Yahoo"""
+_TWSE = {"s": None, "t": 0.0}
+TWSE_URL = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
+
+
+def _twse_session():
+    """證交所即時報價要先到首頁拿 cookie，不然常常回傳空的；每 30 分鐘換一次"""
+    if _TWSE["s"] is None or time.time() - _TWSE["t"] > 1800:
+        sess = requests.Session()
+        sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": "https://mis.twse.com.tw/stock/index.jsp"})
+        try:
+            sess.get("https://mis.twse.com.tw/stock/index.jsp", timeout=10)
+        except Exception as e:
+            print("證交所首頁連線失敗：", repr(e))
+        _TWSE["s"], _TWSE["t"] = sess, time.time()
+    return _TWSE["s"]
+
+
+def _twse_quotes(pairs, timeout):
     out = {}
-    if not items:
+    if not pairs:
         return out
-    ex = "|".join(("otc_" if sfx == ".TWO" else "tse_") + f"{code}.tw" for code, sfx in items)
+    ex = "|".join(("otc_" if sfx == ".TWO" else "tse_") + f"{code}.tw" for code, sfx in pairs)
     try:
-        r = requests.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
-                         params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
-                         headers={"User-Agent": "Mozilla/5.0", "Referer": "https://mis.twse.com.tw/stock/index.jsp"},
-                         timeout=timeout)
+        r = _twse_session().get(TWSE_URL, params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
+                                timeout=timeout)
         for q in r.json().get("msgArray", []):
             def f(k):
                 try:
@@ -984,6 +998,18 @@ def get_quotes(items, timeout=15, yahoo=True):
                                "prev": f("y"), "date": q.get("d", "")}
     except Exception as e:
         print("證交所即時報價失敗：", repr(e))
+        _TWSE["s"] = None                                   # 下次重新拿 cookie
+    return out
+
+
+def get_quotes(items, timeout=15, yahoo=True):
+    """items：[(code, suffix)]。回傳 {code: {"last", "high", "low", "prev", "date"}}。
+    證交所即時報價；找不到的換另一個市場（上市／上櫃）再找一次；還是沒有才用 Yahoo"""
+    out = _twse_quotes(items, timeout)
+    missing = [(c, s) for c, s in items if c not in out]
+    if missing:                                             # 代號對到錯的市場（上市／上櫃）就會找不到
+        flipped = [(c, ".TW" if s == ".TWO" else ".TWO") for c, s in missing]
+        out.update(_twse_quotes(flipped, timeout))
     missing = [(c, s) for c, s in items if c not in out]
     if missing and yahoo:
         try:
@@ -1074,6 +1100,7 @@ def touched(code, v, level, side):
 
 
 _PEAK = {}     # {(chat id, 代號): 開始監控後看到的最高價}，移動停利用
+_MISS = {}     # {(chat id, 代號): 連續幾次查不到報價}
 
 
 REMIND_SEC = 30 * 60       # 條件還成立時，每隔 30 分鐘再提醒一次
@@ -1142,6 +1169,14 @@ def check_once(watch, books, sent, today, upd=None):
             items.append((code, x.get("suffix") or stock_name_suffix(code)[1]))
     q = get_quotes(list(dict.fromkeys(items)))
     traded = [v for v in q.values() if v.get("date") == today]
+    if traded:                                              # 市場有開盤，卻連續查不到某檔持股的報價 → 通知持有人，不要讓它悄悄失效
+        for cid, h in books.items():
+            for code, x in h.items():
+                ok = (q.get(code) or {}).get("date") == today
+                _MISS[(cid, code)] = 0 if ok else _MISS.get((cid, code), 0) + 1
+                if _MISS[(cid, code)] == 3:
+                    print(f"{code} 連續 3 次查不到即時報價")
+                    send_to(cid, f"⚠️ 查不到 {code} {x['name']} 的即時報價，這檔的出場提醒暫時沒有作用。")
     for w in watch:                                         # 🎯 追價提醒（群組）
         v = q.get(w["code"])
         if not v or v.get("date") != today or ("chase", "group", w["code"]) in sent:
@@ -1161,6 +1196,7 @@ def check_once(watch, books, sent, today, upd=None):
             if not v or v.get("date") != today:
                 continue
             p = v["last"]
+            print(f"[{_now():%H:%M}] {code} 現價 {p:g}｜出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}")
             if x.get("trail"):                              # 移動停利：出場價跟著高點往上拉，只升不降
                 prev = _SEEN.get(code)
                 pk = _PEAK.get((cid, code))
@@ -1206,11 +1242,28 @@ def all_books():
     return {cid: load_holdings(cid)[0] for cid in allowed_users()}
 
 
+VERSION = "持股提醒 v2（30分鐘重複＋尾盤＋移動停利）"
+
+
+def startup_report(watch):
+    """監控一啟動就私訊你：收得到這則，就代表新版監控有在跑、也讀得到你的持股"""
+    books = all_books()
+    mine = books.get(OWNER, {})
+    others = sum(len(h) for c, h in books.items() if c != OWNER)
+    codes = "、".join(f"{c} {x['name']}" for c, x in sorted(mine.items())) or "（讀不到）"
+    msg = (f"🟢 盤中監控已啟動 {datetime.now(TZ):%H:%M}\n{VERSION}\n"
+           f"你的持股 {len(mine)} 檔：{codes}\n朋友持股 {others} 檔｜追價名單 {len(watch)} 檔\n"
+           "每分鐘檢查一次，13:30 結束")
+    print(msg)
+    to_owner(msg)
+
+
 def run_market():
     now = datetime.now(TZ)
     today = now.strftime("%Y%m%d")
     watch = load_watch()
     print(f"追價名單 {len(watch)} 檔")
+    startup_report(watch)
     sent = set()
     no_trade_checks = 0
     warned = False
