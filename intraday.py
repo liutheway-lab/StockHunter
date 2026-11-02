@@ -442,9 +442,38 @@ def find_stock(text):
         return []
 
 
+def volume_key(raw, price, days=65):
+    """前高＝近 65 個交易日裡，成交量最大、而且最高價高過買價的那一天的最高價（找不到就回 None）"""
+    try:
+        d = raw.tail(days)
+        d = d[d["High"] > price]
+        if d.empty:
+            return None
+        return st.tick(float(d.loc[d["Volume"].idxmax(), "High"]))
+    except Exception as e:
+        print("算前高失敗：", repr(e))
+        return None
+
+
+def auto_key(code, suffix, price):
+    """改價位用：抓歷史資料算前高（失敗回 None）"""
+    try:
+        import yfinance as yf
+        from data import _clean
+        for sfx in dict.fromkeys([suffix or ".TW", ".TW", ".TWO"]):
+            raw = _clean(yf.Ticker(code + sfx).history(period="1y", auto_adjust=False))
+            if raw is not None and len(raw) >= 20:
+                return volume_key(raw, price)
+        return None
+    except Exception as e:
+        print(f"{code} 抓前高失敗：{e!r}")
+        return None
+
+
 def levels_for(code, suffix, price):
     """買進時自動算出場價、目標價、前波高點：
     有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 10%，目標、前高留空"""
+    raw = None
     try:
         import yfinance as yf
         from data import _clean
@@ -463,9 +492,12 @@ def levels_for(code, suffix, price):
                             "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、目標、前高\n依攻擊日規則自動算出\n要改請按「改價位」"}
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
-    return {"stop": st.tick(price * (1 - cfg.ATTACK_MAX_LOSS), "ceil"), "target": None, "key": None,
+    key = volume_key(raw, price) if raw is not None else None
+    kline = (f"前高 {key:g}\n（近 65 日量最大那天的最高價）" if key
+             else "前高留空\n（近 65 日沒有更高的價位）")
+    return {"stop": st.tick(price * (1 - cfg.ATTACK_MAX_LOSS), "ceil"), "target": None, "key": key,
             "why": f"買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%",
-            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n出場價先用買價下 10%\n目標、前高留空\n要改請按「改價位」"}
+            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n出場價先用買價下 10%\n目標價留空\n" + kline + "\n要改請按「改價位」"}
 
 
 # ================= 指令 =================
@@ -716,16 +748,28 @@ def guided(cid, text, h):
                 return None
             s_["code"], s_["step"] = cm.group(0), "field"
             x = h[s_["code"]]
-            send_kb(cid, f"{s_['code']} {x['name']}\n出場價 {_fmt(x['stop'])}　目標價 {_fmt(x['target'])}\n要改哪一個？",
-                    _kb([["出場價", "目標價"], ["取消"]]))
+            send_kb(cid, f"{s_['code']} {x['name']}\n出場價 {_fmt(x['stop'])}\n目標價 {_fmt(x['target'])}\n前高 {_fmt(x['key'])}\n要改哪一個？",
+                    _kb([["出場價", "目標價", "前高"], ["取消"]]))
             return None
         if s_["step"] == "field":
-            if t not in ("出場價", "目標價"):
-                send_kb(cid, "請按「出場價」或「目標價」", _kb([["出場價", "目標價"], ["取消"]]))
+            if t not in ("出場價", "目標價", "前高"):
+                send_kb(cid, "請按下面的按鈕", _kb([["出場價", "目標價", "前高"], ["取消"]]))
                 return None
             s_["field"], s_["step"] = t[:2], "price"
-            send_kb(cid, f"新的{t}是多少？\n輸入數字，例：123", _kb([["取消"]]))
+            if t == "前高":
+                send_kb(cid, "新的前高是多少？\n輸入數字，例：123\n或按「自動抓」\n（近 65 日量最大那天的最高價）",
+                        _kb([["自動抓"], ["取消"]]))
+            else:
+                send_kb(cid, f"新的{t}是多少？\n輸入數字，例：123", _kb([["取消"]]))
             return None
+        if s_["field"] == "前高" and t == "自動抓":
+            x = h[s_["code"]]
+            v = auto_key(s_["code"], x.get("suffix"), x["avg"])
+            if v is None:
+                send_kb(cid, "抓不到合適的前高\n（近 65 日沒有比均價更高的價）\n請自己輸入數字", _kb([["取消"]]))
+                return None
+            SESSIONS.pop(cid, None)
+            return f"設 {s_['code']} 前高 {v:g}"
         try:
             price = float(t.replace(",", ""))
         except ValueError:
