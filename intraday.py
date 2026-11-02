@@ -44,7 +44,10 @@ OWNER = os.getenv("TG_OWNER_ID", "").strip()
 API = f"https://api.telegram.org/bot{TG_TOKEN}"
 POLL_SEC = 60
 OPEN_AT, CLOSE_AT = (9, 0), (13, 31)
+REPEAT_SEC = 30 * 60          # 條件一直成立：每 30 分鐘再提醒一次
+TAIL_AT = (13, 15)            # 尾盤：13:15 之後再補一次
 HOLD_TAG = "📌 持股清單"
+STATUS_TAG = "⏱ 盤中監控"
 RESULT_FILE = Path(__file__).parent / "scan_results.json"
 
 
@@ -66,6 +69,15 @@ def to_owner(text):
         tg_send(OWNER, [text])
     else:
         print("[沒有設定 TG_OWNER_ID]", text)
+
+
+def send_alert(cid, text, code, name):
+    """持股提醒，下面附一顆「賣出」按鈕，按下去直接進賣出流程（要賣多少再問）"""
+    kb = {"inline_keyboard": [[{"text": f"賣出 {code} {name}", "callback_data": f"sell:{code}"}]]}
+    j = tg("sendMessage", chat_id=cid, text=text, parse_mode="Markdown", reply_markup=kb)
+    if not j.get("ok"):
+        j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb)
+    return (j.get("result") or {}).get("message_id")
 
 
 def to_group(text):
@@ -115,6 +127,7 @@ HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|�
 FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出場 ([\d,.]+|—)")),
              ("target", re.compile(r"目標 ([\d,.]+|—)")), ("key", re.compile(r"前高 ([\d,.]+|—)")))
 _LASTQ = {}
+_STATUS = {}    # {chat id: 「⏱ 盤中監控…」那一行}，跟著置頂看板一起保存
 NAME_JOKES = ["哲哲老師只認得代號喔😊\n麻煩幫我打代號好嗎？\n例：2330",
               "哲哲老師從國外留學回來\n不太認識中文😅\n請打代號，例：2330",
               "哲哲老師在國外念書\n中文都還給老師了🤣\n只看得懂數字，例：2330",
@@ -143,8 +156,12 @@ def load_holdings(cid):
     if not text.startswith(HOLD_TAG):
         return {}, None, {}
     h, users, cur = {}, {}, None
+    _STATUS.pop(cid, None)
     for ln in text.splitlines()[1:]:
         ln = ln.strip()
+        if ln.startswith(STATUS_TAG):
+            _STATUS[cid] = ln
+            continue
         if ln.startswith(USERS_TAG):
             users = {m.group(1): m.group(2).strip() for m in USER_RE.finditer(ln[len(USERS_TAG):])}
             continue
@@ -184,7 +201,7 @@ def fix_names(h):
                 x["name"] = nm
 
 
-def board_text(h, q=None, users=None, title=HOLD_TAG):
+def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
     """持股看板（置頂那則也是它）：一檔一張卡，紅漲綠跌；也是機器人讀取持股的資料來源"""
     q = q or {}
     lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
@@ -207,6 +224,8 @@ def board_text(h, q=None, users=None, title=HOLD_TAG):
                   now_l, avg_l, stop_l]
         if x["target"] is not None or x["key"] is not None:
             lines.append(f"目標 {_n(x['target'])}　前高 {_n(x['key'])}")
+    if status:
+        lines += ["", status]
     if users:
         lines += ["", USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items())]
     return "\n".join(lines)
@@ -244,7 +263,7 @@ def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
     （看板在你手機上被刪或取消置頂時，新的一則會讓置頂列重新出現）"""
     q = quotes_quick(h) if q is None else q
     apply_quote_info(h, q)
-    text = board_text(h, q, users)
+    text = board_text(h, q, users, status=_STATUS.get(cid))
     if msg_id and not rotate:
         j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=board_html(text), parse_mode="HTML")
         if j.get("ok") or "not modified" in str(j):
@@ -263,6 +282,19 @@ def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
     if msg_id and msg_id != mid:
         delete_msgs(cid, [msg_id])
     return mid
+
+
+def set_monitor_status(text):
+    """把「盤中監控已啟動／已停止」寫在每個人置頂看板的持股下面（只改文字、不會通知）"""
+    for cid in allowed_users():
+        try:
+            h, mid, users = load_holdings(cid)
+            if not h or not mid:
+                continue
+            _STATUS[cid] = text
+            save_holdings(cid, h, mid, users)
+        except Exception as e:
+            print(f"更新監控狀態失敗（{cid}）：", repr(e))
 
 
 def ensure_pinned(cid, me, users=None):
@@ -844,6 +876,29 @@ def handle_message(m, state, asked):
     CHAT[cid] = [new]
 
 
+def handle_callback(cq, state, asked):
+    """按了提醒訊息下面的按鈕：目前只有「賣出」，直接跳到「要賣多少」那一步"""
+    tg("answerCallbackQuery", callback_query_id=cq.get("id"))
+    m = cq.get("message") or {}
+    chat = m.get("chat") or {}
+    data = cq.get("data") or ""
+    if chat.get("type") != "private" or not data.startswith("sell:"):
+        return
+    cid, code = str(chat["id"]), data[5:]
+    h, mid, _ = load_holdings(cid)
+    if not h and cid in _BOOK:
+        h = _BOOK[cid][0]
+    if code not in h:
+        send_kb(cid, f"持股裡已經沒有 {code}\n可能已經賣掉了")
+        return
+    delete_msgs(cid, TRACK.pop(cid, []))               # 前一個沒做完的操作清掉
+    SESSIONS[cid] = {"flow": "sell", "step": "qty", "code": code}
+    TRACK[cid] = []
+    x = h[code]
+    send_kb(cid, f"{code} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入數字，例：1",
+            _kb([["全部賣出"], ["取消"]]))
+
+
 def setup_menu():
     """清掉輸入框旁的「Menu」指令選單（用下方按鈕就夠了）"""
     for scope in ({"type": "all_private_chats"}, {"type": "default"}):
@@ -859,7 +914,7 @@ def process_commands():
     if not _OFFSET_FILE.exists():                    # 每次啟動設定一次「/」選單（只在私訊顯示）
         setup_menu()
     offset = int(_OFFSET_FILE.read_text()) if _OFFSET_FILE.exists() else None
-    j = tg("getUpdates", offset=offset, timeout=0, allowed_updates=["message"])
+    j = tg("getUpdates", offset=offset, timeout=0, allowed_updates=["message", "callback_query"])
     ups = j.get("result") or []
     if not ups:
         return
@@ -867,7 +922,10 @@ def process_commands():
     for u in ups:
         offset = u["update_id"] + 1
         try:
-            handle_message(u.get("message") or {}, state, asked)
+            if u.get("callback_query"):
+                handle_callback(u["callback_query"], state, asked)
+            else:
+                handle_message(u.get("message") or {}, state, asked)
         except Exception as e:
             print("處理訊息失敗：", repr(e))
     tg("getUpdates", offset=offset, timeout=0)          # 告訴 Telegram 這些訊息處理完了
@@ -1011,8 +1069,38 @@ def tv(code, sfx):
     return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
 
 
-def check_once(watch, books, sent, today):
+def _due(last, key, hit, now):
+    """持股提醒要不要送：None＝不用、first＝第一次、again＝過了 30 分鐘還成立、tail＝尾盤補一次。條件消失就清掉紀錄"""
+    if not hit:
+        last.pop(key, None)
+        return None
+    rec = last.get(key)
+    if rec is None:
+        return "first"
+    gap = (now - rec["t"]).total_seconds()
+    if gap >= REPEAT_SEC:
+        return "again"
+    if (now.hour, now.minute) >= TAIL_AT and not rec["tail"] and gap >= 600:
+        return "tail"
+    return None
+
+
+def _alert_once(cid, last, key, why, text, code, name, now):
+    """送一則持股提醒（再次提醒時把上一則同種提醒刪掉，不堆積）"""
+    old = last.get(key)
+    extra = {"again": "還沒處理，再提醒一次", "tail": "快收盤了，最後提醒一次"}.get(why)
+    head, _, rest = text.partition("\n")
+    mid = send_alert(cid, head + ("\n" + extra if extra else "") + "\n" + rest, code, name)
+    if old and old.get("mid") and why != "first":
+        delete_msgs(cid, [old["mid"]])
+    last[key] = {"t": now, "mid": mid,
+                 "tail": (now.hour, now.minute) >= TAIL_AT or bool(old and old["tail"])}
+
+
+def check_once(watch, books, sent, today, last=None, now=None):
     """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)"""
+    last = {} if last is None else last
+    now = now or datetime.now(TZ)
     items = [(w["code"], w["suffix"]) for w in watch]
     for h in books.values():
         for code, x in h.items():
@@ -1038,19 +1126,21 @@ def check_once(watch, books, sent, today):
             if not v or v.get("date") != today:
                 continue
             p = v["last"]
-            if x["stop"] and p <= x["stop"] and ("stop", cid, code) not in sent:
-                sent.add(("stop", cid, code))
-                send_to(cid, f"🛑 *跌破出場價*　{code} {x['name']}\n成交價 {p:g}，出場價 {x['stop']:g}\n"
-                             f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
+            why = _due(last, ("stop", cid, code), bool(x["stop"] and p <= x["stop"]), now)
+            if why:
+                _alert_once(cid, last, ("stop", cid, code), why,
+                            f"🛑 *跌破出場價*　{code} {x['name']}\n成交價 {p:g}，出場價 {x['stop']:g}\n"
+                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n要賣請按下方按鈕", code, x["name"], now)
             if x["key"] and not x["added"] and p >= x["key"] and ("add", cid, code) not in sent:
                 sent.add(("add", cid, code))
                 send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n成交價 {p:g}，前高 {x['key']:g}\n"
                              f"可以加碼第二筆\n加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
                              f"加碼請按「買進」\n或回覆：買 {code} 1張 價格")
-            if x["target"] and p >= x["target"] and ("target", cid, code) not in sent:
-                sent.add(("target", cid, code))
-                send_to(cid, f"🎯 *碰到目標價*　{code} {x['name']}\n成交價 {p:g}，目標 {x['target']:g}\n"
-                             f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
+            why = _due(last, ("target", cid, code), bool(x["target"] and p >= x["target"]), now)
+            if why:
+                _alert_once(cid, last, ("target", cid, code), why,
+                            f"🎯 *碰到目標價*　{code} {x['name']}\n成交價 {p:g}，目標 {x['target']:g}\n"
+                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n要賣請按下方按鈕", code, x["name"], now)
     return len(traded)
 
 
@@ -1059,11 +1149,20 @@ def all_books():
 
 
 def run_market():
+    set_monitor_status(f"{STATUS_TAG}已啟動　{datetime.now(TZ):%H:%M}")
+    try:
+        _run_market()
+    finally:
+        set_monitor_status(f"{STATUS_TAG}已停止　{datetime.now(TZ):%H:%M}")
+
+
+def _run_market():
     now = datetime.now(TZ)
     today = now.strftime("%Y%m%d")
     watch = load_watch()
     print(f"追價名單 {len(watch)} 檔")
     sent = set()
+    last = {}                                                # 持股提醒最近一次送出的時間
     no_trade_checks = 0
     while True:
         now = datetime.now(TZ)
@@ -1072,7 +1171,7 @@ def run_market():
         process_commands()
         if (now.hour, now.minute) >= OPEN_AT:
             books = all_books()
-            n = check_once(watch, books, sent, today)
+            n = check_once(watch, books, sent, today, last)
             if n == 0 and (watch or any(books.values())):
                 no_trade_checks += 1
                 if no_trade_checks >= 15:                    # 開盤 15 分鐘都沒有成交資料 → 今天休市
