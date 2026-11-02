@@ -87,7 +87,8 @@ def build():
 
 🚀 *噴出後整理再攻*
 ① 近 {cfg.FLAG_WINDOW} 日內有噴出
-　3 日漲 ≥ {pct(cfg.FLAG_BURST_3D)}，或單日漲 ≥ {pct(cfg.FLAG_BURST_1D)}
+　3 日漲 ≥ {pct(cfg.FLAG_BURST_3D)}
+　或單日漲 ≥ {pct(cfg.FLAG_BURST_1D)}
 　且量 ≥ 均量 {cfg.FLAG_BURST_VOL} 倍
 ② 盤整至少 {cfg.ATTACK_MIN_CONSOL} 天，守住月線
 　回檔不超過噴出漲幅的一半
@@ -105,7 +106,8 @@ def build():
 ③ 收在當天區間的上 1/3
 ④ 量 ≥ 前高那天的 {pct(cfg.ATTACK_VOL_VS_PEAK)}
 買法：
-　盤中漲 {pct(cfg.CHASE_GAIN)} 且突破盤整高點就追 {pct(a1)}
+　盤中漲 {pct(cfg.CHASE_GAIN)}
+　且突破盤整高點就追 {pct(a1)}
 　站上前波高點再買 {pct(a2)}
 出場：跌破盤整最低點
 　（最多賠 {pct(cfg.ATTACK_MAX_LOSS)}）
@@ -113,7 +115,9 @@ def build():
 目標：前波高點＋前一波漲幅
 
 *四、各層啟用的策略*
-第 1、2 層：創高拉回、噴出後整理再攻、盤整後噴出
+第 1、2 層：
+　創高拉回、噴出後整理再攻
+　盤整後噴出
 第 3 層：同上，標示風險、縮小部位
 第 4、5 層：預設不進場
 　止跌確認通過才啟用
@@ -129,7 +133,8 @@ def build():
 創高拉回、噴後整理：
 　攻擊日 {pct(a1)}／突破日 {pct(a2)}
 盤整後噴出、量縮抗跌：
-　{pct(t[0])}／{pct(t[1])}／{pct(t[2])}，第三筆＝突破價 × {cfg.EXT_RATIO}
+　{pct(t[0])}／{pct(t[1])}／{pct(t[2])}
+　第三筆＝突破價 × {cfg.EXT_RATIO}
 ↑ 代表已突破前波高點
 
 ⚠️ 規則篩選，非買賣建議"""
