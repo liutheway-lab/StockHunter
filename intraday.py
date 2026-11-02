@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -407,7 +408,7 @@ def handle(text, h):
         trail = f"\n移動停利：高點回測 {x['trail']:g}%" if x.get("trail") else "\n移動停利：關閉"
         return (f"✅ {code} {x['name']}\n出場 {_fmt(x['stop'])}{stop_tag(x)}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}"
                 + (trail if "trail" in opt else "")), True
-    return "看不懂這個指令。\n" + HELP, False
+    return "看不懂這個指令，請按下方按鈕操作。\n不確定怎麼用，按「說明」。", False
 
 
 _OFFSET_FILE = Path("/tmp/tg_offset")
@@ -457,6 +458,39 @@ def admin(text, users):
 
 
 SESSIONS = {}          # 按鈕一步一步輸入時，記住每個人目前問到哪一步
+
+
+STATE_FILE = Path(os.getenv("TG_STATE_FILE", "/tmp/tg_flow_state.json"))
+_LOCK = threading.Lock()
+SESSION_TTL = 1800     # 按鈕流程超過 30 分鐘沒動就作廢
+
+
+def _load_state():
+    """按鈕流程做到哪一步、哪些訊息要清，都存在檔案裡。記憶體不共用（重啟、多個 worker）時才不會「忘記」"""
+    try:
+        d = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except Exception as e:
+        print("讀取流程狀態失敗：", repr(e))
+        return
+    now = time.time()
+    SESSIONS.clear()
+    SESSIONS.update({k: v for k, v in (d.get("sessions") or {}).items() if now - v.get("ts", now) <= SESSION_TTL})
+    CLEAN.clear()
+    CLEAN.update(d.get("clean") or {})
+
+
+def _save_state():
+    now = time.time()
+    for v in SESSIONS.values():
+        v.setdefault("ts", now)
+    try:
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"sessions": SESSIONS, "clean": CLEAN}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, STATE_FILE)
+    except Exception as e:
+        print("儲存流程狀態失敗：", repr(e))
 
 
 CLEAN = {}     # {chat id: {"steps": [這一輪的訊息 id], "last": [上一輪最後一則回覆的 id]}}，用來自動清畫面
@@ -646,7 +680,12 @@ def guided(cid, text, h):
             return f"賣 {s_['code']}"
         q = parse_qty(t)
         if q is None:
-            send_kb(cid, "要寫單位喔：例如「2張」或「500股」", _kb([["取消"]]))
+            n = t.replace(" ", "")
+            if re.fullmatch(r"[\d,]+(?:\.\d+)?", n):          # 只打了數字：問清楚是股還是張，按一下就好
+                rows = [[f"{n}股", f"{n}張"]] + ([["全部"]] if s_["flow"] == "sell" else []) + [["取消"]]
+                send_kb(cid, f"{n} 是股還是張？", _kb(rows))
+            else:
+                send_kb(cid, "要寫單位喔：例如「2張」或「500股」", _kb([["取消"]]))
             return None
         if s_["flow"] == "sell":
             SESSIONS.pop(cid, None)
@@ -716,7 +755,17 @@ def guided(cid, text, h):
 
 
 def handle_message(m, state, asked):
-    """處理一則訊息（GitHub 輪詢和 bot_server.py 的即時模式共用）"""
+    """處理一則訊息（GitHub 輪詢和 bot_server.py 的即時模式共用）。
+    一次只處理一則，並且前後讀寫流程狀態檔"""
+    with _LOCK:
+        _load_state()
+        try:
+            _handle_message(m, state, asked)
+        finally:
+            _save_state()
+
+
+def _handle_message(m, state, asked):
     def get(cid):
         if cid not in state:
             state[cid] = list(load_holdings(cid))
@@ -766,9 +815,14 @@ def handle_message(m, state, asked):
             return
     me = get(cid)
     c = _track(cid)
+    if cid in SESSIONS and text in ("持股", "說明", "使用者"):     # 做到一半改按別的功能：直接離開流程，不要把它當成答案
+        SESSIONS.pop(cid, None)
+    if cid in SESSIONS:
+        SESSIONS[cid]["ts"] = time.time()
     if m.get("message_id"):
         c["steps"].append(m["message_id"])               # 你打的字也記下來，這一輪結束時一起刪
     mark = len(c["steps"])
+    reply = None
     try:
         if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
             line = guided(cid, text, me[0])
@@ -790,7 +844,8 @@ def handle_message(m, state, asked):
         traceback.print_exc()
         SESSIONS.pop(cid, None)
         send_kb(cid, "剛剛出了點問題，已回到主選單，請再試一次。")
-    _tidy(cid, mark)
+    if not (reply or "").startswith("看不懂"):             # 看不懂的時候保留你打的字，才知道是哪句沒被接受
+        _tidy(cid, mark)
 
 
 def setup_menu():
