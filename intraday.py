@@ -29,6 +29,7 @@ import re
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -48,6 +49,8 @@ REPEAT_SEC = 30 * 60          # 條件一直成立：每 30 分鐘再提醒一�
 TAIL_AT = (13, 15)            # 尾盤：13:15 之後再補一次
 HOLD_TAG = "📌 持股清單"
 STATUS_TAG = "⏱ 盤中監控"
+HIDE_URL = "https://t.me/zhezhe_users?d="      # 使用者名單藏在置頂標題 📌 的連結裡（畫面上看不到）
+_HIDE_OK = {"v": True}                           # 藏在連結裡讀不回來時改成 False，退回「點一下才顯示」
 RESULT_FILE = Path(__file__).parent / "scan_results.json"
 
 
@@ -146,6 +149,19 @@ def _val(t):
     return None if t in (None, "—", "") else float(t.replace(",", ""))
 
 
+def _hidden_users(pm):
+    """讀置頂訊息標題連結裡藏的使用者名單；沒有就回 None"""
+    for e in pm.get("entities") or []:
+        url = e.get("url") or ""
+        if e.get("type") == "text_link" and url.startswith(HIDE_URL):
+            try:
+                d = json.loads(urllib.parse.unquote(url[len(HIDE_URL):]))
+                return {str(k): str(v) for k, v in d.items()}
+            except Exception:
+                return None
+    return None
+
+
 def load_holdings(cid):
     """讀某個人私訊裡置頂的持股清單。回傳 (持股 dict, 置頂訊息 id, 使用者名單 dict)；使用者名單只存在管理者那則"""
     if not cid:
@@ -156,6 +172,7 @@ def load_holdings(cid):
     if not text.startswith(HOLD_TAG):
         return {}, None, {}
     h, users, cur = {}, {}, None
+    users.update(_hidden_users(pm) or {})
     _STATUS.pop(cid, None)
     for ln in text.splitlines()[1:]:
         ln = ln.strip()
@@ -258,29 +275,63 @@ def quotes_quick(h, wait=10):
     return dict(box)
 
 
+def board_payload(text, users, hidden):
+    """送出用的文字。hidden：使用者名單藏在標題 📌 的連結裡（畫面上完全看不到）；
+    否則把名單那行做成「點一下才顯示」"""
+    if not (hidden and users):
+        return board_html(text)
+    lines = [ln for ln in text.split("\n") if not ln.startswith(USERS_TAG)]
+    while lines and lines[-1] == "":
+        lines.pop()
+    url = HIDE_URL + urllib.parse.quote(json.dumps(users, ensure_ascii=False, separators=(",", ":")), safe="")
+    head = html.escape(lines[0][1:], quote=False) if lines[0].startswith("📌") else html.escape(lines[0], quote=False)
+    out = [f'<a href="{html.escape(url, quote=True)}">📌</a>{head}'] + [html.escape(ln, quote=False) for ln in lines[1:]]
+    return "\n".join(out)
+
+
+def _post_board(method, cid, mid, text, users, hidden):
+    kw = {"chat_id": cid, "text": board_payload(text, users, hidden), "parse_mode": "HTML",
+          "link_preview_options": {"is_disabled": True}}
+    if mid:
+        kw["message_id"] = mid
+    j = tg(method, **kw)
+    if hidden and users and not (j.get("ok") or "not modified" in str(j)):
+        return _post_board(method, cid, mid, text, users, False)           # 藏名單的寫法被拒絕：退回「點一下才顯示」
+    return j
+
+
 def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
     """存持股並更新置頂看板。rotate=True：每次都送一則新的並重新置頂、刪掉舊的
     （看板在你手機上被刪或取消置頂時，新的一則會讓置頂列重新出現）"""
     q = quotes_quick(h) if q is None else q
     apply_quote_info(h, q)
     text = board_text(h, q, users, status=_STATUS.get(cid))
+    hidden = bool(users) and _HIDE_OK["v"]
+    mid = None
     if msg_id and not rotate:
-        j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=board_html(text), parse_mode="HTML")
+        j = _post_board("editMessageText", cid, msg_id, text, users, hidden)
         if j.get("ok") or "not modified" in str(j):
+            mid = msg_id
+    if mid is None:
+        j = _post_board("sendMessage", cid, None, text, users, hidden)
+        mid = (j.get("result") or {}).get("message_id")
+        if not mid:
+            send_to(cid, "⚠️ 持股看板傳送失敗\n" + str(j.get("description", ""))[:80])
             return msg_id
-    j = tg("sendMessage", chat_id=cid, text=board_html(text), parse_mode="HTML")
-    mid = (j.get("result") or {}).get("message_id")
-    if not mid:
-        send_to(cid, "⚠️ 持股看板傳送失敗\n" + str(j.get("description", ""))[:80])
-        return msg_id
+        pj = tg("pinChatMessage", chat_id=cid, message_id=mid, disable_notification=True)
+        if not pj.get("ok"):
+            send_to(cid, "⚠️ 置頂失敗\n" + str(pj.get("description", ""))[:80])
+        else:
+            delete_msgs(cid, [mid + 1])              # 「哲哲老師 pinned …」那則系統訊息（刪不掉也沒關係）
+        if msg_id and msg_id != mid:
+            delete_msgs(cid, [msg_id])
+    if hidden:                                       # 寫完讀回來確認名單真的存得進去，不然朋友會被當成沒開通
+        pm = ((tg("getChat", chat_id=cid).get("result") or {}).get("pinned_message")) or {}
+        if _hidden_users(pm) != {str(k): str(v) for k, v in users.items()}:
+            print("使用者名單藏在連結裡讀不回來，改用「點一下才顯示」")
+            _HIDE_OK["v"] = False
+            _post_board("editMessageText", cid, mid, text, users, False)
     _BOOK[cid] = (copy.deepcopy(h), mid, copy.deepcopy(users))
-    pj = tg("pinChatMessage", chat_id=cid, message_id=mid, disable_notification=True)
-    if not pj.get("ok"):
-        send_to(cid, "⚠️ 置頂失敗\n" + str(pj.get("description", ""))[:80])
-    else:
-        delete_msgs(cid, [mid + 1])                  # 「哲哲老師 pinned …」那則系統訊息（刪不掉也沒關係）
-    if msg_id and msg_id != mid:
-        delete_msgs(cid, [msg_id])
     return mid
 
 
