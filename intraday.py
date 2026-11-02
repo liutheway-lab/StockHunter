@@ -299,7 +299,7 @@ FORMAT = {
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
     "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000\n買錯了：設 2330 均價 950、設 2330 數量 2張\n移動停利：設 2330 回測 8（0 ＝ 關閉）",
 }
-BUILD = "11/02 13:30"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
+BUILD = "11/02 13:35"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
 
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
@@ -537,10 +537,21 @@ TRANSIENT_SEC = 6                                      # 「✅ 買進…」「�
 KEEP_CMDS = ("持股", "說明", "使用者", "holdings", "help", "start", "指令")     # 這幾個是你要看的內容，留到下一次操作才刪
 
 
-def _schedule_wipe(cid, ids):
-    if not ids:
+ANCHOR_TEXT = "👇 請選擇操作"
+
+
+def _settle(cid, delete_ids, anchor_ids):
+    """結果訊息顯示幾秒之後：多餘的刪掉；最後一則改成一行「👇 請選擇操作」。
+    不能整則刪光：Telegram 的按鈕是跟著「最後一則帶按鈕的訊息」走的，那則訊息一被刪，按鈕就跟著消失"""
+    wipe(cid, delete_ids)
+    for mid in anchor_ids:
+        tg("editMessageText", chat_id=cid, message_id=mid, text=ANCHOR_TEXT)
+
+
+def _schedule_settle(cid, delete_ids, anchor_ids):
+    if not (delete_ids or anchor_ids):
         return
-    t = threading.Timer(TRANSIENT_SEC, wipe, args=(cid, list(ids)))
+    t = threading.Timer(TRANSIENT_SEC, _settle, args=(cid, list(delete_ids), list(anchor_ids)))
     t.daemon = True
     t.start()
 
@@ -557,8 +568,8 @@ def _tidy(cid, mark, keep=False):
     if keep:
         c["last"] = final
     else:
-        c["last"] = []
-        _schedule_wipe(cid, final)
+        c["last"] = final[-1:]                       # 最後一則留著（幾秒後改成「👇 請選擇操作」），按鈕才不會消失；下一次操作再刪
+        _schedule_settle(cid, final[:-1], final[-1:])
     c["steps"] = []
 
 
@@ -908,9 +919,12 @@ def _handle_message(m, state, asked):
             c_ = _track(OWNER)
             n0 = len(c_["steps"])
             send_kb(OWNER, reply, kb)                    # 用 send_kb 傳，順便把鍵盤換回最新的
-            if text.strip().lstrip("/") != "使用者":      # 「允許／不允許／移除」的結果幾秒後消失；名單留著給你按移除
-                _schedule_wipe(OWNER, c_["steps"][n0:])
+            if text.strip().lstrip("/") != "使用者":      # 「允許／不允許／移除」的結果幾秒後改成「👇 請選擇操作」；名單留著給你按移除
+                ids = c_["steps"][n0:]
                 del c_["steps"][n0:]
+                wipe(OWNER, c_["last"])
+                c_["last"] = ids[-1:]
+                _schedule_settle(OWNER, ids[:-1], ids[-1:])
             return
     me = get(cid)
     c = _track(cid)
