@@ -126,11 +126,16 @@ USERS_TAG = "👥 使用者："
 USER_RE = re.compile(r"(\d+)\s+([^,，]+)")
 
 
-def send_to(cid, text):
-    if cid:
-        tg_send(str(cid), [text])
-    else:
+def send_to(cid, text, kb=None):
+    """kb：要附在這則訊息下面的鍵盤。附了鍵盤就直接呼叫 Telegram（Markdown 失敗再退回純文字）"""
+    if not cid:
         print("[沒有對象]", text)
+    elif kb:
+        j = tg("sendMessage", chat_id=cid, text=text, parse_mode="Markdown", reply_markup=kb)
+        if not j.get("ok"):
+            tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb)
+    else:
+        tg_send(str(cid), [text])
 
 
 def load_holdings(cid):
@@ -299,7 +304,7 @@ FORMAT = {
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
     "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000\n買錯了：設 2330 均價 950、設 2330 數量 2張\n移動停利：設 2330 回測 8（0 ＝ 關閉）",
 }
-BUILD = "11/02 13:35"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
+BUILD = "11/02 13:50"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
 
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
@@ -677,6 +682,18 @@ def guided(cid, text, h):
             rows.append(["全部清倉"])
         ask(cid, s_, "code", "要賣哪一檔？" if t == "賣出" else "要改哪一檔？", rows)
         return None
+    sm = re.match(r"^賣出\s+(\d{4,6})", t)                    # 提醒下面的「賣出 3406 玉晶光」：直接從「要賣多少」開始
+    if sm:
+        code = sm.group(1)
+        if code not in h:
+            send_kb(cid, f"持股裡沒有 {code}")
+            return None
+        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["全部清倉"]] * (len(h) >= 2) + [["取消"]]
+        s_ = SESSIONS[cid] = {"flow": "sell", "step": "code", "code": code,
+                              "stack": [{"step": "code", "text": "要賣哪一檔？", "rows": rows}]}
+        x = h[code]
+        ask(cid, s_, "qty", f"{code} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？按「全部」，或輸入數量，記得加單位：「1張」「500股」", [["全部"]])
+        return None
     s_ = SESSIONS[cid]
     if t == "上一步":                                     # 回到上一個問題（答案之後重新輸入）
         stack = s_.get("stack", [])
@@ -937,7 +954,7 @@ def _handle_message(m, state, asked):
     mark = len(c["steps"])
     reply = None
     try:
-        if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+        if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS or re.match(r"^賣出\s+\d{4,6}", text):   # 按鈕一步一步輸入
             line = guided(cid, text, me[0])
             if line is None:
                 _tidy(cid, mark)
@@ -1192,6 +1209,23 @@ def push_stop_updates(upd):
             save_holdings(cid, h, mid, users if cid == OWNER else None)
 
 
+def sell_keyboard(cid, h, q, today):
+    """主按鈕 ＋ 現在所有「已跌破出場價、或已到目標價」的持股，各一顆「賣出 代號 名稱」。
+    按下去直接進入賣出流程、跳過選股票。沒有需要處理的就回傳 None（用平常的鍵盤）"""
+    rows = []
+    for code, x in sorted(h.items()):
+        v = q.get(code)
+        if not v or v.get("date") != today:
+            continue
+        p = v["last"]
+        if (x.get("stop") and p <= x["stop"]) or (x.get("target") and p >= x["target"]):
+            rows.append([{"text": f"賣出 {code} {x['name']}"}])
+    if not rows:
+        return None
+    main = keyboard_for(cid)
+    return {**main, "keyboard": rows[:10] + main["keyboard"]}
+
+
 def check_once(watch, books, sent, today, upd=None):
     """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)；
     upd：收集移動停利調高的出場價 {chat id: {代號: 新出場價}}"""
@@ -1225,6 +1259,7 @@ def check_once(watch, books, sent, today, upd=None):
                      f"出場 {w['stop1']:g}｜目標 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
                      f"📊 {tv(w['code'], w['suffix'])}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
+        kb = sell_keyboard(cid, h, q, today)                # 每則提醒下面都附上「現在所有該處理的持股」的賣出按鈕
         for code, x in h.items():
             v = q.get(code)
             if not v or v.get("date") != today:
@@ -1252,7 +1287,7 @@ def check_once(watch, books, sent, today, upd=None):
                     if x.get("trail"):
                         extra += f"\n移動停利：高點 {_PEAK[(cid, code)]:g} 回測 {x['trail']:g}%"
                     send_to(cid, alert_head(key, kind) + f"🛑 *碰到出場價{stop_tag(x)}*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}{extra}\n"
-                                 f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
+                                 f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後，請按下方按鈕記錄", kb)
             if x["key"] and not x["added"]:
                 key = ("add", cid, code, x["key"])
                 kind = should_alert(key, touched(code, v, x["key"], "up"), p >= x["key"])
@@ -1265,7 +1300,7 @@ def check_once(watch, books, sent, today, upd=None):
                 kind = should_alert(key, touched(code, v, x["target"], "up"), p >= x["target"])
                 if kind:
                     send_to(cid, alert_head(key, kind) + f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
-                                 f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
+                                 f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後，請按下方按鈕記錄", kb)
     for code, v in q.items():                               # 記下這一輪的最低／最高，下一輪才看得出「又創新低／新高」
         if v.get("date") == today:
             _SEEN[code] = (v.get("low") or v["last"], v.get("high") or v["last"])
