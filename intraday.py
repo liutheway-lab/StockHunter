@@ -423,9 +423,46 @@ def _kb(rows):
     return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True, "one_time_keyboard": True}
 
 
+BTN = ("系統建議", "保本", "買價下", "現價下", "現價")        # 按鈕開頭的字，後面接價位
+TRAIL_ROWS = [["不用"], ["5%", "8%", "10%"], ["取消"]]
+
+
+def _stop_rows(price, sug, ref):
+    """買進時出場價的選項：系統建議／保本（買價低於現價才有）／買價下 5%、10%"""
+    p5, p10 = st.tick(price * 0.95, "ceil"), st.tick(price * 0.90, "ceil")
+    rows = [[f"系統建議 {sug:g}"]]
+    if price < ref:
+        rows.append([f"保本 {price:g}"])
+    return rows + [[f"買價下5% {p5:g}", f"買價下10% {p10:g}"], ["取消"]]
+
+
+def _pick(t):
+    """按鈕文字 → 最後那個數字（「買價下5% 844」→ 844）；不是按鈕就回傳 None（表示是自己打的）"""
+    if t.startswith(BTN):
+        n = re.findall(r"\d+(?:\.\d+)?", t.replace(",", ""))
+        return float(n[-1]) if n else None
+    return None
+
+
+def _buy_rows(h):
+    """買進第一步的選項：目前持股（加碼）＋昨晚追價名單，也可以自己打代號"""
+    rows, seen = [], set()
+    for c, x in sorted(h.items()):
+        rows.append([f"{c} {x['name']}"])
+        seen.add(c)
+    try:
+        for w in load_watch()[:6]:
+            if w["code"] not in seen:
+                rows.append([f"{w['code']} {w['name']}"])
+                seen.add(w["code"])
+    except Exception as e:
+        print("追價名單讀取失敗：", repr(e))
+    return rows + [["取消"]]
+
+
 def guided(cid, text, h):
-    """按鈕流程：買進 → 代號 → 數量 → 價格；賣出 → 選股票 → 數量。
-    回傳要執行的一行指令（例如「買 2330 2000股 950」），還在問問題時回傳 None"""
+    """按鈕流程：買進 → 代號 → 數量 → 價格 → 出場價 → 移動停利；賣出 → 選股票 → 數量；改價位。
+    每一步都有按鈕可以按，也可以自己打字。回傳要執行的一行指令（例如「買 2330 2000股 950」），還在問問題時回傳 None"""
     t = text.strip()
     if t == "取消":
         SESSIONS.pop(cid, None)
@@ -433,7 +470,7 @@ def guided(cid, text, h):
         return None
     if t == "買進":
         SESSIONS[cid] = {"flow": "buy", "step": "code"}
-        send_kb(cid, "要買哪一檔？請輸入股票代號\n例：2330", _kb([["取消"]]))
+        send_kb(cid, "要買哪一檔？\n按下面的股票，或直接輸入代號（例：2330）", _kb(_buy_rows(h)))
         return None
     if t == "賣出":
         if not h:
@@ -469,16 +506,42 @@ def guided(cid, text, h):
                 send_kb(cid, "請按「出場價」、「目標價」或「移動停利」", _kb([["出場價", "目標價"], ["移動停利"], ["取消"]]))
                 return None
             s_["field"], s_["step"] = ("回測" if t == "移動停利" else t[:2]), "price"
+            code, x = s_["code"], h[s_["code"]]
             if t == "移動停利":
                 send_kb(cid, "高點回測幾 % 就出場？\n股價創新高時，出場價會跟著往上拉（只升不降）。\n"
-                             "輸入數字，例：8 或 8%；輸入 0 ＝ 關閉", _kb([["0"], ["取消"]]))
+                             "按下面的選項，或自己輸入數字，例：8", _kb([["關閉"], ["5%", "8%", "10%"], ["取消"]]))
+                return None
+            ref = ref_price(code, x["avg"])
+            lv = levels_for(code, stock_name_suffix(code)[1], ref)
+            if t == "出場價":
+                rows = [[f"系統建議 {lv['stop']:g}"]]
+                if x["avg"] < ref:
+                    rows.append([f"保本 {x['avg']:g}"])
+                rows += [[f"現價下5% {st.tick(ref * 0.95, 'ceil'):g}", f"現價下10% {st.tick(ref * 0.90, 'ceil'):g}"], ["取消"]]
+                send_kb(cid, f"新的出場價是多少？（現價 {ref:g}）\n按下面的選項，或自己輸入價位（例：{lv['stop']:g}）\n"
+                             "或百分比（例：-5% ＝ 現價下 5%）", _kb(rows))
             else:
-                send_kb(cid, f"新的{t}是多少？輸入數字，例：123", _kb([["取消"]]))
+                tg_ = lv.get("target")
+                send_kb(cid, "新的目標價是多少？\n" + ("按「系統建議」，或自己輸入價位，例：123" if tg_ else "輸入價位，例：123"),
+                        _kb(([[f"系統建議 {tg_:g}"]] if tg_ else []) + [["取消"]]))
             return None
-        try:
-            price = float(t.replace(",", "").replace("%", "").replace("％", ""))
-        except ValueError:
-            send_kb(cid, "請輸入數字，例如 123", _kb([["取消"]]))
+        price = _pick(t)                                  # 按鈕
+        if price is None and s_["field"] == "回測" and t == "關閉":
+            price = 0.0
+        if price is None:                                 # 自己打
+            tt = t.replace(",", "").replace(" ", "").replace("％", "%")
+            pm = re.fullmatch(r"-?(\d+(?:\.\d+)?)%", tt)
+            try:
+                if pm and s_["field"] == "出場":           # 百分比 ＝ 現價下 N%
+                    pct = float(pm.group(1))
+                    base = ref_price(s_["code"], h[s_["code"]]["avg"])
+                    price = st.tick(base * (1 - pct / 100), "ceil") if 0 < pct < 100 else None
+                else:
+                    price = float(tt.replace("%", ""))
+            except ValueError:
+                price = None
+        if price is None:
+            send_kb(cid, "請輸入數字，或按選項，例如 123", _kb([["取消"]]))
             return None
         if s_["field"] == "回測" and not 0 <= price < 100:
             send_kb(cid, "回測百分比要在 0～100 之間，例如 8", _kb([["0"], ["取消"]]))
@@ -502,12 +565,12 @@ def guided(cid, text, h):
                 return None
             s_["step"] = "qty"
             x = h[s_["code"]]
-            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？按「全部」，或輸入「1張」「500股」",
+            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？按「全部」，或輸入數量，記得加單位：「1張」「500股」",
                     _kb([["全部"], ["取消"]]))
             return None
         name, _ = stock_name_suffix(s_["code"])
         s_["step"] = "qty"
-        send_kb(cid, f"{s_['code']} {name}\n買了多少？輸入「2張」或「500股」", _kb([["取消"]]))
+        send_kb(cid, f"{s_['code']} {name}\n買了多少？\n請輸入數量，記得加單位：「2張」或「500股」", _kb([["取消"]]))
         return None
     if s_["step"] == "qty":
         if s_["flow"] == "sell" and t == "全部":
@@ -521,14 +584,18 @@ def guided(cid, text, h):
             SESSIONS.pop(cid, None)
             return f"賣 {s_['code']} {q}股"
         s_["qty"], s_["step"] = q, "price"
-        send_kb(cid, f"成交價是多少？例：950", _kb([["取消"]]))
+        now = ref_price(s_["code"])
+        send_kb(cid, "成交價是多少？\n按「現價」，或自己輸入，例：950" if now else "成交價是多少？例：950",
+                _kb(([[f"現價 {now:g}"]] if now else []) + [["取消"]]))
         return None
     if s_["step"] == "price":
-        try:
-            price = float(t.replace(",", ""))
-        except ValueError:
-            send_kb(cid, "請輸入數字，例如 950", _kb([["取消"]]))
-            return None
+        price = _pick(t)
+        if price is None:
+            try:
+                price = float(t.replace(",", ""))
+            except ValueError:
+                send_kb(cid, "請輸入數字，例如 950", _kb([["取消"]]))
+                return None
         if s_["code"] in h:                          # 加碼：出場價沿用原本的，不再問
             SESSIONS.pop(cid, None)
             return f"買 {s_['code']} {s_['qty']}股 {price:g}"
@@ -536,36 +603,32 @@ def guided(cid, text, h):
         sug = levels_for(s_["code"], sfx, price)["stop"]
         s_["price"], s_["sug"], s_["step"] = price, sug, "stop"
         send_kb(cid, f"{s_['code']} {name} @{price:g}\n出場價要設多少？\n"
-                     f"輸入價位，例：{sug:g}\n或輸入百分比，例：-8%（買價下 8%）",
-                _kb([[f"系統建議 {sug:g}"], ["取消"]]))
+                     f"按下面的選項，或自己輸入價位（例：{sug:g}）\n或百分比（例：-8% ＝ 買價下 8%）",
+                _kb(_stop_rows(price, sug, ref_price(s_['code'], price))))
         return None
     if s_["step"] == "stop":
         price = s_["price"]
         tt = t.replace(",", "").replace(" ", "").replace("％", "%")
-        stop = None
-        if tt.startswith("系統建議"):
-            stop = s_["sug"]
-        elif tt.endswith("%"):
+        stop = _pick(t)                                  # 按鈕
+        if stop is None:                                 # 自己打：百分比（買價下 N%）或價位
+            pm = re.fullmatch(r"-?(\d+(?:\.\d+)?)%", tt)
             try:
-                pct = abs(float(tt[:-1]))
+                if pm:
+                    pct = float(pm.group(1))
+                    stop = st.tick(price * (1 - pct / 100), "ceil") if 0 < pct < 100 else None
+                else:
+                    stop = float(tt)
             except ValueError:
-                pct = 0
-            if 0 < pct < 100:
-                stop = st.tick(price * (1 - pct / 100), "ceil")
-        else:
-            try:
-                stop = float(tt)
-            except ValueError:
-                pass
+                stop = None
         ref = ref_price(s_["code"], price)               # 出場價只要低於「現價」就行：低於買價是停損，高於買價是保護獲利
         if stop is None or stop <= 0 or stop >= ref:
-            send_kb(cid, f"出場價要低於現價 {ref:g}\n請輸入價位（例：{s_['sug']:g}）或百分比（例：-8%）",
-                    _kb([[f"系統建議 {s_['sug']:g}"], ["取消"]]))
+            send_kb(cid, f"出場價要低於現價 {ref:g}\n請按選項，或輸入價位（例：{s_['sug']:g}）／百分比（例：-8%）",
+                    _kb(_stop_rows(price, s_["sug"], ref)))
             return None
         s_["stop"], s_["step"] = stop, "trail"
         kind = f"保護獲利，鎖定 {(stop / price - 1) * 100:+.1f}%" if stop > price else f"停損，最多虧 {(1 - stop / price) * 100:.1f}%"
         send_kb(cid, f"出場價 {stop:g}（{kind}）\n要開啟移動停利嗎？\n股價創新高時，出場價會跟著往上拉（只升不降）。\n"
-                     "輸入高點回測幾 %，例：8 或 8%", _kb([["不用"], ["取消"]]))
+                     "按下面的選項，或自己輸入高點回測幾 %，例：8", _kb(TRAIL_ROWS))
         return None
     if s_["step"] == "trail":
         pct = None
@@ -575,7 +638,7 @@ def guided(cid, text, h):
             except ValueError:
                 pct = -1
             if not 0 < pct < 100:
-                send_kb(cid, "請輸入 0～100 之間的數字（例：8），或按「不用」", _kb([["不用"], ["取消"]]))
+                send_kb(cid, "請輸入 0～100 之間的數字（例：8），或按選項", _kb(TRAIL_ROWS))
                 return None
         SESSIONS.pop(cid, None)
         return (f"買 {s_['code']} {s_['qty']}股 {s_['price']:g} 出場 {s_['stop']:g}"
