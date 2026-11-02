@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import threading
+import time
+import datetime as dt
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import intraday as I
@@ -24,9 +26,78 @@ _lock = threading.Lock()          # 一次處理一則，避免兩則訊息同�
 def on_update(u):
     with _lock:
         try:
-            I.handle_message(u.get("message") or {}, {}, _asked)
+            if u.get("callback_query"):
+                I.handle_callback(u["callback_query"], {}, _asked)
+            else:
+                I.handle_message(u.get("message") or {}, {}, _asked)
         except Exception as e:
             print("處理訊息失敗：", repr(e), flush=True)
+
+
+# ---------- 夜間掃描備援 ----------
+# GitHub 的排程偶爾會延遲或被跳過。這裡每分鐘看一次：台灣時間週一到週五 22:15 以後，
+# 如果今天晚上還沒有 night 的執行紀錄（或只有失敗的），就請 GitHub 馬上跑一次。
+GH_TOKEN = os.getenv("GH_TOKEN", "").strip()
+GH_REPO = os.getenv("GH_REPO", "liutheway-lab/StockHunter")
+GH_BRANCH = os.getenv("GH_BRANCH", "main")
+BACKUP_AT = (22, 15)
+TPE = dt.timezone(dt.timedelta(hours=8))
+
+
+def _gh(method, path, **kw):
+    import requests
+    return requests.request(method, f"https://api.github.com/repos/{GH_REPO}{path}", timeout=20,
+                            headers={"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json",
+                                     "X-GitHub-Api-Version": "2022-11-28"}, **kw)
+
+
+def night_backup_step(now, state):
+    """做一次檢查。state 記錄今天做到哪：{'day':日期, 'done':bool, 'tries':次數}。回傳說明文字（沒動作回 None）"""
+    if now.weekday() >= 5 or (now.hour, now.minute) < BACKUP_AT or now.hour >= 23 and now.minute >= 50:
+        return None
+    day = now.date().isoformat()
+    if state.get("day") != day:
+        state.clear()
+        state.update({"day": day, "done": False, "tries": 0})
+    if state["done"] or state["tries"] >= 2:
+        return None
+    if state.get("wait") and now < state["wait"]:            # 剛請 GitHub 補跑，等幾分鐘再看，避免重複補跑
+        return None
+    r = _gh("GET", "/actions/workflows/night.yml/runs?per_page=10")
+    if r.status_code != 200:
+        return f"查 night 執行紀錄失敗 {r.status_code}"
+    runs = r.json().get("workflow_runs", [])
+    start = now.replace(hour=21, minute=0, second=0, microsecond=0)         # 今晚 21:00 之後建立的才算
+    tonight = []
+    for w in runs:
+        t = dt.datetime.fromisoformat(w["created_at"].replace("Z", "+00:00")).astimezone(TPE)
+        if t >= start:
+            tonight.append(w)
+    ok = [w for w in tonight if w["status"] != "completed" or w["conclusion"] == "success"]
+    if ok:
+        state["done"] = True
+        return "今晚 night 已經有跑（或正在跑），不用補"
+    if tonight and state["tries"] >= 1:           # 失敗過、已經補跑過一次，就不再重複
+        state["done"] = True
+        return "今晚 night 補跑後仍失敗，不再重試"
+    state["tries"] += 1
+    state["wait"] = now + dt.timedelta(minutes=5)
+    r = _gh("POST", "/actions/workflows/night.yml/dispatches", json={"ref": GH_BRANCH})
+    if r.status_code == 204:
+        return "今晚 night 沒有成功的紀錄，已請 GitHub 補跑一次"
+    return f"請 GitHub 補跑失敗 {r.status_code} {r.text[:120]}"
+
+
+def night_backup_loop():
+    state = {}
+    while True:
+        try:
+            msg = night_backup_step(dt.datetime.now(TPE), state)
+            if msg:
+                print("夜間備援：", msg, flush=True)
+        except Exception as e:
+            print("夜間備援錯誤：", repr(e), flush=True)
+        time.sleep(60)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -64,13 +135,18 @@ def main():
     if not I.TG_TOKEN:
         raise SystemExit("沒有設定 TG_BOT_TOKEN")
     if base:
-        r = I.tg("setWebhook", url=base + HOOK_PATH, allowed_updates=["message"])
+        r = I.tg("setWebhook", url=base + HOOK_PATH, allowed_updates=["message", "callback_query"])
         print("設定 webhook：", "成功" if r.get("ok") else r, flush=True)
     else:
         print("沒有 RENDER_EXTERNAL_URL，沒有設定 webhook（本機測試模式）", flush=True)
     I.setup_menu()
     I.DIR_BACKGROUND = True            # 處理訊息時不現抓股票清單，避免證交所慢的時候卡住所有人
     I.start_dir_loader()               # 開機就在背景載入，失敗每分鐘重試
+    if GH_TOKEN:
+        threading.Thread(target=night_backup_loop, daemon=True).start()
+        print("夜間掃描備援：已啟動", flush=True)
+    else:
+        print("沒有 GH_TOKEN，夜間掃描備援沒有啟動", flush=True)
     port = int(os.getenv("PORT", "10000"))
     print(f"機器人已啟動，port {port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
