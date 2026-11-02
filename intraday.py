@@ -85,24 +85,7 @@ def stop_tag(x):
     return "（保護獲利）" if x["stop"] > x["avg"] else "（停損）"
 
 
-_QCACHE = {}   # {代號: (查價時間, 現價)}
 _LVCACHE = {}  # {(代號, 買價): (時間, 價位)}
-
-
-def ref_price(code, fallback=None):
-    """目前市價，給按鈕畫面用：最多等 4 秒、不走 Yahoo 備援、30 秒內重複查直接用快取；
-    查不到就用 fallback，寧可少一顆按鈕也不要讓畫面卡住"""
-    c = _QCACHE.get(code)
-    if c and time.time() - c[0] < 30:
-        return c[1]
-    try:
-        v = get_quotes([(code, stock_name_suffix(code)[1])], timeout=4, yahoo=False).get(code)
-        if v:
-            _QCACHE[code] = (time.time(), v["last"])
-            return v["last"]
-    except Exception as e:
-        print(f"{code} 查現價失敗：{e!r}")
-    return fallback
 
 
 def levels_cached(code, sfx, price):
@@ -393,6 +376,15 @@ def handle(text, h):
                    + (f"移動停利：高點回測 {x['trail']:g}%\n" if x.get("trail") else "") + f"{note}\n"
                    "價位要改的話：設 " + code + " 出場 價格")
         return msg, True
+    if cmd == "清倉":
+        if not h:
+            return "目前沒有持股", False
+        if w[1:2] != ["確定"]:
+            return "要清掉全部持股，請按「賣出」→「全部清倉」，或打：清倉 確定", False
+        names = "、".join(f"{c} {x['name']}" for c, x in sorted(h.items()))
+        n = len(h)
+        h.clear()
+        return f"✅ 已清倉 {n} 檔：{names}\n持股清單已清空", True
     if cmd == "賣" and len(w) >= 2:
         code = w[1]
         if code not in h:
@@ -544,13 +536,10 @@ BTN = ("系統建議", "保本", "買價下", "現價下", "現價", "均價下"
 TRAIL_ROWS = [["不用"], ["5%", "8%", "10%"], ["取消"]]
 
 
-def _stop_rows(price, sug, ref):
-    """買進時出場價的選項：系統建議／保本（買價低於現價才有）／買價下 5%、10%"""
+def _stop_rows(price, sug):
+    """買進時出場價的選項：系統建議／保本（＝買價）／買價下 5%、10%。都是用你輸入的買價算，不依賴即時報價"""
     p5, p10 = st.tick(price * 0.95, "ceil"), st.tick(price * 0.90, "ceil")
-    rows = [[f"系統建議 {sug:g}"]]
-    if price < ref:
-        rows.append([f"保本 {price:g}"])
-    return rows + [[f"買價下5% {p5:g}", f"買價下10% {p10:g}"], ["取消"]]
+    return [[f"系統建議 {sug:g}"], [f"保本 {price:g}"], [f"買價下5% {p5:g}", f"買價下10% {p10:g}"], ["取消"]]
 
 
 def _pick(t):
@@ -630,7 +619,10 @@ def guided(cid, text, h):
             send_kb(cid, "目前沒有持股")
             return None
         s_ = SESSIONS[cid] = {"flow": "sell" if t == "賣出" else "edit", "step": "code"}
-        ask(cid, s_, "code", "要賣哪一檔？" if t == "賣出" else "要改哪一檔？", [[f"{c} {x['name']}"] for c, x in sorted(h.items())])
+        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())]
+        if t == "賣出" and len(h) >= 2:
+            rows.append(["全部清倉"])
+        ask(cid, s_, "code", "要賣哪一檔？" if t == "賣出" else "要改哪一檔？", rows)
         return None
     s_ = SESSIONS[cid]
     if t == "上一步":                                     # 回到上一個問題（答案之後重新輸入）
@@ -665,20 +657,16 @@ def guided(cid, text, h):
                 ask(cid, s_, "price", "高點回測幾 % 就出場？\n股價創新高時，出場價會跟著往上拉（只升不降）。\n"
                                       "按下面的選項，或自己輸入數字，例：8", [["關閉"], ["5%", "8%", "10%"]])
                 return None
-            ref = ref_price(code)                         # 查不到（或太慢）就用均價當基準，不讓畫面卡住
             if t == "數量":
                 ask(cid, s_, "price", f"新的數量是多少？（目前 {fmt_qty(x['shares'])}）\n請輸入數量，記得加單位：「2張」或「500股」", [])
                 return None
             if t == "均價":
-                ask(cid, s_, "price", f"新的均價（買入價）是多少？（目前 {_fmt(x['avg'])}）\n按下面的選項，或自己輸入價位",
-                    [[f"現價 {ref:g}"]] if ref else [])
+                ask(cid, s_, "price", f"新的均價（買入價）是多少？（目前 {_fmt(x['avg'])}）\n請輸入價位，例：950", [])
                 return None
-            base, lab = (ref, "現價") if ref else (x["avg"], "均價")
             if t == "出場價":
-                rows = [[f"保本 {x['avg']:g}"]] if ref and x["avg"] < ref else []
-                rows += [[f"{lab}下5% {st.tick(base * 0.95, 'ceil'):g}", f"{lab}下10% {st.tick(base * 0.90, 'ceil'):g}"]]
-                ask(cid, s_, "price", "新的出場價是多少？" + (f"（現價 {ref:g}）" if ref else "") + "\n按下面的選項，或自己輸入價位\n"
-                                      f"或百分比（例：-5% ＝ {lab}下 5%）", rows)
+                rows = [[f"保本 {x['avg']:g}"], [f"均價下5% {st.tick(x['avg'] * 0.95, 'ceil'):g}", f"均價下10% {st.tick(x['avg'] * 0.90, 'ceil'):g}"]]
+                ask(cid, s_, "price", f"新的出場價是多少？（目前 {_fmt(x['stop'])}）\n按下面的選項，或自己輸入價位\n"
+                                      "或百分比（例：-5% ＝ 均價下 5%）", rows)
             else:
                 rows = [[f"前高 {x['key']:g}"]] if x.get("key") else []
                 rows += [[f"均價上10% {st.tick(x['avg'] * 1.10):g}", f"均價上20% {st.tick(x['avg'] * 1.20):g}"]]
@@ -698,10 +686,9 @@ def guided(cid, text, h):
             tt = t.replace(",", "").replace(" ", "").replace("％", "%")
             pm = re.fullmatch(r"-?(\d+(?:\.\d+)?)%", tt)
             try:
-                if pm and s_["field"] == "出場":           # 百分比 ＝ 現價下 N%
+                if pm and s_["field"] == "出場":           # 百分比 ＝ 均價下 N%
                     pct = float(pm.group(1))
-                    base = ref_price(s_["code"], h[s_["code"]]["avg"])
-                    price = st.tick(base * (1 - pct / 100), "ceil") if 0 < pct < 100 else None
+                    price = st.tick(h[s_["code"]]["avg"] * (1 - pct / 100), "ceil") if 0 < pct < 100 else None
                 else:
                     price = float(tt.replace("%", ""))
             except ValueError:
@@ -715,13 +702,21 @@ def guided(cid, text, h):
         if s_["field"] == "均價" and price <= 0:
             retry(cid, s_, "均價要大於 0，請重新輸入")
             return None
-        if s_["field"] == "出場":                       # 出場價高過現價 ＝ 一設好就立刻觸發，先擋下來
-            ref = ref_price(s_["code"])
-            if ref and price >= ref:
-                retry(cid, s_, f"出場價要低於現價 {ref:g}，請重新輸入")
-                return None
+        if s_["field"] == "出場" and price <= 0:
+            retry(cid, s_, "出場價要大於 0，請重新輸入")
+            return None
         SESSIONS.pop(cid, None)
         return f"設 {s_['code']} {s_['field']} {price:g}"
+    if s_["flow"] == "sell" and s_["step"] == "code" and t == "全部清倉":
+        names = "\n".join(f"{c} {x['name']}｜{fmt_qty(x['shares'])}" for c, x in sorted(h.items()))
+        ask(cid, s_, "confirm", f"確定要清掉全部 {len(h)} 檔持股嗎？\n{names}\n（只會從持股清單移除，不會真的下單）", [["確定清倉"]])
+        return None
+    if s_["step"] == "confirm":
+        if t != "確定清倉":
+            retry(cid, s_, "請按「確定清倉」，或按「上一步」「取消」")
+            return None
+        SESSIONS.pop(cid, None)
+        return "清倉 確定"
     code_m = re.search(r"\d{4,6}", t)
     if s_["step"] == "code":
         if not code_m:
@@ -750,9 +745,7 @@ def guided(cid, text, h):
             SESSIONS.pop(cid, None)
             return f"賣 {s_['code']} {q}股"
         s_["qty"] = q
-        now = ref_price(s_["code"])
-        ask(cid, s_, "price", "成交價是多少？\n按「現價」，或自己輸入，例：950" if now else "成交價是多少？例：950",
-            [[f"現價 {now:g}"]] if now else [])
+        ask(cid, s_, "price", "成交價是多少？\n請輸入價位，例：950", [])
         return None
     if s_["step"] == "price":
         price = _pick(t)
@@ -770,7 +763,7 @@ def guided(cid, text, h):
         s_["price"], s_["sug"] = price, sug
         ask(cid, s_, "stop", f"{s_['code']} {name} @{price:g}\n出場價要設多少？\n"
                               f"按下面的選項，或自己輸入價位（例：{sug:g}）\n或百分比（例：-8% ＝ 買價下 8%）",
-            _stop_rows(price, sug, ref_price(s_['code'], price)))
+            _stop_rows(price, sug))
         return None
     if s_["step"] == "stop":
         price = s_["price"]
@@ -786,9 +779,8 @@ def guided(cid, text, h):
                     stop = float(tt)
             except ValueError:
                 stop = None
-        ref = ref_price(s_["code"], price)               # 出場價只要低於「現價」就行：低於買價是停損，高於買價是保護獲利
-        if stop is None or stop <= 0 or stop >= ref:
-            retry(cid, s_, f"出場價要低於現價 {ref:g}\n請按選項，或輸入價位（例：{s_['sug']:g}）／百分比（例：-8%）")
+        if stop is None or stop <= 0:                    # 不檢查高低：低於買價是停損，高於買價是保護獲利
+            retry(cid, s_, f"請按選項，或輸入價位（例：{s_['sug']:g}）／百分比（例：-8%）")
             return None
         s_["stop"] = stop
         kind = f"保護獲利，鎖定 {(stop / price - 1) * 100:+.1f}%" if stop > price else f"停損，最多虧 {(1 - stop / price) * 100:.1f}%"
