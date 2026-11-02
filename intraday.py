@@ -414,9 +414,34 @@ def admin(text, users):
 SESSIONS = {}          # 按鈕一步一步輸入時，記住每個人目前問到哪一步
 
 
+CLEAN = {}     # {chat id: {"steps": [這一輪的訊息 id], "last": [上一輪最後一則回覆的 id]}}，用來自動清畫面
+
+
+def _track(cid):
+    return CLEAN.setdefault(str(cid), {"steps": [], "last": []})
+
+
+def wipe(cid, ids):
+    """刪訊息（機器人自己發的、以及私訊裡你打的字都能刪；超過 48 小時的刪不掉）"""
+    for mid in ids:
+        tg("deleteMessage", chat_id=cid, message_id=mid)
+
+
+def _tidy(cid, mark):
+    """這一輪結束（不在按鈕流程中）→ 把過程中的提示、你打的字全刪掉，只留最後一則回覆；下一輪開始時再刪掉它"""
+    c = _track(cid)
+    if cid in SESSIONS:
+        return
+    wipe(cid, c["steps"][:mark])
+    c["last"], c["steps"] = c["steps"][mark:], []
+
+
 def send_kb(cid, text, kb=None):
-    """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）"""
-    tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or KEYBOARD)
+    """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。傳出去的訊息會記下來，之後自動清掉"""
+    j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or KEYBOARD)
+    mid = (j.get("result") or {}).get("message_id")
+    if mid:
+        _track(cid)["steps"].append(mid)
 
 
 def _kb(rows):
@@ -691,9 +716,17 @@ def handle_message(m, state, asked):
             send_to(OWNER, reply)
             return
     me = get(cid)
+    c = _track(cid)
+    if cid not in SESSIONS:                              # 新的一輪開始：清掉上一輪留下的訊息（置頂持股清單和提醒不在裡面，不會被刪）
+        wipe(cid, c["last"] + c["steps"])
+        c["last"], c["steps"] = [], []
+    if m.get("message_id"):
+        c["steps"].append(m["message_id"])               # 你打的字也記下來，這一輪結束時一起刪
+    mark = len(c["steps"])
     if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
         line = guided(cid, text, me[0])
         if line is None:
+            _tidy(cid, mark)
             return
         text = line
     reply, changed = handle(text, me[0])
@@ -703,6 +736,7 @@ def handle_message(m, state, asked):
         send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
     elif reply:
         send_kb(cid, reply)
+    _tidy(cid, mark)
 
 
 def setup_menu():
