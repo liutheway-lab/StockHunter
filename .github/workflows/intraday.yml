@@ -2,11 +2,16 @@ name: intraday
 
 on:
   schedule:
-    - cron: "50 0 * * 1-5"   # 台灣時間 週一到週五 08:50 啟動，一路監控到 13:30
+    # 台灣時間 週一到週五。GitHub 的排程常常延遲、甚至整次跳過，所以多排幾個備援時間：
+    # 只要有一個啟動就好，後面的會自動排隊或發現已收盤就直接結束，不會重複提醒。
+    - cron: "50 0 * * 1-5"   # 08:50
+    - cron: "20 1 * * 1-5"   # 09:20（備援）
+    - cron: "0 2 * * 1-5"    # 10:00（備援）
+    - cron: "30 2 * * 1-5"   # 10:30（備援）
   workflow_dispatch:          # 也可以手動執行：Actions → intraday → Run workflow
 
 concurrency:
-  group: tg-bot              # 跟 commands 輪流，不會同時讀 Telegram 訊息
+  group: intraday            # 同一時間只跑一個盤中監控（不要跟別的流程共用，免得互相卡住）
   cancel-in-progress: false
 
 jobs:
