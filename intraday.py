@@ -231,7 +231,9 @@ def quotes_quick(h, wait=10):
 def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
     """存持股並更新置頂看板。rotate=True：每次都送一則新的並重新置頂、刪掉舊的
     （看板在你手機上被刪或取消置頂時，新的一則會讓置頂列重新出現）"""
-    text = board_text(h, quotes_quick(h) if q is None else q, users)
+    q = quotes_quick(h) if q is None else q
+    apply_quote_info(h, q)
+    text = board_text(h, q, users)
     if msg_id and not rotate:
         j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=text)
         if j.get("ok") or "not modified" in str(j):
@@ -245,6 +247,8 @@ def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
     pj = tg("pinChatMessage", chat_id=cid, message_id=mid, disable_notification=True)
     if not pj.get("ok"):
         send_to(cid, "⚠️ 置頂失敗\n" + str(pj.get("description", ""))[:80])
+    else:
+        delete_msgs(cid, [mid + 1])                  # 「哲哲老師 pinned …」那則系統訊息（刪不掉也沒關係）
     if msg_id and msg_id != mid:
         delete_msgs(cid, [msg_id])
     return mid
@@ -423,6 +427,7 @@ def handle(text, h):
         return FORMAT[cmd], False                    # 只打了指令、沒打完 → 告訴你格式
     if cmd == "持股":
         q = quotes_quick(h, 10)
+        apply_quote_info(h, q)
         _LASTQ["q"] = q
         return holdings_report(h, q), False
     if cmd == "買" and len(w) >= 4:
@@ -449,6 +454,9 @@ def handle(text, h):
             x.update(opt)
         else:
             name, sfx = stock_name_suffix(code)
+            if name == code:                            # 股票清單沒載好：改用報價附帶的名稱和上市／上櫃
+                qi = quotes_quick({code: {"suffix": None}}, 6).get(code) or {}
+                name, sfx = qi.get("name") or code, qi.get("suffix") or sfx
             lv = levels_for(code, sfx, price)
             x = {"name": name, "shares": qty, "avg": price, "stop": lv["stop"], "target": lv["target"],
                  "key": lv["key"], "added": False, "suffix": sfx}
@@ -573,8 +581,7 @@ def guided(cid, text, h):
     if t == "取消":
         SESSIONS.pop(cid, None)
         delete_msgs(cid, TRACK.pop(cid, []))          # 這一次操作的問答全部清掉
-        send_kb(cid, "已取消")
-        return None
+        return "持股"                                  # 取消後回到持股畫面
     if t == "買進":
         SESSIONS[cid] = {"flow": "buy", "step": "code"}
         send_kb(cid, "要買哪一檔？\n請輸入股票代號\n例：2330", _kb([["取消"]]))
@@ -798,7 +805,7 @@ def _handle_message(m, state, asked):
         delete_msgs(cid, LAST_HELP.pop(cid, []))      # 舊的說明刪掉，聊天室只留最新一則
         mid = send_kb(cid, HELP)
         LAST_HELP[cid] = [m.get("message_id"), mid]
-    elif reply and (m.get("text") or "").strip() == "持股":
+    elif reply and text == "持股":
         delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的持股畫面刪掉，只留最新一則
         LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply)]
     elif reply:
@@ -871,45 +878,98 @@ def get_quotes(items, tries=3, gap=2):
     return out
 
 
+def _twse_fetch(ex):
+    r = requests.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+                     params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
+                     headers={"User-Agent": "Mozilla/5.0", "Referer": "https://mis.twse.com.tw/stock/index.jsp"},
+                     timeout=8)
+    res = {}
+    for q in r.json().get("msgArray", []):
+        def f(k):
+            try:
+                return float(str(q.get(k, "")).split("_")[0])
+            except ValueError:
+                return None
+        last = f("z") or f("b") or f("a")
+        if last:
+            res[q["c"]] = {"last": last, "high": f("h") or last, "prev": f("y"), "date": q.get("d", ""),
+                           "name": (q.get("n") or "").strip() or None,
+                           "suffix": {"otc": ".TWO", "emg": ".EMG"}.get(q.get("ex"), ".TW")}
+    return res
+
+
 def _get_quotes_once(items):
-    """items：[(code, suffix)]。回傳 {code: {"last", "high", "prev", "date"}}。證交所即時報價，失敗改用 Yahoo"""
+    """items：[(code, suffix)]。回傳 {code: {"last", "high", "prev", "date", "name", "suffix"}}。
+    證交所即時報價（上市、上櫃；不知道是哪邊就兩邊都問），沒查到的興櫃股另外問一次，最後才用 Yahoo"""
     out = {}
     if not items:
         return out
-    ex = "|".join(("otc_" if sfx == ".TWO" else "tse_") + f"{code}.tw" for code, sfx in items)
+    parts = []
+    for code, sfx in items:
+        if sfx == ".EMG":
+            continue
+        if sfx != ".TWO":
+            parts.append(f"tse_{code}.tw")
+        if sfx != ".TW":
+            parts.append(f"otc_{code}.tw")
     try:
-        r = requests.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
-                         params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
-                         headers={"User-Agent": "Mozilla/5.0", "Referer": "https://mis.twse.com.tw/stock/index.jsp"},
-                         timeout=8)
-        for q in r.json().get("msgArray", []):
-            def f(k):
-                try:
-                    return float(str(q.get(k, "")).split("_")[0])
-                except ValueError:
-                    return None
-            last = f("z") or f("b") or f("a")
-            if last:
-                out[q["c"]] = {"last": last, "high": f("h") or last, "prev": f("y"), "date": q.get("d", "")}
+        if parts:
+            out.update(_twse_fetch("|".join(parts)))
     except Exception as e:
         print("證交所即時報價失敗：", repr(e))
+    emg = [c for c, sfx in items if c not in out and sfx in (None, ".EMG")]
+    if emg:                                          # 興櫃：另外一次要求，失敗不影響上面查到的
+        try:
+            out.update(_twse_fetch("|".join(f"emg_{c}.tw" for c in emg)))
+        except Exception as e:
+            print("興櫃報價查詢失敗：", repr(e))
     missing = [(c, s) for c, s in items if c not in out]
     if missing:
         try:
             import yfinance as yf
             for code, sfx in missing:
-                fi = yf.Ticker(code + sfx).fast_info
-                last = float(fi["last_price"])
-                out[code] = {"last": last, "high": float(fi.get("day_high") or last),
-                             "prev": float(fi.get("previous_close") or 0) or None,
-                             "date": datetime.now(TZ).strftime("%Y%m%d")}
+                if sfx == ".EMG":
+                    continue
+                for sf in ([sfx] if sfx else [".TW", ".TWO"]):
+                    try:
+                        fi = yf.Ticker(code + sf).fast_info
+                        last = float(fi["last_price"])
+                    except Exception:
+                        continue
+                    out[code] = {"last": last, "high": float(fi.get("day_high") or last),
+                                 "prev": float(fi.get("previous_close") or 0) or None,
+                                 "date": datetime.now(TZ).strftime("%Y%m%d"), "name": None, "suffix": sf}
+                    break
         except Exception as e:
             print("Yahoo 報價失敗：", repr(e))
     return out
 
 
+def guess_suffix(code):
+    """股票清單載好了就回 .TW／.TWO；還沒載好回 None（查價時兩邊都問）"""
+    d = _DIR
+    try:
+        if d is not None:
+            row = d[d["code"] == code]
+            if len(row):
+                return str(row.iloc[0]["suffix"])
+    except Exception:
+        pass
+    return None
+
+
+def apply_quote_info(h, q):
+    """用報價附帶的資料補上股票名稱、上市／上櫃（股票清單沒載好時買進的，名稱先是代號）"""
+    for code, x in h.items():
+        info = (q or {}).get(code) or {}
+        if x.get("name") == code and info.get("name"):
+            x["name"] = info["name"]
+        if info.get("suffix") and not x.get("suffix"):
+            x["suffix"] = info["suffix"]
+
+
 def quotes_for(h):
-    return get_quotes([(c, x.get("suffix") or stock_name_suffix(c)[1]) for c, x in h.items()])
+    return get_quotes([(c, x.get("suffix") or guess_suffix(c)) for c, x in h.items()])
 
 
 def holdings_report(h, q, title="📋 持股"):
@@ -945,7 +1005,7 @@ def check_once(watch, books, sent, today):
     items = [(w["code"], w["suffix"]) for w in watch]
     for h in books.values():
         for code, x in h.items():
-            items.append((code, x.get("suffix") or stock_name_suffix(code)[1]))
+            items.append((code, x.get("suffix") or guess_suffix(code)))
     q = get_quotes(list(dict.fromkeys(items)))
     traded = [v for v in q.values() if v.get("date") == today]
     for w in watch:                                         # 🎯 追價提醒（群組）
