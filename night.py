@@ -1,4 +1,4 @@
-"""night.py — 盤後個股掃描（台灣時間 14:30 起，資料齊了就跑；最晚 16:30 一定跑）
+"""night.py — 夜間個股掃描（台灣時間 22:30）
 流程：加權指數 → 判斷大盤五層 → 依層級決定啟用哪些策略 → 掃描全上市櫃 → Telegram 通知。
 沒有符合的股票也會發訊息（確認系統有在跑）。
 所有策略數字都在 config.py。
@@ -24,7 +24,6 @@ ORDER = ["pullback", "flag", "breakout", "dry"]
 TITLES = {"pullback": "📈 創高拉回", "flag": "🚀 噴出後整理再攻",
           "breakout": "🌱 盤整後噴出", "dry": "🛡 量縮抗跌"}
 DIAG = os.getenv("DIAG", "").strip().lower() in ("1", "true", "yes")
-LAST_CALL = (16, 30)     # 這個時間之前，指數資料還沒更新到今天就先不跑（等下一次排程）；這個時間起不管齊不齊都跑
 
 
 def fp(x):
@@ -65,7 +64,7 @@ def market_block(mk):
         if s is None:
             out.append("🧱 止跌確認：資料不足")
         elif s["vol_missing"]:
-            out.append("🧱 止跌確認：⏳ 等大盤成交金額公布\n（通常 14:30 後才有），暫時無法確認")
+            out.append("🧱 止跌確認：❌ 無法確認\n大盤成交金額抓不到")
         else:
             ok = lambda b: "✅" if b else "❌"
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
@@ -301,21 +300,6 @@ def save_results(mk, hits, names, directory, now, watch=None):
 def run():
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     ratios = cfg.TRANCHES
-    manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    early = (not manual) and now.weekday() < 5 and (now.hour, now.minute) < LAST_CALL     # 還不是最後一次排程
-
-    try:
-        mkt = fetch_market()
-        mk = st.market_summary(mkt)
-    except Exception as e:
-        if early:                                      # 前面幾次排程失敗就安靜地等下一次，不要一直傳失敗訊息
-            print("大盤資料抓取失敗，等下一次排程：", repr(e))
-            raise SystemExit(0)
-        send_telegram([f"🌙 *台股夜間掃描*\n⚠️ 大盤資料抓取失敗，今晚無法掃描：{e}"])
-        raise SystemExit(str(e))
-    if early and mk["date"].date() != now.date():      # Yahoo 的指數還沒更新到今天：等下一次，免得拿昨天的資料掃
-        print(f"指數資料日 {mk['date']:%m/%d}，還沒更新到今天，等下一次排程")
-        raise SystemExit(0)
 
     if now.weekday() == 0:       # 每週一：掃描前先附上說明書（新加入的人才看得到）
         try:
@@ -323,6 +307,13 @@ def run():
             send_telegram(build())
         except Exception as e:
             print("說明書傳送失敗：", repr(e))
+
+    try:
+        mkt = fetch_market()
+        mk = st.market_summary(mkt)
+    except Exception as e:
+        send_telegram([f"🌙 *台股夜間掃描*\n⚠️ 大盤資料抓取失敗\n今晚無法掃描：{e}"])
+        raise SystemExit(str(e))
 
     directory = get_directory()
     directory = directory.assign(sym=directory["code"] + directory["suffix"])
@@ -343,8 +334,6 @@ def run():
     ]
     if data_date.date() != now.date():
         head.append("📌 資料為最近交易日")
-    if os.getenv("DATA_READY", "").strip().lower() == "false":
-        head.append("⚠️ 證交所成交金額還沒公布，大盤量能可能不完整")
 
     parts = ["\n".join(head) + "\n" + LINE, market_block(mk) + "\n" + LINE]
 
@@ -368,9 +357,9 @@ def run():
     # 只有出問題時才顯示提醒
     warn = []
     if directory.attrs.get("fallback"):
-        warn.append("⚠️ 官方股票清單抓取失敗，只掃描備用的幾檔")
+        warn.append("⚠️ 官方股票清單抓取失敗\n只掃描備用的幾檔")
     elif failed and len(failed) > 0.15 * len(directory):
-        warn.append(f"⚠️ 有 {len(failed)} 檔沒抓到資料，結果可能不完整")
+        warn.append(f"⚠️ 有 {len(failed)} 檔沒抓到資料\n結果可能不完整")
     if warn:
         parts.append("\n".join(warn))
 
