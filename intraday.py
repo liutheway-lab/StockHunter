@@ -287,6 +287,8 @@ FORMAT = {
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
     "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000\n買錯了：設 2330 均價 950、設 2330 數量 2張\n移動停利：設 2330 回測 8（0 ＝ 關閉）",
 }
+BUILD = "11/02 12:55"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
+
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
         "買進　→ 輸入代號、數量、成交價\n"
@@ -295,7 +297,8 @@ HELP = ("🤖 *持股追蹤*\n"
         "改價位　→ 改出場價、目標、均價、數量\n"
         "\n"
         "數量可以打「2張」或「500股」。\n"
-        "出場、目標價碰到時，機器人會私訊提醒你。")
+        "出場、目標價碰到時，機器人會私訊提醒你。\n"
+        "\n版本 " + BUILD)
 
 
 def _opts(words):
@@ -1253,7 +1256,7 @@ def startup_report(watch):
     mine = books.get(OWNER, {})
     others = sum(len(h) for c, h in books.items() if c != OWNER)
     codes = "、".join(f"{c} {x['name']}" for c, x in sorted(mine.items())) or "（讀不到）"
-    msg = (f"🟢 盤中監控已啟動 {datetime.now(TZ):%H:%M}\n{VERSION}\n"
+    msg = (f"🟢 盤中監控已啟動 {datetime.now(TZ):%H:%M}\n{VERSION}｜版本 {BUILD}\n"
            f"你的持股 {len(mine)} 檔：{codes}\n朋友持股 {others} 檔｜追價名單 {len(watch)} 檔\n"
            "每分鐘檢查一次，13:30 結束")
     print(msg)
