@@ -191,7 +191,12 @@ def load_holdings(cid):
                     cur["added"] = v.startswith("已")
                 else:
                     cur[{"均價": "avg", "出場": "stop", "目標": "target", "前高": "key"}[k]] = _num(v)
+    if not h and "股｜" in text and "（目前沒有持股）" not in text:      # 清單有內容卻一檔都讀不到：通常是格式不相容
+        PARSE_FAIL.add(str(cid))
     return h, pm.get("message_id"), users
+
+
+PARSE_FAIL = set()     # 置頂清單有內容、卻讀不到任何持股的對象
 
 
 RULE = "━━━━━━━━━━━━"
@@ -994,6 +999,49 @@ def touched(code, v, level, side):
 _PEAK = {}     # {(chat id, 代號): 開始監控後看到的最高價}，移動停利用
 
 
+REMIND_SEC = 30 * 60       # 條件還成立時，每隔 30 分鐘再提醒一次
+TAIL_AT = (13, 15)         # 尾盤提醒：13:15 之後（只要還成立）再多提醒一次
+_NOTIFIED = {}             # {提醒種類: {"t": 上次提醒時間, "n": 已提醒次數, "tail": 尾盤提醒是否已經送過}}
+
+
+def _now():
+    return datetime.now(TZ)
+
+
+def should_alert(key, first_hit, still):
+    """first_hit：這一輪才碰到（含兩次查價之間的盤中最高／最低）；still：現在還在條件裡。
+    回傳 None（不提醒）、"first"（第一次）、"repeat"（隔 30 分鐘還成立）、"tail"（13:15 尾盤）。
+    出場價、前高、目標價改過數字就算新的一筆，會重新提醒"""
+    rec = _NOTIFIED.get(key)
+    if rec is None:
+        kind = "first" if first_hit else None
+    elif not still:
+        kind = None
+    elif (_now().hour, _now().minute) >= TAIL_AT and not rec["tail"]:
+        kind = "tail"
+    elif time.time() - rec["t"] >= REMIND_SEC:
+        kind = "repeat"
+    else:
+        kind = None
+    if kind:
+        rec = _NOTIFIED.setdefault(key, {"t": 0, "n": 0, "tail": False})
+        rec["t"] = time.time()
+        rec["n"] += 1
+        if kind == "tail" or (_now().hour, _now().minute) >= TAIL_AT:
+            rec["tail"] = True
+    return kind
+
+
+def alert_head(key, kind):
+    """第一次不加標題；之後標明是第幾次提醒，或是尾盤提醒"""
+    if kind == "tail":
+        return "⏰ 尾盤提醒（13:15）還沒處理\n"
+    if kind == "repeat":
+        return f"🔁 第 {_NOTIFIED[key]['n']} 次提醒（條件還成立）\n"
+    return ""
+
+
+
 def push_stop_updates(upd):
     """移動停利把出場價往上拉之後，存回各人的持股清單。
     先重新讀一次最新持股、只改出場價，避免蓋掉你剛好在這一分鐘下的指令"""
@@ -1049,22 +1097,28 @@ def check_once(watch, books, sent, today, upd=None):
                     x["stop"] = new_stop
                     if upd is not None:
                         upd.setdefault(cid, {})[code] = new_stop
-            if x["stop"] and touched(code, v, x["stop"], "down") and ("stop", cid, code) not in sent:
-                sent.add(("stop", cid, code))
-                extra = f"\n（兩次查價之間盤中最低曾到 {v['low']:g}）" if p > x["stop"] else ""
-                if x.get("trail"):
-                    extra += f"\n移動停利：高點 {_PEAK[(cid, code)]:g} 回測 {x['trail']:g}%"
-                send_to(cid, f"🛑 *碰到出場價{stop_tag(x)}*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}{extra}\n"
-                             f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
-            if x["key"] and not x["added"] and touched(code, v, x["key"], "up") and ("add", cid, code) not in sent:
-                sent.add(("add", cid, code))
-                send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
-                             f"可以加碼第二筆；加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
-                             f"加碼後回覆：買 {code} 數量 價格（例：買 {code} 1張 價格）")
-            if x["target"] and touched(code, v, x["target"], "up") and ("target", cid, code) not in sent:
-                sent.add(("target", cid, code))
-                send_to(cid, f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
-                             f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
+            if x["stop"]:
+                key = ("stop", cid, code, x["stop"])
+                kind = should_alert(key, touched(code, v, x["stop"], "down"), p <= x["stop"])
+                if kind:
+                    extra = f"\n（兩次查價之間盤中最低曾到 {v['low']:g}）" if p > x["stop"] else ""
+                    if x.get("trail"):
+                        extra += f"\n移動停利：高點 {_PEAK[(cid, code)]:g} 回測 {x['trail']:g}%"
+                    send_to(cid, alert_head(key, kind) + f"🛑 *碰到出場價{stop_tag(x)}*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}{extra}\n"
+                                 f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
+            if x["key"] and not x["added"]:
+                key = ("add", cid, code, x["key"])
+                kind = should_alert(key, touched(code, v, x["key"], "up"), p >= x["key"])
+                if kind:
+                    send_to(cid, alert_head(key, kind) + f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
+                                 f"可以加碼第二筆；加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
+                                 f"加碼後回覆：買 {code} 數量 價格（例：買 {code} 1張 價格）")
+            if x["target"]:
+                key = ("target", cid, code, x["target"])
+                kind = should_alert(key, touched(code, v, x["target"], "up"), p >= x["target"])
+                if kind:
+                    send_to(cid, alert_head(key, kind) + f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
+                                 f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
     for code, v in q.items():                               # 記下這一輪的最低／最高，下一輪才看得出「又創新低／新高」
         if v.get("date") == today:
             _SEEN[code] = (v.get("low") or v["last"], v.get("high") or v["last"])
@@ -1082,6 +1136,7 @@ def run_market():
     print(f"追價名單 {len(watch)} 檔")
     sent = set()
     no_trade_checks = 0
+    warned = False
     while True:
         now = datetime.now(TZ)
         if (now.hour, now.minute) >= CLOSE_AT:
@@ -1089,6 +1144,10 @@ def run_market():
         process_commands()
         if (now.hour, now.minute) >= OPEN_AT:
             books = all_books()
+            if PARSE_FAIL and not warned:
+                warned = True
+                to_owner("⚠️ 盤中監控讀不到持股清單，出場提醒暫時停擺。\n"
+                         "通常是監控程式還在跑舊版。請到 GitHub → Actions，取消正在跑的 intraday，再重新執行一次。")
             upd = {}
             n = check_once(watch, books, sent, today, upd)
             push_stop_updates(upd)
