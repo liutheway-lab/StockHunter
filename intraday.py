@@ -1260,6 +1260,9 @@ def startup_report(watch):
 
 def run_market():
     now = datetime.now(TZ)
+    if (now.hour, now.minute) >= CLOSE_AT:                  # 備援排程可能在收盤後才啟動：什麼都不做，免得重複傳報告
+        print("已經收盤，不啟動監控")
+        return
     today = now.strftime("%Y%m%d")
     watch = load_watch()
     print(f"追價名單 {len(watch)} 檔")
