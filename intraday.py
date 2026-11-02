@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -166,38 +167,77 @@ def allowed_users():
 
 # ================= 股票資料 =================
 _DIR = None
+DIR_BACKGROUND = False       # bot_server.py 會設成 True：處理訊息時不現抓清單（證交所慢的話會卡住所有人），改由背景載入
+_dir_thread = None
+
+
+def start_dir_loader():
+    """背景載入股票清單，失敗每分鐘重試；只有一邊（上市或上櫃）抓到時先用，之後再補"""
+    global _dir_thread
+    if _dir_thread is not None and _dir_thread.is_alive():
+        return
+
+    def run():
+        global _DIR
+        while True:
+            try:
+                from lookup import load_directory
+                d = load_directory(timeout=15)
+                _DIR = d
+                if not d.attrs.get("errors"):
+                    return
+                print("股票清單只抓到一部分，稍後重試：", d.attrs["errors"], flush=True)
+            except Exception as e:
+                print("股票清單抓取失敗，一分鐘後重試：", repr(e), flush=True)
+            time.sleep(60)
+
+    _dir_thread = threading.Thread(target=run, daemon=True)
+    _dir_thread.start()
+
+
+def get_dir():
+    """股票清單。背景模式：還沒載好就回傳 None（不等）；一般模式：現抓"""
+    global _DIR
+    if _DIR is not None:
+        return _DIR
+    if DIR_BACKGROUND:
+        start_dir_loader()
+        return None
+    try:
+        from lookup import load_directory
+        _DIR = load_directory()
+    except Exception as e:
+        print("股票清單抓取失敗：", repr(e))
+    return _DIR
 
 
 def stock_name_suffix(code):
-    """(名稱, .TW/.TWO)。官方清單抓不到時名稱用代號"""
-    global _DIR
+    """(名稱, .TW/.TWO)。官方清單抓不到（或還沒載好）時名稱用代號"""
+    d = get_dir()
     try:
-        if _DIR is None:
-            from lookup import load_directory
-            _DIR = load_directory()
-        row = _DIR[_DIR["code"] == code]
-        if len(row):
-            return str(row.iloc[0]["name"]), str(row.iloc[0]["suffix"])
+        if d is not None:
+            row = d[d["code"] == code]
+            if len(row):
+                return str(row.iloc[0]["name"]), str(row.iloc[0]["suffix"])
     except Exception as e:
-        print("股票清單抓取失敗：", repr(e))
+        print("股票清單查詢失敗：", repr(e))
     return code, ".TW"
 
 
 def find_stock(text):
-    """輸入代號或中文名稱 → 候選清單（list of dict，最多 6 檔）。清單抓不到時只認代號"""
-    global _DIR
+    """輸入代號或中文名稱 → 候選清單（list of dict，最多 6 檔）。清單還沒載好時回傳 None"""
     t = text.strip()
     m = re.match(r"^(\d{4,6})\b", t)
     if m:
         return [{"code": m.group(1)}]
+    d = get_dir()
+    if d is None:
+        return None
     try:
-        if _DIR is None:
-            from lookup import load_directory
-            _DIR = load_directory()
         from lookup import resolve
-        return resolve(t, _DIR, limit=6)
+        return resolve(t, d, limit=6)
     except Exception as e:
-        print("股票清單抓取失敗：", repr(e))
+        print("股票清單查詢失敗：", repr(e))
         return []
 
 
@@ -465,6 +505,9 @@ def guided(cid, text, h):
     code_m = re.search(r"\d{4,6}", t)
     if s_["step"] == "code":
         if s_["flow"] == "buy":                       # 買進：代號或名稱都可以
+            if get_dir() is None:
+                send_kb(cid, "股票清單還在載入中，約 1 分鐘後再輸入一次", _kb([["取消"]]))
+                return None
             found = find_stock(t)
             if not found:
                 send_kb(cid, f"找不到「{t}」，請輸入股票代號或完整名稱\n例：2330 或 台積電（打「取消」可以中止）", _kb([["取消"]]))
