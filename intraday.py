@@ -373,6 +373,7 @@ SESSIONS = {}          # 按鈕一步一步輸入時，記住每個人目前問�
 
 TRACK = {}             # 按鈕流程進行中，記住這一次操作的訊息編號（按「取消」時整串刪掉）
 LAST_HELP = {}         # 上一次的「說明」訊息編號（再按說明時，把舊的刪掉）
+LAST_VIEW = {}         # 上一次的「持股」訊息編號（再按持股時，把舊的刪掉）
 
 
 def delete_msgs(cid, ids):
@@ -564,6 +565,9 @@ def handle_message(m, state, asked):
         delete_msgs(cid, LAST_HELP.pop(cid, []))      # 舊的說明刪掉，聊天室只留最新一則
         mid = send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
         LAST_HELP[cid] = [m.get("message_id"), mid]
+    elif reply and (m.get("text") or "").strip() == "持股":
+        delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的持股畫面刪掉，只留最新一則
+        LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply)]
     elif reply:
         send_kb(cid, reply)
 
