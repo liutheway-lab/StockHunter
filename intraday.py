@@ -413,6 +413,8 @@ def handle(text, h):
         info = f"\n均價 {_fmt(x['avg'])}｜{fmt_qty(x['shares'])}" if ("avg" in opt or "shares" in opt) else ""
         return (f"✅ {code} {x['name']}{info}\n出場 {_fmt(x['stop'])}{stop_tag(x)}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}"
                 + (trail if "trail" in opt else "")), True
+    if parse_qty(text.strip()) or re.fullmatch(r"[\d,.]+%?", text.strip()):     # 像是某一步的答案（2張、950、8%），卻不在流程中
+        return "剛剛的操作中斷了（機器人可能剛更新或重啟過），你輸入的沒有被收到。\n請按下方「買進」「賣出」或「改價位」重新開始。", False
     return "看不懂這個指令，請按下方按鈕操作。\n不確定怎麼用，按「說明」。", False
 
 
@@ -926,7 +928,7 @@ def _handle_message(m, state, asked):
         traceback.print_exc()
         SESSIONS.pop(cid, None)
         send_kb(cid, "剛剛出了點問題，已回到主選單，請再試一次。")
-    if not (reply or "").startswith("看不懂"):             # 看不懂的時候保留你打的字，才知道是哪句沒被接受
+    if not (reply or "").startswith(("看不懂", "剛剛的操作中斷")):   # 沒被接受的時候保留你打的字，才知道是哪句
         _tidy(cid, mark, keep=reply == HELP or text.strip().lstrip("/").split("@")[0] in KEEP_CMDS)
 
 
