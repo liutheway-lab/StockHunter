@@ -36,7 +36,6 @@ def market_chart(mk, bars=45):
     stab_mode = mk.get("layer") in (4, 5) and bool(mk.get("stab"))   # 空頭層級才畫止跌確認的標註
     s = (mk.get("stab") or {}) if stab_mode else {}
     has_vol = bool(d["Volume"].notna().any())
-    pending = has_vol and bool(d["Volume"].isna().iloc[-1])      # 最後一天（今天）有價格、但成交金額還沒公布
     nm = "低點日"
 
     fig, axes = plt.subplots(2 if has_vol else 1, 1, figsize=(8, 6.2 if has_vol else 4.2), dpi=150,
@@ -105,17 +104,10 @@ def market_chart(mk, bars=45):
         v = d["Volume"] / 1e8
         cols = [UP if cl >= o else DOWN for o, cl in zip(d["Open"], d["Close"])]
         axv.bar(x, v.fillna(0).values, color=cols, width=0.65)
-        miss = [i for i, val in enumerate(v.values) if val != val]          # 成交金額是空的（NaN）的那幾天
-        if miss:
-            ref = float(v.dropna().iloc[-5:].mean()) if v.notna().any() else 1.0   # 示意高度：近 5 日平均（只是佔位，不是真的量）
-            for i in miss:
-                axv.bar([i], [ref], color="none", edgecolor="#8a8a8a", linestyle="--", linewidth=1.2, width=0.65, hatch="////")
-            axv.annotate("待公布", xy=(miss[-1], ref), xytext=(miss[-1], ref * 1.18), fontsize=9, color="#777",
-                         ha="center", fontweight="bold")
         dd, dv = s.get("dump_date"), s.get("dump_vol")
         if dd is not None and dv:
             dp = _pos(idx, dd)
-            axv.axhline(dv / 1e8, color="#555", linestyle="--", linewidth=1)
+            axv.axhline(dv / 1e8, color="#ff8c00", linestyle="--", linewidth=1.2)
             if dp is not None:
                 axv.bar([dp], [dv / 1e8], color="none", edgecolor="#ff8c00", linewidth=3.2, width=0.65)
                 axv.annotate(f"爆量下跌日（{dd:%m/%d}）", xy=(dp, dv / 1e8),
@@ -139,21 +131,17 @@ def market_chart(mk, bars=45):
     last_ax.set_xlim(-1, len(d))
 
     if stab_mode:
-        verdict = "通過" if mk["stab"].get("ok") else ("等成交金額公布" if mk["stab"].get("vol_missing") else "未通過")
+        verdict = "通過" if mk["stab"].get("ok") else ("無法確認" if mk["stab"].get("vol_missing") else "未通過")
         title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}　止跌確認：{verdict}（黃色區 = {nm}起）"
     else:
         title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}"
     fig.suptitle(title, fontsize=11, x=0.02, ha="left")
-    bottom = 0.0
-    if pending:
-        fig.text(0.02, 0.008, f"※ {idx[-1]:%m/%d} 成交金額通常 14:30 後才公布，目前量能與止跌確認不是最終值",
-                 fontsize=8, color="#d9822b", ha="left", va="bottom")
-        bottom += 0.03
     if stab_mode:
-        fig.text(0.02, 0.008 + bottom, f"黃色區＝{nm}起　虛線＝{nm}最低點、爆量下跌日的量",
-                 fontsize=8, color="#666", ha="left", va="bottom")
-        bottom += 0.025
-    fig.tight_layout(rect=(0, bottom, 1, 0.96))
+        for k, (txt, col) in enumerate([("■ 黃色區＝低點日起（最近 3 天內股價最低的那天）", "#b8860b"),
+                                        ("┄ 水藍虛線＝低點日的最低點（上圖）", "#0086ad"),
+                                        ("┄ 橘色虛線＝爆量下跌日的成交額（下圖）", "#e67300")][::-1]):
+            fig.text(0.02, 0.008 + k * 0.026, txt, fontsize=8.5, color=col, ha="left", va="bottom")
+    fig.tight_layout(rect=(0, 0.09 if stab_mode else 0, 1, 0.96))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
