@@ -379,18 +379,27 @@ PENDING = {}           # 等管理者開通的人：{ID: 名字}（機器人重�
 LAST_VIEW = {}         # 上一次的「持股」訊息編號（再按持股時，把舊的刪掉）
 
 
+CHAT = {}              # 每個人私訊視窗裡，機器人傳的和使用者傳的訊息編號（下一次操作時整批清掉，只留釘選和最新的）
+
+
 def delete_msgs(cid, ids):
-    for mid in ids:
+    """刪訊息（已經刪過的、太舊的會失敗，不用理它，所以不印錯誤）"""
+    for mid in dict.fromkeys(ids):
         if mid:
-            tg("deleteMessage", chat_id=cid, message_id=mid)
+            try:
+                requests.post(f"{API}/deleteMessage", json={"chat_id": cid, "message_id": mid}, timeout=10)
+            except Exception:
+                pass
 
 
 def send_kb(cid, text, kb=None):
     """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。回傳訊息編號"""
     j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or (KEYBOARD_OWNER if cid == OWNER else KEYBOARD))
     mid = (j.get("result") or {}).get("message_id")
-    if mid and cid in SESSIONS:
-        TRACK.setdefault(cid, []).append(mid)
+    if mid:
+        CHAT.setdefault(cid, []).append(mid)
+        if cid in SESSIONS:
+            TRACK.setdefault(cid, []).append(mid)
     return mid
 
 
@@ -558,28 +567,36 @@ def handle_message(m, state, asked):
             asked.add(cid)
             send_kb(OWNER, f"👤 {name or '有人'} 想使用持股追蹤\n請按「管理者」→「待開通名單」開通")
         return
+    me = get(cid)
+    keep = {me[1], owner[1]}                          # 釘選的持股清單不能刪
+    delete_msgs(cid, [i for i in CHAT.get(cid, []) if i not in keep])    # 上一次操作的訊息整批清掉
+    CHAT[cid] = [m.get("message_id")]
     if cid == OWNER:
+        mid0 = m.get("message_id")
+
+        def tidy(*extra):                             # 把這一次管理者操作的中間訊息全部清掉
+            delete_msgs(cid, TRACK.pop(cid, []) + [mid0] + list(extra))
+
         if text == "管理者":                          # 管理者功能：全部用按鈕操作
-            send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "使用者名單"], ["移除使用者"], ["取消"]]))
+            TRACK[cid] = [mid0, send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "使用者名單"], ["移除使用者"], ["取消"]]))]
             return
-        if text == "待開通名單":
-            waiting = {c: n for c, n in PENDING.items() if c not in users}
-            if not waiting:
-                send_kb(cid, "目前沒有人在等開通")
+        if text in ("待開通名單", "移除使用者"):
+            items = ({c: n for c, n in PENDING.items() if c not in users} if text == "待開通名單" else dict(users))
+            verb = "允許" if text == "待開通名單" else "移除"
+            if not items:
+                tidy()
+                send_kb(cid, "目前沒有人在等開通" if verb == "允許" else "目前沒有朋友可以移除")
             else:
-                send_kb(cid, "按名字就開通", _kb([[f"允許 {c} {n}"] for c, n in waiting.items()] + [["取消"]]))
+                TRACK.setdefault(cid, []).extend([mid0, send_kb(cid, "按名字就" + ("開通" if verb == "允許" else "移除"),
+                                                                _kb([[f"{verb} {c} {n}"] for c, n in items.items()] + [["取消"]]))])
             return
         if text == "使用者名單":
+            tidy()
             send_kb(cid, admin("使用者", users)[0])
-            return
-        if text == "移除使用者":
-            if not users:
-                send_kb(cid, "目前沒有朋友可以移除")
-            else:
-                send_kb(cid, "按名字就移除", _kb([[f"移除 {c} {n}"] for c, n in users.items()] + [["取消"]]))
             return
         reply, changed = admin(text, users)
         if reply:
+            tidy()
             if changed:
                 owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
                 PENDING.pop(text.split()[1], None)
@@ -587,6 +604,8 @@ def handle_message(m, state, asked):
             return
     me = get(cid)
     if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+        if text == "取消" and cid not in SESSIONS:
+            TRACK.setdefault(cid, []).append(m.get("message_id"))   # 管理者選單的取消：連同選單一起清掉
         if text in ("買進", "賣出", "改價位"):
             TRACK[cid] = []                            # 開始新的一次操作
         if cid in SESSIONS or text in ("買進", "賣出", "改價位"):
