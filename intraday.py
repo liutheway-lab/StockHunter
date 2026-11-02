@@ -70,7 +70,28 @@ def to_group(text):
 
 
 # ================= 持股（存在私人對話的置頂訊息） =================
-LINE_RE = re.compile(r"^(\d{4,6})\s+(\S+)｜([\d,.]+) (張|股)｜均價 ([\d.]+)｜出場 ([\d.]+|—)｜目標 ([\d.]+|—)｜前高 ([\d.]+|—)｜加碼 (未|已)$")
+LINE_RE = re.compile(r"^(\d{4,6})\s+(\S+)｜([\d,.]+) (張|股)｜均價 ([\d.]+)｜出場 ([\d.]+|—)｜目標 ([\d.]+|—)｜前高 ([\d.]+|—)｜加碼 (未|已)$")   # 舊格式（一檔一行）
+HEAD_RE = re.compile(r"^(\d{4,6})\s+(\S+)｜([\d,.]+) (張|股)$")                                                           # 新格式標題行
+FIELD_RE = re.compile(r"(均價|出場|目標|前高|加碼) ([\d.]+|—|未觸發|已完成)")
+TRAIL_RE = re.compile(r"高點回測 ([\d.]+)%")                    # 移動停利：「　移動停利 高點回測 8%」
+
+
+def stop_tag(x):
+    """出場價低於均價 → 停損；高於均價 → 保護獲利"""
+    if x.get("stop") is None or not x.get("avg"):
+        return ""
+    return "（保護獲利）" if x["stop"] > x["avg"] else "（停損）"
+
+
+def ref_price(code, fallback=None):
+    """目前市價（查不到就用 fallback）。用來檢查出場價一設好會不會立刻觸發"""
+    try:
+        v = get_quotes([(code, stock_name_suffix(code)[1])]).get(code)
+        if v:
+            return v["last"]
+    except Exception as e:
+        print(f"{code} 查現價失敗：{e!r}")
+    return fallback
 
 
 def fmt_qty(shares):
@@ -117,29 +138,58 @@ def load_holdings(cid):
     if not text.startswith(HOLD_TAG):
         return {}, None, {}
     h, users = {}, {}
+    cur = None                                       # 新格式：一檔分三行，標題行開頭、後面兩行接著補欄位
     for ln in text.splitlines()[1:]:
         ln = ln.strip()
         if ln.startswith(USERS_TAG):
             users = {m.group(1): m.group(2).strip() for m in USER_RE.finditer(ln[len(USERS_TAG):])}
+            cur = None
             continue
-        m = LINE_RE.match(ln)
+        m = LINE_RE.match(ln)                        # 舊格式（一檔一行）：還是讀得懂，不用重建持股
         if m:
             code, name, qty, unit, avg, stop, target, key, added = m.groups()
             shares = float(qty.replace(",", "")) * (1000 if unit == "張" else 1)
             h[code] = {"name": name, "shares": int(round(shares)), "avg": float(avg), "stop": _num(stop),
-                       "target": _num(target), "key": _num(key), "added": added == "已"}
+                       "target": _num(target), "key": _num(key), "added": added == "已", "trail": None}
+            cur = None
+            continue
+        m = HEAD_RE.match(ln)
+        if m:
+            code, name, qty, unit = m.groups()
+            shares = float(qty.replace(",", "")) * (1000 if unit == "張" else 1)
+            cur = h[code] = {"name": name, "shares": int(round(shares)), "avg": None, "stop": None,
+                             "target": None, "key": None, "added": False, "trail": None}
+            continue
+        if cur is not None:
+            mt = TRAIL_RE.search(ln)
+            if mt:
+                cur["trail"] = float(mt.group(1))
+            for k, v in FIELD_RE.findall(ln):
+                if k == "加碼":
+                    cur["added"] = v.startswith("已")
+                else:
+                    cur[{"均價": "avg", "出場": "stop", "目標": "target", "前高": "key"}[k]] = _num(v)
     return h, pm.get("message_id"), users
 
 
+RULE = "━━━━━━━━━━━━"
+
+
 def holdings_text(h, users=None):
-    lines = [HOLD_TAG + "（機器人自動維護，請勿刪除或取消置頂）"]
+    """一檔三行（每行都短，手機上不會被切成兩半）；使用者名單前空兩行"""
+    lines = [HOLD_TAG, "（自動維護，請勿刪除或取消置頂）", RULE]
     for code, x in sorted(h.items()):
-        lines.append(f"{code} {x['name']}｜{x['shares']:,} 股｜均價 {_fmt(x['avg'])}｜出場 {_fmt(x['stop'])}"
-                     f"｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}｜加碼 {'已' if x['added'] else '未'}")
+        lines += ["",
+                  f"{code} {x['name']}｜{x['shares']:,} 股",
+                  f"　均價 {_fmt(x['avg'])}｜出場 {_fmt(x['stop'])}{stop_tag(x)}",
+                  f"　目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}｜加碼 {'已完成' if x['added'] else '未觸發'}"]
+        if x.get("trail"):
+            lines.append(f"　移動停利 高點回測 {x['trail']:g}%")
     if not h:
-        lines.append("（目前沒有持股）")
+        lines += ["", "（目前沒有持股）"]
+    lines += ["", RULE]
     if users:
-        lines.append(USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items()))
+        lines += ["", "", USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items())]
     return "\n".join(lines)
 
 
@@ -214,16 +264,16 @@ ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "�
 KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "改價位"}], [{"text": "說明"}]],
             "resize_keyboard": True, "is_persistent": True}
 FORMAT = {
-    "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 目標 1100\n（也可以按下方「買進」按鈕，一步一步輸入）",
+    "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 目標 1100\n移動停利再加：回測 8（高點回測 8%）\n（也可以按下方「買進」按鈕，一步一步輸入）",
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
-    "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000",
+    "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000\n移動停利：設 2330 回測 8（0 ＝ 關閉）",
 }
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
         "買進　→ 輸入代號、數量、成交價\n"
         "賣出　→ 選股票、數量\n"
         "持股　→ 看目前持股與即時損益\n"
-        "改價位　→ 選股票、改出場價或目標價\n"
+        "改價位　→ 選股票、改出場價、目標價或移動停利\n"
         "\n"
         "數量可以打「2張」或「500股」。\n"
         "出場、目標價碰到時，機器人會私訊提醒你。")
@@ -232,19 +282,24 @@ HELP = ("🤖 *持股追蹤*\n"
 def _opts(words):
     """把「出場 900 目標 1100 前高 1000」轉成 dict"""
     out = {}
-    names = {"出場": "stop", "目標": "target", "前高": "key"}
+    names = {"出場": "stop", "目標": "target", "前高": "key", "回測": "trail"}
     for k in range(len(words) - 1):
         if words[k] in names:
             try:
-                out[names[words[k]]] = float(words[k + 1])
+                v = float(words[k + 1].rstrip("%％"))
             except ValueError:
-                pass
+                continue
+            if names[words[k]] == "trail":
+                if not 0 <= v < 100:
+                    continue
+                v = v or None                           # 回測 0 ＝ 關閉移動停利
+            out[names[words[k]]] = v
     return out
 
 
 def handle(text, h):
     """處理一則持股指令（每個人自己的持股），回傳 (回覆文字, 持股是否有變)"""
-    m_ = re.match(r"^設\s*(\d{4,6})\s*(出場|目標|前高)\s*價?格?\s*[:：]?\s*([\d.,]+)\s*$", text.strip())
+    m_ = re.match(r"^設\s*(\d{4,6})\s*(出場|目標|前高|回測)\s*價?格?\s*[:：]?\s*([\d.,]+%?)\s*$", text.strip())
     if m_:                                           # 「設6620出場價格123」這種寫法也看得懂
         text = f"設 {m_.group(1)} {m_.group(2)} {m_.group(3).replace(',', '')}"
     w = text.replace("/", " ").replace("，", " ").split()
@@ -284,11 +339,15 @@ def handle(text, h):
             name, sfx = stock_name_suffix(code)
             lv = levels_for(code, sfx, price)
             x = {"name": name, "shares": qty, "avg": price, "stop": lv["stop"], "target": lv["target"],
-                 "key": lv["key"], "added": False, "suffix": sfx}
+                 "key": lv["key"], "added": False, "trail": None, "suffix": sfx}
             x.update(opt)
             h[code] = x
+            note = lv["note"]
+            if "stop" in opt:                               # 出場價是使用者自己訂的，不要再說「系統先設買價下 10%」
+                note = "出場價用你設定的" + ("，目標、前高依盤整型態計算" if lv["target"] else "，目標、前高留空")
             msg = (f"✅ 買進 {code} {name} {fmt_qty(qty)} @{_fmt(price)}\n"
-                   f"出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}\n{lv['note']}\n"
+                   f"出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}\n"
+                   + (f"移動停利：高點回測 {x['trail']:g}%\n" if x.get("trail") else "") + f"{note}\n"
                    "價位要改的話：設 " + code + " 出場 價格")
         return msg, True
     if cmd == "賣" and len(w) >= 2:
@@ -315,7 +374,9 @@ def handle(text, h):
             return "格式：設 2330 出場 920（也可以改 目標、前高）", False
         h[code].update(opt)
         x = h[code]
-        return f"✅ {code} {x['name']}　出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}", True
+        trail = f"\n移動停利：高點回測 {x['trail']:g}%" if x.get("trail") else "\n移動停利：關閉"
+        return (f"✅ {code} {x['name']}\n出場 {_fmt(x['stop'])}{stop_tag(x)}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}"
+                + (trail if "trail" in opt else "")), True
     return "看不懂這個指令。\n" + HELP, False
 
 
@@ -399,21 +460,34 @@ def guided(cid, text, h):
                 return None
             s_["code"], s_["step"] = cm.group(0), "field"
             x = h[s_["code"]]
-            send_kb(cid, f"{s_['code']} {x['name']}\n出場價 {_fmt(x['stop'])}　目標價 {_fmt(x['target'])}\n要改哪一個？",
-                    _kb([["出場價", "目標價"], ["取消"]]))
+            trail = f"高點回測 {x['trail']:g}%" if x.get("trail") else "關閉"
+            send_kb(cid, f"{s_['code']} {x['name']}\n出場價 {_fmt(x['stop'])}{stop_tag(x)}\n目標價 {_fmt(x['target'])}\n"
+                         f"移動停利 {trail}\n要改哪一個？", _kb([["出場價", "目標價"], ["移動停利"], ["取消"]]))
             return None
         if s_["step"] == "field":
-            if t not in ("出場價", "目標價"):
-                send_kb(cid, "請按「出場價」或「目標價」", _kb([["出場價", "目標價"], ["取消"]]))
+            if t not in ("出場價", "目標價", "移動停利"):
+                send_kb(cid, "請按「出場價」、「目標價」或「移動停利」", _kb([["出場價", "目標價"], ["移動停利"], ["取消"]]))
                 return None
-            s_["field"], s_["step"] = t[:2], "price"
-            send_kb(cid, f"新的{t}是多少？輸入數字，例：123", _kb([["取消"]]))
+            s_["field"], s_["step"] = ("回測" if t == "移動停利" else t[:2]), "price"
+            if t == "移動停利":
+                send_kb(cid, "高點回測幾 % 就出場？\n股價創新高時，出場價會跟著往上拉（只升不降）。\n"
+                             "輸入數字，例：8 或 8%；輸入 0 ＝ 關閉", _kb([["0"], ["取消"]]))
+            else:
+                send_kb(cid, f"新的{t}是多少？輸入數字，例：123", _kb([["取消"]]))
             return None
         try:
-            price = float(t.replace(",", ""))
+            price = float(t.replace(",", "").replace("%", "").replace("％", ""))
         except ValueError:
             send_kb(cid, "請輸入數字，例如 123", _kb([["取消"]]))
             return None
+        if s_["field"] == "回測" and not 0 <= price < 100:
+            send_kb(cid, "回測百分比要在 0～100 之間，例如 8", _kb([["0"], ["取消"]]))
+            return None
+        if s_["field"] == "出場":                       # 出場價高過現價 ＝ 一設好就立刻觸發，先擋下來
+            ref = ref_price(s_["code"])
+            if ref and price >= ref:
+                send_kb(cid, f"出場價要低於現價 {ref:g}，請重新輸入", _kb([["取消"]]))
+                return None
         SESSIONS.pop(cid, None)
         return f"設 {s_['code']} {s_['field']} {price:g}"
     code_m = re.search(r"\d{4,6}", t)
@@ -455,8 +529,57 @@ def guided(cid, text, h):
         except ValueError:
             send_kb(cid, "請輸入數字，例如 950", _kb([["取消"]]))
             return None
+        if s_["code"] in h:                          # 加碼：出場價沿用原本的，不再問
+            SESSIONS.pop(cid, None)
+            return f"買 {s_['code']} {s_['qty']}股 {price:g}"
+        name, sfx = stock_name_suffix(s_["code"])
+        sug = levels_for(s_["code"], sfx, price)["stop"]
+        s_["price"], s_["sug"], s_["step"] = price, sug, "stop"
+        send_kb(cid, f"{s_['code']} {name} @{price:g}\n出場價要設多少？\n"
+                     f"輸入價位，例：{sug:g}\n或輸入百分比，例：-8%（買價下 8%）",
+                _kb([[f"系統建議 {sug:g}"], ["取消"]]))
+        return None
+    if s_["step"] == "stop":
+        price = s_["price"]
+        tt = t.replace(",", "").replace(" ", "").replace("％", "%")
+        stop = None
+        if tt.startswith("系統建議"):
+            stop = s_["sug"]
+        elif tt.endswith("%"):
+            try:
+                pct = abs(float(tt[:-1]))
+            except ValueError:
+                pct = 0
+            if 0 < pct < 100:
+                stop = st.tick(price * (1 - pct / 100), "ceil")
+        else:
+            try:
+                stop = float(tt)
+            except ValueError:
+                pass
+        ref = ref_price(s_["code"], price)               # 出場價只要低於「現價」就行：低於買價是停損，高於買價是保護獲利
+        if stop is None or stop <= 0 or stop >= ref:
+            send_kb(cid, f"出場價要低於現價 {ref:g}\n請輸入價位（例：{s_['sug']:g}）或百分比（例：-8%）",
+                    _kb([[f"系統建議 {s_['sug']:g}"], ["取消"]]))
+            return None
+        s_["stop"], s_["step"] = stop, "trail"
+        kind = f"保護獲利，鎖定 {(stop / price - 1) * 100:+.1f}%" if stop > price else f"停損，最多虧 {(1 - stop / price) * 100:.1f}%"
+        send_kb(cid, f"出場價 {stop:g}（{kind}）\n要開啟移動停利嗎？\n股價創新高時，出場價會跟著往上拉（只升不降）。\n"
+                     "輸入高點回測幾 %，例：8 或 8%", _kb([["不用"], ["取消"]]))
+        return None
+    if s_["step"] == "trail":
+        pct = None
+        if t != "不用":
+            try:
+                pct = float(t.replace("%", "").replace("％", ""))
+            except ValueError:
+                pct = -1
+            if not 0 < pct < 100:
+                send_kb(cid, "請輸入 0～100 之間的數字（例：8），或按「不用」", _kb([["不用"], ["取消"]]))
+                return None
         SESSIONS.pop(cid, None)
-        return f"買 {s_['code']} {s_['qty']}股 {price:g}"
+        return (f"買 {s_['code']} {s_['qty']}股 {s_['price']:g} 出場 {s_['stop']:g}"
+                + (f" 回測 {pct:g}" if pct else ""))
     SESSIONS.pop(cid, None)
     return None
 
@@ -569,7 +692,8 @@ def get_quotes(items):
                     return None
             last = f("z") or f("b") or f("a")
             if last:
-                out[q["c"]] = {"last": last, "high": f("h") or last, "prev": f("y"), "date": q.get("d", "")}
+                out[q["c"]] = {"last": last, "high": f("h") or last, "low": f("l") or last,
+                               "prev": f("y"), "date": q.get("d", "")}
     except Exception as e:
         print("證交所即時報價失敗：", repr(e))
     missing = [(c, s) for c, s in items if c not in out]
@@ -580,6 +704,7 @@ def get_quotes(items):
                 fi = yf.Ticker(code + sfx).fast_info
                 last = float(fi["last_price"])
                 out[code] = {"last": last, "high": float(fi.get("day_high") or last),
+                             "low": float(fi.get("day_low") or last),
                              "prev": float(fi.get("previous_close") or 0) or None,
                              "date": datetime.now(TZ).strftime("%Y%m%d")}
         except Exception as e:
@@ -630,8 +755,38 @@ def tv(code, sfx):
     return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
 
 
-def check_once(watch, books, sent, today):
-    """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)"""
+_SEEN = {}     # {代號: (上一輪的盤中最低, 上一輪的盤中最高)}，用來抓兩次查價之間「碰一下又彈回」的價位
+
+
+def touched(code, v, level, side):
+    """成交價已到價位 → True；或這一輪盤中出現新低（side="down"）／新高（side="up"）而且到了價位 → True。
+    第一次看到這檔（剛買進、剛啟動）只看成交價，不翻買進之前的舊帳"""
+    p, prev = v["last"], _SEEN.get(code)
+    if side == "down":
+        return p <= level or bool(prev and v.get("low") and v["low"] < prev[0] and v["low"] <= level)
+    return p >= level or bool(prev and v.get("high") and v["high"] > prev[1] and v["high"] >= level)
+
+
+_PEAK = {}     # {(chat id, 代號): 開始監控後看到的最高價}，移動停利用
+
+
+def push_stop_updates(upd):
+    """移動停利把出場價往上拉之後，存回各人的持股清單。
+    先重新讀一次最新持股、只改出場價，避免蓋掉你剛好在這一分鐘下的指令"""
+    for cid, d in upd.items():
+        h, mid, users = load_holdings(cid)
+        changed = False
+        for code, s in d.items():
+            if code in h and (h[code]["stop"] is None or s > h[code]["stop"]):
+                h[code]["stop"] = s
+                changed = True
+        if changed:
+            save_holdings(cid, h, mid, users if cid == OWNER else None)
+
+
+def check_once(watch, books, sent, today, upd=None):
+    """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)；
+    upd：收集移動停利調高的出場價 {chat id: {代號: 新出場價}}"""
     items = [(w["code"], w["suffix"]) for w in watch]
     for h in books.values():
         for code, x in h.items():
@@ -657,19 +812,38 @@ def check_once(watch, books, sent, today):
             if not v or v.get("date") != today:
                 continue
             p = v["last"]
-            if x["stop"] and p <= x["stop"] and ("stop", cid, code) not in sent:
+            if x.get("trail"):                              # 移動停利：出場價跟著高點往上拉，只升不降
+                prev = _SEEN.get(code)
+                pk = _PEAK.get((cid, code))
+                if pk is None:                              # 第一次看到這筆持股：從現價起算，不採用買進前的高點
+                    pk = p
+                else:
+                    pk = max(pk, p, v["high"] if prev and v.get("high") and v["high"] > prev[1] else 0)
+                _PEAK[(cid, code)] = pk
+                new_stop = st.tick(pk * (1 - x["trail"] / 100), "ceil")
+                if x["stop"] is None or new_stop > x["stop"]:
+                    x["stop"] = new_stop
+                    if upd is not None:
+                        upd.setdefault(cid, {})[code] = new_stop
+            if x["stop"] and touched(code, v, x["stop"], "down") and ("stop", cid, code) not in sent:
                 sent.add(("stop", cid, code))
-                send_to(cid, f"🛑 *跌破出場價*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}\n"
+                extra = f"\n（兩次查價之間盤中最低曾到 {v['low']:g}）" if p > x["stop"] else ""
+                if x.get("trail"):
+                    extra += f"\n移動停利：高點 {_PEAK[(cid, code)]:g} 回測 {x['trail']:g}%"
+                send_to(cid, f"🛑 *碰到出場價{stop_tag(x)}*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}{extra}\n"
                              f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
-            if x["key"] and not x["added"] and p >= x["key"] and ("add", cid, code) not in sent:
+            if x["key"] and not x["added"] and touched(code, v, x["key"], "up") and ("add", cid, code) not in sent:
                 sent.add(("add", cid, code))
                 send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
                              f"可以加碼第二筆；加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
                              f"加碼後回覆：買 {code} 數量 價格（例：買 {code} 1張 價格）")
-            if x["target"] and p >= x["target"] and ("target", cid, code) not in sent:
+            if x["target"] and touched(code, v, x["target"], "up") and ("target", cid, code) not in sent:
                 sent.add(("target", cid, code))
                 send_to(cid, f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
                              f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
+    for code, v in q.items():                               # 記下這一輪的最低／最高，下一輪才看得出「又創新低／新高」
+        if v.get("date") == today:
+            _SEEN[code] = (v.get("low") or v["last"], v.get("high") or v["last"])
     return len(traded)
 
 
@@ -691,7 +865,9 @@ def run_market():
         process_commands()
         if (now.hour, now.minute) >= OPEN_AT:
             books = all_books()
-            n = check_once(watch, books, sent, today)
+            upd = {}
+            n = check_once(watch, books, sent, today, upd)
+            push_stop_updates(upd)
             if n == 0 and (watch or any(books.values())):
                 no_trade_checks += 1
                 if no_trade_checks >= 15:                    # 開盤 15 分鐘都沒有成交資料 → 今天休市
