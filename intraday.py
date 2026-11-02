@@ -766,7 +766,7 @@ def _handle_message(m, state, asked):
 
         if text == "管理者":                          # 管理者功能：全部用按鈕操作
             MENU_WAIT[cid] = True
-            TRACK[cid] = [mid0, send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "使用者名單"], ["移除使用者"], ["取消"]]))]
+            TRACK[cid] = [mid0, send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "移除使用者"], ["使用者名單"], ["取消"]]))]
             return
         if text in ("待開通名單", "移除使用者"):
             items = ({c: n for c, n in PENDING.items() if c not in users} if text == "待開通名單" else dict(users))
