@@ -23,6 +23,7 @@
 import copy
 import json
 import os
+import random
 import re
 import sys
 import threading
@@ -113,6 +114,12 @@ HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|�
 FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出場 ([\d,.]+|—)")),
              ("target", re.compile(r"目標 ([\d,.]+|—)")), ("key", re.compile(r"前高 ([\d,.]+|—)")))
 _LASTQ = {}
+NAME_JOKES = ["哲哲老師只認得代號喔😊\n麻煩幫我打代號好嗎？\n例：2330",
+              "哲哲老師從國外留學回來\n不太認識中文😅\n請打代號，例：2330",
+              "哲哲老師在國外念書\n中文都還給老師了🤣\n只看得懂數字，例：2330",
+              "哲哲老師出國太久\n只記得代號😆\n請打數字代號，例：2330",
+              "抱歉，哲哲老師中文不好🙏\n留學回來只會看代號\n例：2330",
+              "名字哲哲老師看不懂啦😂\n他只認得代號\n拜託打代號，例：2330"]
 _BOOK = {}      # {chat id: (持股, 看板訊息 id, 使用者名單)} 記在機器人記憶裡；手機上的置頂被取消時，持股才不會跟著不見
 
 
@@ -163,6 +170,17 @@ def load_holdings(cid):
                     cur[k] = _val(mm.group(1))
     h = {c: x for c, x in h.items() if x["avg"] is not None}
     return h, pm.get("message_id"), users
+
+
+def fix_names(h):
+    """買進時股票清單還沒載好，名稱暫時是代號；清單好了就補上真正的名稱"""
+    if _DIR is None:
+        return
+    for code, x in h.items():
+        if x.get("name") == code:
+            nm = stock_name_suffix(code)[0]
+            if nm != code:
+                x["name"] = nm
 
 
 def board_text(h, q=None, users=None, title=HOLD_TAG):
@@ -559,7 +577,7 @@ def guided(cid, text, h):
         return None
     if t == "買進":
         SESSIONS[cid] = {"flow": "buy", "step": "code"}
-        send_kb(cid, "要買哪一檔？請輸入股票代號或名稱\n例：2330 或 台積電", _kb([["取消"]]))
+        send_kb(cid, "要買哪一檔？\n請輸入股票代號\n例：2330", _kb([["取消"]]))
         return None
     if t == "賣出":
         if not h:
@@ -616,21 +634,11 @@ def guided(cid, text, h):
         return f"設 {s_['code']} {s_['field']} {price:g}"
     code_m = re.search(r"\d{4,6}", t)
     if s_["step"] == "code":
-        if s_["flow"] == "buy":                       # 買進：代號或名稱都可以
-            if get_dir() is None:
-                send_kb(cid, "股票清單還在載入中\n約 1 分鐘後再輸入一次", _kb([["取消"]]))
-                return None
-            found = find_stock(t)
-            if not found:
-                send_kb(cid, f"找不到「{t}」\n請輸入股票代號或完整名稱\n例：2330 或 台積電", _kb([["取消"]]))
-                return None
-            if len(found) > 1:
-                rows = [[f"{r['code']} {r['name']}"] for r in found] + [["取消"]]
-                send_kb(cid, f"有 {len(found)} 檔符合「{t}」\n請選一檔", _kb(rows))
-                return None
-            code_m = re.search(r"\d{4,6}", found[0]["code"])
         if not code_m:
-            send_kb(cid, "請輸入股票代號或名稱\n例：2330 或 台積電", _kb([["取消"]]))
+            if s_["flow"] == "buy":
+                send_kb(cid, random.choice(NAME_JOKES), _kb([["取消"]]))
+            else:
+                send_kb(cid, "請輸入股票代號\n（4～6 位數字）\n例：2330", _kb([["取消"]]))
             return None
         s_["code"] = code_m.group(0)
         if s_["flow"] == "sell":
@@ -694,6 +702,7 @@ def _handle_message(m, state, asked):
             if loaded[1] is None and cid in _BOOK:           # 置頂被取消了：用記憶中的持股，之後會重新置頂
                 h0, mid0, u0 = _BOOK[cid]
                 loaded = [copy.deepcopy(h0), mid0, copy.deepcopy(u0)]
+            fix_names(loaded[0])
             state[cid] = loaded
         return state[cid]
 
