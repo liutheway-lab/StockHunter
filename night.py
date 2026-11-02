@@ -65,7 +65,7 @@ def market_block(mk):
         if s is None:
             out.append("🧱 止跌確認：資料不足")
         elif s["vol_missing"]:
-            out.append("🧱 止跌確認：❌ 無法確認（大盤成交金額抓不到）")
+            out.append("🧱 止跌確認：⏳ 等大盤成交金額公布\n（通常 14:30 後才有），暫時無法確認")
         else:
             ok = lambda b: "✅" if b else "❌"
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
