@@ -144,8 +144,16 @@ def load_holdings(cid):
         return {}, None, {}
     h, users = {}, {}
     cur = None                                       # 新格式：一檔分三行，標題行開頭、後面兩行接著補欄位
+    status = []
     for ln in text.splitlines()[1:]:
         ln = ln.strip()
+        if ln.startswith(("🟢 盤中監控", "🔴 盤中監控")):          # 監控狀態（兩行：狀態＋版本）
+            status = [ln]
+            cur = None
+            continue
+        if status and len(status) == 1 and ln.startswith("版本"):
+            status.append(ln)
+            continue
         if ln.startswith(USERS_TAG):
             users = {m.group(1): m.group(2).strip() for m in USER_RE.finditer(ln[len(USERS_TAG):])}
             cur = None
@@ -174,18 +182,20 @@ def load_holdings(cid):
                     cur["added"] = v.startswith("已")
                 else:
                     cur[{"均價": "avg", "出場": "stop", "目標": "target", "前高": "key"}[k]] = _num(v)
+    MON_STATUS[str(cid)] = status
     if not h and "股｜" in text and "（目前沒有持股）" not in text:      # 清單有內容卻一檔都讀不到：通常是格式不相容
         PARSE_FAIL.add(str(cid))
     return h, pm.get("message_id"), users
 
 
 PARSE_FAIL = set()     # 置頂清單有內容、卻讀不到任何持股的對象
+MON_STATUS = {}        # {chat id: 置頂清單最下面的監控狀態（兩行）}。每次讀清單時更新，存檔時原樣寫回去，不會被買賣指令蓋掉
 
 
 RULE = "━━━━━━━━━━━━"
 
 
-def holdings_text(h, users=None):
+def holdings_text(h, users=None, status=None):
     """一檔三行（每行都短，手機上不會被切成兩半）；使用者名單前空兩行"""
     lines = [HOLD_TAG, "（自動維護，請勿刪除或取消置頂）", RULE]
     for code, x in sorted(h.items()):
@@ -198,13 +208,15 @@ def holdings_text(h, users=None):
     if not h:
         lines += ["", "（目前沒有持股）"]
     lines += ["", RULE]
+    if status:                                       # 監控狀態：放在持股清單下面，狀態一換、舊的字眼就不見
+        lines += ["", *status]
     if users:
         lines += ["", "", USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items())]
     return "\n".join(lines)
 
 
 def save_holdings(cid, h, msg_id, users=None):
-    text = holdings_text(h, users)
+    text = holdings_text(h, users, MON_STATUS.get(str(cid)))
     if msg_id:
         j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=text)
         if j.get("ok") or "not modified" in str(j):
@@ -287,7 +299,7 @@ FORMAT = {
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
     "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000\n買錯了：設 2330 均價 950、設 2330 數量 2張\n移動停利：設 2330 回測 8（0 ＝ 關閉）",
 }
-BUILD = "11/02 12:55"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
+BUILD = "11/02 13:30"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
 
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
@@ -1106,6 +1118,7 @@ def touched(code, v, level, side):
 
 _PEAK = {}     # {(chat id, 代號): 開始監控後看到的最高價}，移動停利用
 _MISS = {}     # {(chat id, 代號): 連續幾次查不到報價}
+_LASTQ = {"n_items": 0, "got": 0}      # 最近一次查價：要查幾檔、實際查到幾檔
 
 
 REMIND_SEC = 30 * 60       # 條件還成立時，每隔 30 分鐘再提醒一次
@@ -1172,7 +1185,9 @@ def check_once(watch, books, sent, today, upd=None):
     for h in books.values():
         for code, x in h.items():
             items.append((code, x.get("suffix") or stock_name_suffix(code)[1]))
-    q = get_quotes(list(dict.fromkeys(items)))
+    items = list(dict.fromkeys(items))
+    q = get_quotes(items)
+    _LASTQ["n_items"], _LASTQ["got"] = len(items), len(q)
     traded = [v for v in q.values() if v.get("date") == today]
     if traded:                                              # 市場有開盤，卻連續查不到某檔持股的報價 → 通知持有人，不要讓它悄悄失效
         for cid, h in books.items():
@@ -1248,19 +1263,46 @@ def all_books():
 
 
 VERSION = "持股提醒 v2（30分鐘重複＋尾盤＋移動停利）"
+_MON = {"start": None}                                      # 這次監控的啟動時間（HH:MM）
 
 
-def startup_report(watch):
-    """監控一啟動就私訊你：收得到這則，就代表新版監控有在跑、也讀得到你的持股"""
-    books = all_books()
-    mine = books.get(OWNER, {})
-    others = sum(len(h) for c, h in books.items() if c != OWNER)
-    codes = "、".join(f"{c} {x['name']}" for c, x in sorted(mine.items())) or "（讀不到）"
-    msg = (f"🟢 盤中監控已啟動 {datetime.now(TZ):%H:%M}\n{VERSION}｜版本 {BUILD}\n"
-           f"你的持股 {len(mine)} 檔：{codes}\n朋友持股 {others} 檔｜追價名單 {len(watch)} 檔\n"
-           "每分鐘檢查一次，13:30 結束")
-    print(msg)
-    to_owner(msg)
+def set_status(cid, lines):
+    """把監控狀態寫在這個人置頂持股清單的最下面。只改現有那則，不新建、不重新置頂；
+    讀不到清單就不動，免得把持股蓋掉。成功回傳 True"""
+    try:
+        h, mid, users = load_holdings(cid)
+        if not mid:
+            return False
+        MON_STATUS[str(cid)] = lines
+        j = tg("editMessageText", chat_id=cid, message_id=mid,
+               text=holdings_text(h, users if str(cid) == OWNER else None, lines))
+        return bool(j.get("ok")) or "not modified" in str(j)
+    except Exception as e:
+        print("寫入監控狀態失敗：", repr(e))
+        return False
+
+
+def set_monitor_status(kind, note=""):
+    """kind：start（啟動）／beat（每 10 分鐘更新「最後檢查」）／stop（停止，note 是原因）。
+    狀態寫進每個人的置頂清單；管理者的清單寫不進去時，啟動、停止改用私訊通知"""
+    now = datetime.now(TZ)
+    if kind == "stop":
+        lines = [f"🔴 盤中監控已停止｜{now:%H:%M}" + (f"（{note}）" if note else ""), f"版本 {BUILD}"]
+    else:
+        lines = [f"🟢 盤中監控已啟動｜{_MON['start'] or now.strftime('%H:%M')}", f"版本 {BUILD}｜最後檢查 {now:%H:%M}"]
+    ok_owner = False
+    try:
+        users = allowed_users()
+    except Exception as e:
+        print("讀取使用者名單失敗：", repr(e))
+        users = {OWNER: "管理者"} if OWNER else {}
+    for cid in users:
+        ok = set_status(cid, lines)
+        if cid == OWNER:
+            ok_owner = ok
+    if not ok_owner and kind != "beat":
+        to_owner("\n".join(lines))
+    return ok_owner
 
 
 def run_market():
@@ -1270,38 +1312,72 @@ def run_market():
         return
     today = now.strftime("%Y%m%d")
     watch = load_watch()
-    print(f"追價名單 {len(watch)} 檔")
-    startup_report(watch)
+    _MON["start"] = now.strftime("%H:%M")
+    set_monitor_status("start")                             # 置頂持股清單最下面顯示「🟢 盤中監控已啟動」
+    print(f"{VERSION}｜版本 {BUILD}｜追價名單 {len(watch)} 檔")
     sent = set()
-    no_trade_checks = 0
+    no_trade_checks = 0        # 查得到報價，但不是今天的：連續幾次
+    no_data_checks = 0         # 一檔報價都查不到：連續幾次
+    no_data_warned = False
     warned = False
-    while True:
-        now = datetime.now(TZ)
-        if (now.hour, now.minute) >= CLOSE_AT:
-            break
-        process_commands()
-        if (now.hour, now.minute) >= OPEN_AT:
-            books = all_books()
-            if PARSE_FAIL and not warned:
-                warned = True
-                to_owner("⚠️ 盤中監控讀不到持股清單，出場提醒暫時停擺。\n"
-                         "通常是監控程式還在跑舊版。請到 GitHub → Actions，取消正在跑的 intraday，再重新執行一次。")
-            upd = {}
-            n = check_once(watch, books, sent, today, upd)
-            push_stop_updates(upd)
-            if n == 0 and (watch or any(books.values())):
-                no_trade_checks += 1
-                if no_trade_checks >= 15:                    # 開盤 15 分鐘都沒有成交資料 → 今天休市
-                    print("今天沒有開盤，結束")
-                    return
-        time.sleep(POLL_SEC)
+    last_beat = time.time()
+    try:
+        while True:
+            now = datetime.now(TZ)
+            if (now.hour, now.minute) >= CLOSE_AT:
+                break
+            process_commands()
+            if (now.hour, now.minute) >= OPEN_AT:
+                books = all_books()
+                if PARSE_FAIL and not warned:
+                    warned = True
+                    to_owner("⚠️ 盤中監控讀不到持股清單，出場提醒暫時停擺。\n"
+                             "通常是監控程式還在跑舊版。請到 GitHub → Actions，取消正在跑的 intraday，再重新執行一次。")
+                upd = {}
+                n = check_once(watch, books, sent, today, upd)
+                push_stop_updates(upd)
+                if _LASTQ["n_items"]:                              # 有東西要查的時候才判斷
+                    if _LASTQ["got"] == 0:                         # 一檔都查不到：不是休市，是抓不到資料。繼續試，並且通知你
+                        no_data_checks += 1
+                        print(f"連續 {no_data_checks} 次查不到任何報價")
+                        if no_data_checks >= 5 and not no_data_warned:
+                            no_data_warned = True
+                            to_owner("⚠️ 連續 5 分鐘抓不到任何即時報價（證交所和 Yahoo 都失敗），盤中提醒現在無法運作。\n"
+                                     "監控會繼續嘗試，恢復後會自動接上。")
+                    else:
+                        if no_data_checks >= 5 and no_data_warned:
+                            to_owner("✅ 即時報價恢復了，盤中提醒繼續運作。")
+                            no_data_warned = False
+                        no_data_checks = 0
+                        if n == 0:                                 # 查得到報價，卻都不是今天的
+                            no_trade_checks += 1
+                            if no_trade_checks >= 15:              # 開盤 15 分鐘都沒有今天的成交資料 → 今天休市
+                                print("今天沒有開盤，結束")
+                                set_monitor_status("stop", note="今天休市")
+                                return
+                        else:
+                            no_trade_checks = 0
+            if time.time() - last_beat >= 600:                      # 每 10 分鐘更新一次「最後檢查」，監控卡住時一看就知道
+                last_beat = time.time()
+                set_monitor_status("beat")
+            time.sleep(POLL_SEC)
+    except BaseException as e:                                      # 被取消（SIGINT／SIGTERM）或出錯：狀態改成「已停止」，不要一直掛著「已啟動」
+        set_monitor_status("stop", note="中途中止" if isinstance(e, KeyboardInterrupt) else "發生錯誤")
+        raise
+    set_monitor_status("stop")                                      # 收盤：「🔴 盤中監控已停止」
     for cid, h in all_books().items():                      # 收盤後傳一次持股狀況給每個人
         if h:
             send_to(cid, holdings_report(h, quotes_for(h)).replace("目前持股", "收盤持股"))
+
+
+def _on_term(signum, frame):
+    raise KeyboardInterrupt                                 # GitHub 取消流程時會送 SIGTERM／SIGINT：轉成中斷，讓狀態能改成「已停止」
 
 
 if __name__ == "__main__":
     if "--commands" in sys.argv:
         process_commands()
     else:
+        import signal
+        signal.signal(signal.SIGTERM, _on_term)
         run_market()
