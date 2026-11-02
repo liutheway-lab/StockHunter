@@ -192,13 +192,13 @@ def board_text(h, q=None, users=None, title=HOLD_TAG):
         lines += ["", "（目前沒有持股）"]
     for code, x in sorted(h.items()):
         p = (q.get(code) or {}).get("last")
-        lamp, now_l, avg_l, stop_l = "⚪", "現價 —", f"均價 {_n(x['avg'])}", f"出場 {_n(x['stop'])}"
+        lamp, now_l, avg_l, stop_l = "⚪", "成交價 —", f"均價 {_n(x['avg'])}", f"出場 {_n(x['stop'])}"
         if p:
             pct = (p / x["avg"] - 1) * 100
             money = (p - x["avg"]) * x["shares"]
             lamp = "🔴" if pct > 0 else "🟢" if pct < 0 else "⚪"
             sg = lambda v: "+" if v >= 0 else "−"
-            now_l = f"現價 {_n(p)}　{sg(pct)}{abs(pct):,.1f}%"
+            now_l = f"成交價 {_n(p)}　{sg(pct)}{abs(pct):,.1f}%"
             avg_l += f"　損益 {sg(money)}{abs(money):,.0f} 元"
             if x["stop"]:
                 d = (x["stop"] / p - 1) * 100
@@ -223,7 +223,7 @@ def board_html(text):
 
 
 def quotes_quick(h, wait=10):
-    """查現價，最多等 wait 秒（查不到就顯示「—」，不要讓機器人卡住）"""
+    """查成交價，最多等 wait 秒（查不到就顯示「—」，不要讓機器人卡住）"""
     if not h:
         return {}
     box = {}
@@ -901,7 +901,7 @@ def _twse_fetch(ex):
                 return float(str(q.get(k, "")).split("_")[0])
             except ValueError:
                 return None
-        last = f("z") or f("b") or f("a")
+        last = f("z") or f("y")        # 只用最後一筆成交價；今天還沒成交就用昨收，不拿買賣報價
         if last:
             res[q["c"]] = {"last": last, "high": f("h") or last, "prev": f("y"), "date": q.get("d", ""),
                            "name": (q.get("n") or "").strip() or None,
@@ -1029,7 +1029,7 @@ def check_once(watch, books, sent, today):
             back = "" if v["last"] >= w["chase"] else "，目前已拉回"
             to_group(f"🎯 *追價提醒*　{w['code']} {w['name']}\n"
                      f"盤中漲到追價點 {w['chase']:g}\n最高 {v['high']:g}\n"
-                     f"現價 {v['last']:g}（{chg:+.1f}%）{back}\n"
+                     f"成交價 {v['last']:g}（{chg:+.1f}%）{back}\n"
                      f"出場 {w['stop1']:g}｜目標 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
                      f"📊 {tv(w['code'], w['suffix'])}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
@@ -1040,16 +1040,16 @@ def check_once(watch, books, sent, today):
             p = v["last"]
             if x["stop"] and p <= x["stop"] and ("stop", cid, code) not in sent:
                 sent.add(("stop", cid, code))
-                send_to(cid, f"🛑 *跌破出場價*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}\n"
+                send_to(cid, f"🛑 *跌破出場價*　{code} {x['name']}\n成交價 {p:g}，出場價 {x['stop']:g}\n"
                              f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後回覆：賣 {code}")
             if x["key"] and not x["added"] and p >= x["key"] and ("add", cid, code) not in sent:
                 sent.add(("add", cid, code))
-                send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
+                send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n成交價 {p:g}，前高 {x['key']:g}\n"
                              f"可以加碼第二筆\n加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
                              f"加碼請按「買進」\n或回覆：買 {code} 1張 價格")
             if x["target"] and p >= x["target"] and ("target", cid, code) not in sent:
                 sent.add(("target", cid, code))
-                send_to(cid, f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
+                send_to(cid, f"🎯 *碰到目標價*　{code} {x['name']}\n成交價 {p:g}，目標 {x['target']:g}\n"
                              f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）")
     return len(traded)
 
