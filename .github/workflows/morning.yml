@@ -2,7 +2,7 @@ name: morning
 
 on:
   schedule:
-    - cron: "30 0 * * 1-5"   # 台灣時間 週一到週五 08:30（GitHub 用 UTC，所以是 00:30）
+    - cron: "20 0 * * 1-5"   # 台灣時間 週一到週五 08:20（GitHub 用 UTC，所以是 00:20；避開整點半點比較不會延遲）
   workflow_dispatch:          # 也可以手動執行：Actions → morning → Run workflow
 
 jobs:
