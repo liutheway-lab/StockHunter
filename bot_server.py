@@ -69,7 +69,8 @@ def main():
     else:
         print("沒有 RENDER_EXTERNAL_URL，沒有設定 webhook（本機測試模式）", flush=True)
     I.setup_menu()
-    threading.Thread(target=lambda: I.stock_name_suffix("2330"), daemon=True).start()   # 開機就先載好股票清單，之後輸入代號不用再等
+    I.DIR_BACKGROUND = True            # 處理訊息時不現抓股票清單，避免證交所慢的時候卡住所有人
+    I.start_dir_loader()               # 開機就在背景載入，失敗每分鐘重試
     port = int(os.getenv("PORT", "10000"))
     print(f"機器人已啟動，port {port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
