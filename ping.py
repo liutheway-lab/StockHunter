@@ -37,7 +37,7 @@ def check_twse():
         n1 = int((d["market"] == "上市").sum())
         n2 = int((d["market"] == "上櫃").sum())
         if n1 == 0 or n2 == 0:
-            return f"❌ 證交所清單：上市 {n1} 檔、上櫃 {n2} 檔（有一邊抓不到）"
+            return f"❌ 證交所清單：上市 {n1} 檔、上櫃 {n2} 檔\n　有一邊抓不到"
         return f"✅ 證交所清單：上市 {n1} 檔、上櫃 {n2} 檔"
     except Exception as e:
         return f"❌ 證交所清單：{e}"
@@ -61,7 +61,7 @@ def send(text):
 
 if __name__ == "__main__":
     now = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
-    lines = [f"🏓 連線測試 {now}", check_yahoo(), check_twse(), "✅ Telegram：你收到這則訊息，代表發送正常"]
+    lines = [f"🏓 連線測試 {now}", check_yahoo(), check_twse(), "✅ Telegram：發送正常"]
     msg = "\n".join(lines)
     print(msg)
     send(msg)
