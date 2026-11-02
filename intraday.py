@@ -375,6 +375,7 @@ SESSIONS = {}          # 按鈕一步一步輸入時，記住每個人目前問�
 
 TRACK = {}             # 按鈕流程進行中，記住這一次操作的訊息編號（按「取消」時整串刪掉）
 LAST_HELP = {}         # 上一次的「說明」訊息編號（再按說明時，把舊的刪掉）
+PENDING = {}           # 等管理者開通的人：{ID: 名字}（機器人重啟後會清空，對方再傳一次訊息就會重新出現）
 LAST_VIEW = {}         # 上一次的「持股」訊息編號（再按持股時，把舊的刪掉）
 
 
@@ -552,22 +553,37 @@ def handle_message(m, state, asked):
                      f"已經把你的申請（ID {cid}）送給管理者，開通後會通知你，請稍等。\n"
                      "不用重複傳訊息。\n\n"
                      "追價提醒、夜間選股結果會發在群組裡，不用開通就能看。")
+        PENDING[cid] = (frm.get("first_name") or "朋友").strip()
         if cid not in asked:
             asked.add(cid)
-            send_to(OWNER, f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n"
-                           f"同意的話回覆：允許 {cid} {frm.get('first_name') or ''}".rstrip())
+            send_kb(OWNER, f"👤 {name or '有人'} 想使用持股追蹤\n請按「管理者」→「待開通名單」開通")
         return
     if cid == OWNER:
-        if text == "管理者":                          # 管理者按鈕：說明 + 目前使用者名單
-            delete_msgs(cid, LAST_HELP.pop(cid, []))
-            who = admin("使用者", users)[0]
-            LAST_HELP[cid] = [m.get("message_id"), send_kb(cid, ADMIN_HELP.strip() + "\n\n" + who)]
+        if text == "管理者":                          # 管理者功能：全部用按鈕操作
+            send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "使用者名單"], ["移除使用者"], ["取消"]]))
+            return
+        if text == "待開通名單":
+            waiting = {c: n for c, n in PENDING.items() if c not in users}
+            if not waiting:
+                send_kb(cid, "目前沒有人在等開通")
+            else:
+                send_kb(cid, "按名字就開通", _kb([[f"允許 {c} {n}"] for c, n in waiting.items()] + [["取消"]]))
+            return
+        if text == "使用者名單":
+            send_kb(cid, admin("使用者", users)[0])
+            return
+        if text == "移除使用者":
+            if not users:
+                send_kb(cid, "目前沒有朋友可以移除")
+            else:
+                send_kb(cid, "按名字就移除", _kb([[f"移除 {c} {n}"] for c, n in users.items()] + [["取消"]]))
             return
         reply, changed = admin(text, users)
         if reply:
             if changed:
                 owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
-            send_to(OWNER, reply)
+                PENDING.pop(text.split()[1], None)
+            send_kb(OWNER, reply)
             return
     me = get(cid)
     if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
@@ -578,6 +594,7 @@ def handle_message(m, state, asked):
         line = guided(cid, text, me[0])
         if line is None:
             return
+        delete_msgs(cid, TRACK.pop(cid, []))            # 做完了：中間的問答清掉，只留最後的結果
         text = line
     reply, changed = handle(text, me[0])
     if changed:
