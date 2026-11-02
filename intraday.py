@@ -20,6 +20,7 @@
   python intraday.py             盤中監控（給 intraday.yml 用）
   python intraday.py --commands  只處理一次 Telegram 指令就結束（給 commands.yml 用，盤後也能回覆）
 """
+import copy
 import json
 import os
 import re
@@ -112,6 +113,7 @@ HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|�
 FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出場 ([\d,.]+|—)")),
              ("target", re.compile(r"目標 ([\d,.]+|—)")), ("key", re.compile(r"前高 ([\d,.]+|—)")))
 _LASTQ = {}
+_BOOK = {}      # {chat id: (持股, 看板訊息 id, 使用者名單)} 記在機器人記憶裡；手機上的置頂被取消時，持股才不會跟著不見
 
 
 def _n(v):
@@ -168,28 +170,26 @@ def board_text(h, q=None, users=None, title=HOLD_TAG):
     q = q or {}
     lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}", "━" * 14]
     if not h:
-        lines.append("（目前沒有持股）")
-    for k, (code, x) in enumerate(sorted(h.items())):
-        if k:
-            lines += ["", "⠀"]
+        lines += ["", "（目前沒有持股）"]
+    for code, x in sorted(h.items()):
         p = (q.get(code) or {}).get("last")
-        lamp, now_l, avg_l, stop_l = "⚪", "　現價 —", f"　均價 {_n(x['avg'])}", f"　出場 {_n(x['stop'])}"
+        lamp, now_l, avg_l, stop_l = "⚪", "現價 —", f"均價 {_n(x['avg'])}", f"出場 {_n(x['stop'])}"
         if p:
             pct = (p / x["avg"] - 1) * 100
             money = (p - x["avg"]) * x["shares"]
             lamp = "🔴" if pct > 0 else "🟢" if pct < 0 else "⚪"
-            sg = lambda v: "＋" if v >= 0 else "−"
-            now_l = f"　現價 {_n(p)}　{sg(pct)}{abs(pct):.1f}%"
+            sg = lambda v: "+" if v >= 0 else "−"
+            now_l = f"現價 {_n(p)}　{sg(pct)}{abs(pct):,.1f}%"
             avg_l += f"　損益 {sg(money)}{abs(money):,.0f} 元"
             if x["stop"]:
                 d = (x["stop"] / p - 1) * 100
-                stop_l += f"　距 {sg(d)}{abs(d):.1f}%"
-        lines.append(f"{lamp} {code} {x['name']}　{fmt_qty(x['shares'])}{'・已加碼' if x['added'] else ''}")
-        lines += [now_l, avg_l, stop_l]
+                stop_l += f"　距出場 {sg(d)}{abs(d):.1f}%"
+        lines += ["", f"{lamp} {code} {x['name']}　{fmt_qty(x['shares'])}{'・已加碼' if x['added'] else ''}",
+                  now_l, avg_l, stop_l]
         if x["target"] is not None or x["key"] is not None:
-            lines.append(f"　目標 {_n(x['target'])}　前高 {_n(x['key'])}")
+            lines.append(f"目標 {_n(x['target'])}　前高 {_n(x['key'])}")
     if users:
-        lines += ["", "⠀", USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items())]
+        lines += ["", USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items())]
     return "\n".join(lines)
 
 
@@ -210,16 +210,25 @@ def quotes_quick(h, wait=10):
     return dict(box)
 
 
-def save_holdings(cid, h, msg_id, users=None, q=None):
+def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
+    """存持股並更新置頂看板。rotate=True：每次都送一則新的並重新置頂、刪掉舊的
+    （看板在你手機上被刪或取消置頂時，新的一則會讓置頂列重新出現）"""
     text = board_text(h, quotes_quick(h) if q is None else q, users)
-    if msg_id:
+    if msg_id and not rotate:
         j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=text)
         if j.get("ok") or "not modified" in str(j):
             return msg_id
     j = tg("sendMessage", chat_id=cid, text=text)
     mid = (j.get("result") or {}).get("message_id")
-    if mid:
-        tg("pinChatMessage", chat_id=cid, message_id=mid, disable_notification=True)
+    if not mid:
+        send_to(cid, "⚠️ 持股看板傳送失敗\n" + str(j.get("description", ""))[:80])
+        return msg_id
+    _BOOK[cid] = (copy.deepcopy(h), mid, copy.deepcopy(users))
+    pj = tg("pinChatMessage", chat_id=cid, message_id=mid, disable_notification=True)
+    if not pj.get("ok"):
+        send_to(cid, "⚠️ 置頂失敗\n" + str(pj.get("description", ""))[:80])
+    if msg_id and msg_id != mid:
+        delete_msgs(cid, [msg_id])
     return mid
 
 
@@ -230,7 +239,7 @@ def ensure_pinned(cid, me, users=None):
         return
     pm = (j.get("result") or {}).get("pinned_message") or {}
     if pm.get("message_id") != me[1] or not (pm.get("text") or "").startswith(HOLD_TAG):
-        me[1] = save_holdings(cid, me[0], None, users)
+        me[1] = save_holdings(cid, me[0], me[1], users, rotate=True)      # 重送一則並置頂，舊的刪掉
 
 
 def allowed_users():
@@ -335,12 +344,12 @@ def levels_for(code, suffix, price):
                         break
                     return {"stop": stop, "target": r["target"], "key": st.tick(r["key"]),
                             "why": "依盤整型態",
-                            "note": f"　依{cfg.STRATEGY_NAMES[r['name']]}的盤整型態計算\n　要改請按「改價位」"}
+                            "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、目標、前高\n依攻擊日規則自動算出\n要改請按「改價位」"}
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
     return {"stop": st.tick(price * (1 - cfg.ATTACK_MAX_LOSS), "ceil"), "target": None, "key": None,
             "why": f"買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%",
-            "note": "　這檔目前不符合盤整條件\n　要改請按「改價位」"}
+            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n出場價先用買價下 10%\n目標、前高留空\n要改請按「改價位」"}
 
 
 # ================= 指令 =================
@@ -412,13 +421,13 @@ def handle(text, h):
             x = h[code]
             x["avg"] = round((x["avg"] * x["shares"] + price * qty) / (x["shares"] + qty), 2)
             x["shares"] += qty
-            msg = f"✅ 已加碼 {code} {x['name']}\n　加 {fmt_qty(qty)} @{_fmt(price)}\n　共 {fmt_qty(x['shares'])}\n　均價 {_fmt(x['avg'])}"
+            msg = f"✅ 已加碼 {code} {x['name']}\n加 {fmt_qty(qty)} @{_fmt(price)}\n共 {fmt_qty(x['shares'])}\n均價 {_fmt(x['avg'])}"
             if x["key"] and price >= x["key"] and not x["added"]:
                 x["added"] = True
                 new_stop = st.tick(x["key"] * (1 - cfg.ATTACK_STOP2_PCT))
                 if x["stop"] is None or new_stop > x["stop"]:
                     x["stop"] = new_stop
-                msg += f"\n\n⠀\n突破前高後加碼\n　出場價移到前高下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%\n　出場 {_fmt(x['stop'])}"
+                msg += f"\n\n突破前高後加碼\n出場價移到前高下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%\n出場 {_fmt(x['stop'])}"
             x.update(opt)
         else:
             name, sfx = stock_name_suffix(code)
@@ -428,11 +437,17 @@ def handle(text, h):
             h[code] = x
             why = "自己設定" if "stop" in opt else lv["why"]
             x.update(opt)
-            price_l = (f"　目標 {_fmt(x['target'])}\n　前高 {_fmt(x['key'])}" if x["target"] is not None or x["key"] is not None
-                       else "　目標、前高：尚未設定")
-            msg = (f"✅ 已買進 {code} {name}\n　{fmt_qty(qty)} @{_fmt(price)}\n\n⠀\n"
-                   f"價位\n　出場 {_fmt(x['stop'])}（{why}）\n{price_l}\n\n⠀\n策略\n{lv['note']}")
+            price_l = (f"目標 {_fmt(x['target'])}　前高 {_fmt(x['key'])}" if x["target"] is not None or x["key"] is not None
+                       else "目標、前高　尚未設定")
+            msg = (f"✅ 已買進 {code} {name}\n{fmt_qty(qty)} @{_fmt(price)}\n\n"
+                   f"價位\n出場 {_fmt(x['stop'])}（{why}）\n{price_l}\n\n策略判斷\n{lv['note']}")
         return msg, True
+    if cmd == "賣" and len(w) == 2 and w[1] == "全部持股":          # 一次把所有持股都賣掉
+        if not h:
+            return "目前沒有持股", False
+        names = "\n".join(f"{c} {x['name']}" for c, x in sorted(h.items()))
+        h.clear()
+        return f"✅ 已全部賣出\n{names}\n\n持股已清空", True
     if cmd == "賣" and len(w) >= 2:
         code = w[1]
         if code not in h:
@@ -446,8 +461,8 @@ def handle(text, h):
         h[code]["shares"] -= n
         if h[code]["shares"] <= 0:
             del h[code]
-            return f"✅ 已全部賣出 {code} {name}\n　已從持股移除", True
-        return f"✅ 已賣出 {code} {name}\n　賣 {fmt_qty(n)}\n　剩 {fmt_qty(h[code]['shares'])}", True
+            return f"✅ 已全部賣出 {code} {name}\n已從持股移除", True
+        return f"✅ 已賣出 {code} {name}\n賣 {fmt_qty(n)}\n剩 {fmt_qty(h[code]['shares'])}", True
     if cmd == "設" and len(w) >= 4:
         code = w[1]
         if code not in h:
@@ -457,7 +472,7 @@ def handle(text, h):
             return "格式：設 2330 出場 920\n也可以改：目標、前高", False
         h[code].update(opt)
         x = h[code]
-        return f"✅ 已更新 {code} {x['name']}\n　出場 {_fmt(x['stop'])}\n　目標 {_fmt(x['target'])}\n　前高 {_fmt(x['key'])}", True
+        return f"✅ 已更新 {code} {x['name']}\n出場 {_fmt(x['stop'])}\n目標 {_fmt(x['target'])}\n前高 {_fmt(x['key'])}", True
     return "看不懂這個指令\n請按下方的按鈕操作", False
 
 
@@ -551,8 +566,8 @@ def guided(cid, text, h):
             send_kb(cid, "目前沒有持股")
             return None
         SESSIONS[cid] = {"flow": "sell", "step": "code"}
-        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
-        send_kb(cid, "要賣哪一檔？", _kb(rows))
+        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["全部持股一次賣出"], ["取消"]]
+        send_kb(cid, "要賣哪一檔？\n或一次全部賣掉", _kb(rows))
         return None
     if t == "改價位":
         if not h:
@@ -563,6 +578,17 @@ def guided(cid, text, h):
         send_kb(cid, "要改哪一檔？", _kb(rows))
         return None
     s_ = SESSIONS[cid]
+    if s_["flow"] == "sell" and s_["step"] == "code" and t == "全部持股一次賣出":
+        s_["step"] = "confirm_all"
+        names = "\n".join(f"{c} {x['name']} {fmt_qty(x['shares'])}" for c, x in sorted(h.items()))
+        send_kb(cid, f"確定要把全部 {len(h)} 檔都賣掉嗎？\n{names}", _kb([["確定全部賣出"], ["取消"]]))
+        return None
+    if s_["flow"] == "sell" and s_["step"] == "confirm_all":
+        if t == "確定全部賣出":
+            SESSIONS.pop(cid, None)
+            return "賣 全部持股"
+        send_kb(cid, "請按「確定全部賣出」\n或打「取消」", _kb([["確定全部賣出"], ["取消"]]))
+        return None
     if s_["flow"] == "edit":
         if s_["step"] == "code":
             cm = re.search(r"\d{4,6}", t)
@@ -613,15 +639,15 @@ def guided(cid, text, h):
                 return None
             s_["step"] = "qty"
             x = h[s_["code"]]
-            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部」或輸入數字\n例：1",
-                    _kb([["全部"], ["取消"]]))
+            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入數字，例：1",
+                    _kb([["全部賣出"], ["取消"]]))
             return None
         name, _ = stock_name_suffix(s_["code"])
         s_["step"] = "qty"
         send_kb(cid, f"{s_['code']} {name}\n買了多少？請輸入數字，例：2", _kb([["取消"]]))
         return None
     if s_["step"] == "qty" or s_["step"] == "unit":
-        if s_["flow"] == "sell" and t == "全部":
+        if s_["flow"] == "sell" and t in ("全部", "全部賣出"):
             SESSIONS.pop(cid, None)
             return f"賣 {s_['code']}"
         if s_["step"] == "unit":                       # 剛才輸入了數字，現在按「張」或「股」
@@ -664,7 +690,11 @@ def _handle_message(m, state, asked):
     """處理一則訊息（GitHub 輪詢和 bot_server.py 的即時模式共用）"""
     def get(cid):
         if cid not in state:
-            state[cid] = list(load_holdings(cid))
+            loaded = list(load_holdings(cid))
+            if loaded[1] is None and cid in _BOOK:           # 置頂被取消了：用記憶中的持股，之後會重新置頂
+                h0, mid0, u0 = _BOOK[cid]
+                loaded = [copy.deepcopy(h0), mid0, copy.deepcopy(u0)]
+            state[cid] = loaded
         return state[cid]
 
     chat = m.get("chat") or {}
@@ -752,7 +782,7 @@ def _handle_message(m, state, asked):
     _LASTQ.pop("q", None)
     reply, changed = handle(text, me[0])
     if changed:
-        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
+        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, rotate=True)
     elif text == "持股" and me[0] and "q" in _LASTQ:                 # 按「持股」順便把置頂看板的現價更新
         me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, _LASTQ["q"])
     if reply == HELP:
