@@ -239,7 +239,7 @@ def run():
         f"{now:%m/%d}（{WEEKDAY[now.weekday()]}）{now:%H:%M}",
     ]
     if now.weekday() >= 5:
-        top.append("📌 週末｜以下為最後交易日資料，非即時行情")
+        top.append("📌 週末｜以下為最後交易日資料\n　　非即時行情")
     top.append("🟢 利多　🔴 利空")
 
     icon, text, drows, score, max_score, veto = judge(pcts, levels)
