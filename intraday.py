@@ -371,9 +371,23 @@ def admin(text, users):
 SESSIONS = {}          # 按鈕一步一步輸入時，記住每個人目前問到哪一步
 
 
+TRACK = {}             # 按鈕流程進行中，記住這一次操作的訊息編號（按「取消」時整串刪掉）
+LAST_HELP = {}         # 上一次的「說明」訊息編號（再按說明時，把舊的刪掉）
+
+
+def delete_msgs(cid, ids):
+    for mid in ids:
+        if mid:
+            tg("deleteMessage", chat_id=cid, message_id=mid)
+
+
 def send_kb(cid, text, kb=None):
-    """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）"""
-    tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or KEYBOARD)
+    """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。回傳訊息編號"""
+    j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or KEYBOARD)
+    mid = (j.get("result") or {}).get("message_id")
+    if mid and cid in SESSIONS:
+        TRACK.setdefault(cid, []).append(mid)
+    return mid
 
 
 def _kb(rows):
@@ -386,6 +400,7 @@ def guided(cid, text, h):
     t = text.strip()
     if t == "取消":
         SESSIONS.pop(cid, None)
+        delete_msgs(cid, TRACK.pop(cid, []))          # 這一次操作的問答全部清掉
         send_kb(cid, "已取消")
         return None
     if t == "買進":
@@ -534,6 +549,10 @@ def handle_message(m, state, asked):
             return
     me = get(cid)
     if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+        if text in ("買進", "賣出", "改價位"):
+            TRACK[cid] = []                            # 開始新的一次操作
+        if cid in SESSIONS or text in ("買進", "賣出", "改價位"):
+            TRACK.setdefault(cid, []).append(m.get("message_id"))
         line = guided(cid, text, me[0])
         if line is None:
             return
@@ -542,7 +561,9 @@ def handle_message(m, state, asked):
     if changed:
         me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
     if reply == HELP:
-        send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
+        delete_msgs(cid, LAST_HELP.pop(cid, []))      # 舊的說明刪掉，聊天室只留最新一則
+        mid = send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
+        LAST_HELP[cid] = [m.get("message_id"), mid]
     elif reply:
         send_kb(cid, reply)
 
@@ -621,7 +642,7 @@ def quotes_for(h):
 
 def holdings_report(h, q):
     if not h:
-        return "目前沒有持股。\n" + HELP
+        return "目前沒有持股。"
     lines = ["📋 *目前持股*"]
     for code, x in sorted(h.items()):
         p = (q.get(code) or {}).get("last")
