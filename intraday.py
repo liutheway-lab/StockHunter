@@ -227,6 +227,15 @@ def save_holdings(cid, h, msg_id, users=None):
     return mid
 
 
+def ensure_pinned(cid, mid):
+    """確認持股清單真的是置頂的。被取消置頂、或被別的訊息蓋掉，盤中監控就讀不到持股，提醒會悄悄停擺"""
+    if not mid:
+        return
+    pm = (tg("getChat", chat_id=cid).get("result") or {}).get("pinned_message") or {}
+    if pm.get("message_id") != mid:
+        tg("pinChatMessage", chat_id=cid, message_id=mid, disable_notification=True)
+
+
 def allowed_users():
     """可以使用持股追蹤的人：{chat id: 名字}。管理者（TG_OWNER_ID）＋管理者允許的朋友"""
     if not OWNER:
@@ -774,6 +783,9 @@ def handle_message(m, state, asked):
             send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
         elif reply:
             send_kb(cid, reply)
+        if me[0] and text.strip().lstrip("/").split("@")[0] in ("持股", "holdings"):   # 看持股時順便把置頂清單補回來
+            me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
+            ensure_pinned(cid, me[1])
     except Exception:                                    # 出錯就回到主選單，不要讓流程卡在半途
         traceback.print_exc()
         SESSIONS.pop(cid, None)
@@ -855,20 +867,38 @@ def quotes_for(h):
     return get_quotes([(c, x.get("suffix") or stock_name_suffix(c)[1]) for c, x in h.items()])
 
 
+THIN = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
+
+
 def holdings_report(h, q):
+    """持股報告：一檔一格，每行都短（手機上不會被切斷），賺賠用 🟢／🔴"""
     if not h:
         return "目前沒有持股。\n" + HELP
-    lines = ["📋 *目前持股*"]
-    for code, x in sorted(h.items()):
+    lines = ["📋 *目前持股*", RULE]
+    total, counted = 0.0, 0
+    for i, (code, x) in enumerate(sorted(h.items())):
+        if i:
+            lines.append(THIN)
+        lines.append(f"{code} {x['name']}｜{fmt_qty(x['shares'])}")
         p = (q.get(code) or {}).get("last")
         if p:
-            pnl = (p / x["avg"] - 1) * 100
-            dist = f"，距出場 {(x['stop'] / p - 1) * 100:+.1f}%" if x["stop"] else ""
             money = (p - x["avg"]) * x["shares"]
-            lines.append(f"{code} {x['name']} {fmt_qty(x['shares'])}　現價 {p:g}（{pnl:+.1f}%，{money:+,.0f} 元）{dist}")
+            total += money
+            counted += 1
+            lines.append(f"　現價 {p:g}｜均價 {_fmt(x['avg'])}")
+            lines.append(f"　{'🟢' if money >= 0 else '🔴'} {money:+,.0f} 元（{(p / x['avg'] - 1) * 100:+.1f}%）")
         else:
-            lines.append(f"{code} {x['name']} {fmt_qty(x['shares'])}　均價 {_fmt(x['avg'])}")
-        lines.append(f"　均價 {_fmt(x['avg'])}｜出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}")
+            lines.append(f"　均價 {_fmt(x['avg'])}（查不到現價）")
+        lines.append(f"　出場 {_fmt(x['stop'])}{stop_tag(x)}")
+        if p and x["stop"]:
+            down = (1 - x["stop"] / p) * 100
+            lines.append(f"　距出場 還有 {down:.1f}%" if down > 0 else f"　⚠️ 已低於出場價 {abs(down):.1f}%")
+        lines.append(f"　目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}")
+        if x.get("trail"):
+            lines.append(f"　移動停利 高點回測 {x['trail']:g}%")
+    lines.append(RULE)
+    if counted > 1:
+        lines.append(f"合計 {'🟢' if total >= 0 else '🔴'} {total:+,.0f} 元")
     return "\n".join(lines)
 
 
