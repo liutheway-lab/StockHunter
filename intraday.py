@@ -21,6 +21,7 @@
   python intraday.py --commands  只處理一次 Telegram 指令就結束（給 commands.yml 用，盤後也能回覆）
 """
 import copy
+import html
 import json
 import os
 import random
@@ -186,7 +187,7 @@ def fix_names(h):
 def board_text(h, q=None, users=None, title=HOLD_TAG):
     """持股看板（置頂那則也是它）：一檔一張卡，紅漲綠跌；也是機器人讀取持股的資料來源"""
     q = q or {}
-    lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}", "━" * 14]
+    lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
     if not h:
         lines += ["", "（目前沒有持股）"]
     for code, x in sorted(h.items()):
@@ -209,6 +210,16 @@ def board_text(h, q=None, users=None, title=HOLD_TAG):
     if users:
         lines += ["", USERS_TAG + "，".join(f"{uid} {name}" for uid, name in users.items())]
     return "\n".join(lines)
+
+
+def board_html(text):
+    """送出用的格式：使用者名單那行做成「點一下才顯示」（spoiler），平常是一片灰點，不佔版面。
+    Telegram 回傳給機器人的仍是純文字，所以讀取不受影響"""
+    out = []
+    for ln in text.split("\n"):
+        ln = html.escape(ln, quote=False)
+        out.append(f"<tg-spoiler>{ln}</tg-spoiler>" if ln.startswith(USERS_TAG) else ln)
+    return "\n".join(out)
 
 
 def quotes_quick(h, wait=10):
@@ -235,10 +246,10 @@ def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
     apply_quote_info(h, q)
     text = board_text(h, q, users)
     if msg_id and not rotate:
-        j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=text)
+        j = tg("editMessageText", chat_id=cid, message_id=msg_id, text=board_html(text), parse_mode="HTML")
         if j.get("ok") or "not modified" in str(j):
             return msg_id
-    j = tg("sendMessage", chat_id=cid, text=text)
+    j = tg("sendMessage", chat_id=cid, text=board_html(text), parse_mode="HTML")
     mid = (j.get("result") or {}).get("message_id")
     if not mid:
         send_to(cid, "⚠️ 持股看板傳送失敗\n" + str(j.get("description", ""))[:80])
