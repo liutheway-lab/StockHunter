@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -83,15 +84,35 @@ def stop_tag(x):
     return "（保護獲利）" if x["stop"] > x["avg"] else "（停損）"
 
 
+_QCACHE = {}   # {代號: (查價時間, 現價)}
+_LVCACHE = {}  # {(代號, 買價): (時間, 價位)}
+
+
 def ref_price(code, fallback=None):
-    """目前市價（查不到就用 fallback）。用來檢查出場價一設好會不會立刻觸發"""
+    """目前市價，給按鈕畫面用：最多等 4 秒、不走 Yahoo 備援、30 秒內重複查直接用快取；
+    查不到就用 fallback，寧可少一顆按鈕也不要讓畫面卡住"""
+    c = _QCACHE.get(code)
+    if c and time.time() - c[0] < 30:
+        return c[1]
     try:
-        v = get_quotes([(code, stock_name_suffix(code)[1])]).get(code)
+        v = get_quotes([(code, stock_name_suffix(code)[1])], timeout=4, yahoo=False).get(code)
         if v:
+            _QCACHE[code] = (time.time(), v["last"])
             return v["last"]
     except Exception as e:
         print(f"{code} 查現價失敗：{e!r}")
     return fallback
+
+
+def levels_cached(code, sfx, price):
+    """levels_for 要下載一年的股價，比較慢；同一檔、同一個買價 10 分鐘內只算一次"""
+    k = (code, round(price, 2))
+    c = _LVCACHE.get(k)
+    if c and time.time() - c[0] < 600:
+        return c[1]
+    lv = levels_for(code, sfx, price)
+    _LVCACHE[k] = (time.time(), lv)
+    return lv
 
 
 def fmt_qty(shares):
@@ -337,7 +358,7 @@ def handle(text, h):
             x.update(opt)
         else:
             name, sfx = stock_name_suffix(code)
-            lv = levels_for(code, sfx, price)
+            lv = levels_cached(code, sfx, price)
             x = {"name": name, "shares": qty, "avg": price, "stop": lv["stop"], "target": lv["target"],
                  "key": lv["key"], "added": False, "trail": None, "suffix": sfx}
             x.update(opt)
@@ -447,7 +468,7 @@ def _tidy(cid, mark):
     c = _track(cid)
     if cid in SESSIONS:
         return
-    wipe(cid, c["steps"][:mark])
+    wipe(cid, c["last"] + c["steps"][:mark])         # 上一輪的結果＋這一輪過程中的提示、你打的字，一次刪光
     c["last"], c["steps"] = c["steps"][mark:], []
 
 
@@ -463,7 +484,7 @@ def _kb(rows):
     return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True, "one_time_keyboard": True}
 
 
-BTN = ("系統建議", "保本", "買價下", "現價下", "現價")        # 按鈕開頭的字，後面接價位
+BTN = ("系統建議", "保本", "買價下", "現價下", "現價", "均價下", "均價上", "前高")        # 按鈕開頭的字，後面接價位
 TRAIL_ROWS = [["不用"], ["5%", "8%", "10%"], ["取消"]]
 
 
@@ -551,19 +572,17 @@ def guided(cid, text, h):
                 send_kb(cid, "高點回測幾 % 就出場？\n股價創新高時，出場價會跟著往上拉（只升不降）。\n"
                              "按下面的選項，或自己輸入數字，例：8", _kb([["關閉"], ["5%", "8%", "10%"], ["取消"]]))
                 return None
-            ref = ref_price(code, x["avg"])
-            lv = levels_for(code, stock_name_suffix(code)[1], ref)
+            ref = ref_price(code)                         # 查不到（或太慢）就用均價當基準，不讓畫面卡住
+            base, lab = (ref, "現價") if ref else (x["avg"], "均價")
             if t == "出場價":
-                rows = [[f"系統建議 {lv['stop']:g}"]]
-                if x["avg"] < ref:
-                    rows.append([f"保本 {x['avg']:g}"])
-                rows += [[f"現價下5% {st.tick(ref * 0.95, 'ceil'):g}", f"現價下10% {st.tick(ref * 0.90, 'ceil'):g}"], ["取消"]]
-                send_kb(cid, f"新的出場價是多少？（現價 {ref:g}）\n按下面的選項，或自己輸入價位（例：{lv['stop']:g}）\n"
-                             "或百分比（例：-5% ＝ 現價下 5%）", _kb(rows))
+                rows = [[f"保本 {x['avg']:g}"]] if ref and x["avg"] < ref else []
+                rows += [[f"{lab}下5% {st.tick(base * 0.95, 'ceil'):g}", f"{lab}下10% {st.tick(base * 0.90, 'ceil'):g}"], ["取消"]]
+                send_kb(cid, "新的出場價是多少？" + (f"（現價 {ref:g}）" if ref else "") + "\n按下面的選項，或自己輸入價位\n"
+                             f"或百分比（例：-5% ＝ {lab}下 5%）", _kb(rows))
             else:
-                tg_ = lv.get("target")
-                send_kb(cid, "新的目標價是多少？\n" + ("按「系統建議」，或自己輸入價位，例：123" if tg_ else "輸入價位，例：123"),
-                        _kb(([[f"系統建議 {tg_:g}"]] if tg_ else []) + [["取消"]]))
+                rows = [[f"前高 {x['key']:g}"]] if x.get("key") else []
+                rows += [[f"均價上10% {st.tick(x['avg'] * 1.10):g}", f"均價上20% {st.tick(x['avg'] * 1.20):g}"], ["取消"]]
+                send_kb(cid, "新的目標價是多少？\n按下面的選項，或自己輸入價位，例：123", _kb(rows))
             return None
         price = _pick(t)                                  # 按鈕
         if price is None and s_["field"] == "回測" and t == "關閉":
@@ -640,7 +659,7 @@ def guided(cid, text, h):
             SESSIONS.pop(cid, None)
             return f"買 {s_['code']} {s_['qty']}股 {price:g}"
         name, sfx = stock_name_suffix(s_["code"])
-        sug = levels_for(s_["code"], sfx, price)["stop"]
+        sug = levels_cached(s_["code"], sfx, price)["stop"]
         s_["price"], s_["sug"], s_["step"] = price, sug, "stop"
         send_kb(cid, f"{s_['code']} {name} @{price:g}\n出場價要設多少？\n"
                      f"按下面的選項，或自己輸入價位（例：{sug:g}）\n或百分比（例：-8% ＝ 買價下 8%）",
@@ -738,25 +757,27 @@ def handle_message(m, state, asked):
             return
     me = get(cid)
     c = _track(cid)
-    if cid not in SESSIONS:                              # 新的一輪開始：清掉上一輪留下的訊息（置頂持股清單和提醒不在裡面，不會被刪）
-        wipe(cid, c["last"] + c["steps"])
-        c["last"], c["steps"] = [], []
     if m.get("message_id"):
         c["steps"].append(m["message_id"])               # 你打的字也記下來，這一輪結束時一起刪
     mark = len(c["steps"])
-    if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
-        line = guided(cid, text, me[0])
-        if line is None:
-            _tidy(cid, mark)
-            return
-        text = line
-    reply, changed = handle(text, me[0])
-    if changed:
-        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
-    if reply == HELP:
-        send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
-    elif reply:
-        send_kb(cid, reply)
+    try:
+        if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+            line = guided(cid, text, me[0])
+            if line is None:
+                _tidy(cid, mark)
+                return
+            text = line
+        reply, changed = handle(text, me[0])
+        if changed:
+            me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
+        if reply == HELP:
+            send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
+        elif reply:
+            send_kb(cid, reply)
+    except Exception:                                    # 出錯就回到主選單，不要讓流程卡在半途
+        traceback.print_exc()
+        SESSIONS.pop(cid, None)
+        send_kb(cid, "剛剛出了點問題，已回到主選單，請再試一次。")
     _tidy(cid, mark)
 
 
@@ -791,7 +812,7 @@ def process_commands():
 
 
 # ================= 即時報價 =================
-def get_quotes(items):
+def get_quotes(items, timeout=15, yahoo=True):
     """items：[(code, suffix)]。回傳 {code: {"last", "high", "prev", "date"}}。證交所即時報價，失敗改用 Yahoo"""
     out = {}
     if not items:
@@ -801,7 +822,7 @@ def get_quotes(items):
         r = requests.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
                          params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
                          headers={"User-Agent": "Mozilla/5.0", "Referer": "https://mis.twse.com.tw/stock/index.jsp"},
-                         timeout=15)
+                         timeout=timeout)
         for q in r.json().get("msgArray", []):
             def f(k):
                 try:
@@ -815,7 +836,7 @@ def get_quotes(items):
     except Exception as e:
         print("證交所即時報價失敗：", repr(e))
     missing = [(c, s) for c, s in items if c not in out]
-    if missing:
+    if missing and yahoo:
         try:
             import yfinance as yf
             for code, sfx in missing:
