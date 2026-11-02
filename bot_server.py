@@ -34,14 +34,18 @@ def on_update(u):
             print("處理訊息失敗：", repr(e), flush=True)
 
 
-# ---------- 夜間掃描備援 ----------
-# GitHub 的排程偶爾會延遲或被跳過。這裡每分鐘看一次：台灣時間週一到週五 22:15 以後，
-# 如果今天晚上還沒有 night 的執行紀錄（或只有失敗的），就請 GitHub 馬上跑一次。
+# ---------- 排程備援（夜間掃描、早報）----------
+# GitHub 的排程偶爾會延遲或被跳過。這裡每分鐘看一次：到了檢查時間（台灣時間、週一到週五），
+# 如果這個工作還沒有今天的執行紀錄（或只有失敗的），就請 GitHub 馬上跑一次。
 GH_TOKEN = os.getenv("GH_TOKEN", "").strip()
 GH_REPO = os.getenv("GH_REPO", "liutheway-lab/StockHunter")
 GH_BRANCH = os.getenv("GH_BRANCH", "main")
-BACKUP_AT = (22, 15)
 TPE = dt.timezone(dt.timedelta(hours=8))
+# name：顯示用；file：workflow 檔名；at：開始檢查；until：超過就不補；since：這個時間之後建立的紀錄才算「這一次」
+JOBS = [
+    {"name": "night", "file": "night.yml", "at": (22, 15), "until": (23, 50), "since": (21, 0)},
+    {"name": "morning", "file": "morning.yml", "at": (8, 35), "until": (9, 30), "since": (7, 30)},
+]
 
 
 def _gh(method, path, **kw):
@@ -51,9 +55,10 @@ def _gh(method, path, **kw):
                                      "X-GitHub-Api-Version": "2022-11-28"}, **kw)
 
 
-def night_backup_step(now, state):
-    """做一次檢查。state 記錄今天做到哪：{'day':日期, 'done':bool, 'tries':次數}。回傳說明文字（沒動作回 None）"""
-    if now.weekday() >= 5 or (now.hour, now.minute) < BACKUP_AT or now.hour >= 23 and now.minute >= 50:
+def backup_step(now, state, job):
+    """做一次檢查。state 記錄今天做到哪：{'day','done','tries','wait'}。回傳說明文字（沒動作回 None）"""
+    hm = (now.hour, now.minute)
+    if now.weekday() >= 5 or hm < job["at"] or hm >= job["until"]:
         return None
     day = now.date().isoformat()
     if state.get("day") != day:
@@ -63,40 +68,39 @@ def night_backup_step(now, state):
         return None
     if state.get("wait") and now < state["wait"]:            # 剛請 GitHub 補跑，等幾分鐘再看，避免重複補跑
         return None
-    r = _gh("GET", "/actions/workflows/night.yml/runs?per_page=10")
+    r = _gh("GET", f"/actions/workflows/{job['file']}/runs?per_page=10")
     if r.status_code != 200:
-        return f"查 night 執行紀錄失敗 {r.status_code}"
-    runs = r.json().get("workflow_runs", [])
-    start = now.replace(hour=21, minute=0, second=0, microsecond=0)         # 今晚 21:00 之後建立的才算
-    tonight = []
-    for w in runs:
+        return f"查 {job['name']} 執行紀錄失敗 {r.status_code}"
+    start = now.replace(hour=job["since"][0], minute=job["since"][1], second=0, microsecond=0)
+    mine = []
+    for w in r.json().get("workflow_runs", []):
         t = dt.datetime.fromisoformat(w["created_at"].replace("Z", "+00:00")).astimezone(TPE)
         if t >= start:
-            tonight.append(w)
-    ok = [w for w in tonight if w["status"] != "completed" or w["conclusion"] == "success"]
-    if ok:
+            mine.append(w)
+    if [w for w in mine if w["status"] != "completed" or w["conclusion"] == "success"]:
         state["done"] = True
-        return "今晚 night 已經有跑（或正在跑），不用補"
-    if tonight and state["tries"] >= 1:           # 失敗過、已經補跑過一次，就不再重複
+        return f"{job['name']} 這一次已經有跑（或正在跑），不用補"
+    if mine and state["tries"] >= 1:              # 失敗過、已經補跑過一次，就不再重複
         state["done"] = True
-        return "今晚 night 補跑後仍失敗，不再重試"
+        return f"{job['name']} 補跑後仍失敗，不再重試"
     state["tries"] += 1
     state["wait"] = now + dt.timedelta(minutes=5)
-    r = _gh("POST", "/actions/workflows/night.yml/dispatches", json={"ref": GH_BRANCH})
+    r = _gh("POST", f"/actions/workflows/{job['file']}/dispatches", json={"ref": GH_BRANCH})
     if r.status_code == 204:
-        return "今晚 night 沒有成功的紀錄，已請 GitHub 補跑一次"
-    return f"請 GitHub 補跑失敗 {r.status_code} {r.text[:120]}"
+        return f"{job['name']} 沒有成功的紀錄，已請 GitHub 補跑一次"
+    return f"請 GitHub 補跑 {job['name']} 失敗 {r.status_code} {r.text[:120]}"
 
 
-def night_backup_loop():
-    state = {}
+def backup_loop():
+    states = {j["name"]: {} for j in JOBS}
     while True:
-        try:
-            msg = night_backup_step(dt.datetime.now(TPE), state)
-            if msg:
-                print("夜間備援：", msg, flush=True)
-        except Exception as e:
-            print("夜間備援錯誤：", repr(e), flush=True)
+        for j in JOBS:
+            try:
+                msg = backup_step(dt.datetime.now(TPE), states[j["name"]], j)
+                if msg:
+                    print("排程備援：", msg, flush=True)
+            except Exception as e:
+                print("排程備援錯誤：", repr(e), flush=True)
         time.sleep(60)
 
 
@@ -143,10 +147,10 @@ def main():
     I.DIR_BACKGROUND = True            # 處理訊息時不現抓股票清單，避免證交所慢的時候卡住所有人
     I.start_dir_loader()               # 開機就在背景載入，失敗每分鐘重試
     if GH_TOKEN:
-        threading.Thread(target=night_backup_loop, daemon=True).start()
-        print("夜間掃描備援：已啟動", flush=True)
+        threading.Thread(target=backup_loop, daemon=True).start()
+        print("夜間掃描備援：已啟動（含早報）", flush=True)
     else:
-        print("沒有 GH_TOKEN，夜間掃描備援沒有啟動", flush=True)
+        print("沒有 GH_TOKEN，夜間掃描備援沒有啟動（含早報）", flush=True)
     port = int(os.getenv("PORT", "10000"))
     print(f"機器人已啟動，port {port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
