@@ -424,6 +424,7 @@ ADMIN_HELP = ("\n\n👑 管理者\n"
               "「使用者」→ 看名單，也能在那裡移除")
 
 PENDING = {}           # {chat id: 名字}：正在等管理者按「允許／不允許」的申請
+PENDING_MSG = {}       # {chat id: 申請通知的訊息編號}：處理完就刪掉
 
 
 def keyboard_for(cid):
@@ -445,10 +446,14 @@ def admin(text, users):
     if w[0] == "允許" and len(w) >= 2 and w[1].isdigit():
         users[w[1]] = " ".join(w[2:]) or PENDING.get(w[1]) or "朋友"
         PENDING.pop(w[1], None)
+        if PENDING_MSG.get(w[1]):
+            wipe(OWNER, [PENDING_MSG.pop(w[1])])
         send_kb(w[1], "✅ 管理者已開通你的持股追蹤，請按下方按鈕開始\n\n" + HELP)
         return f"✅ 已允許 {w[1]} {users[w[1]]}", True
     if w[0] == "不允許" and len(w) >= 2 and w[1].isdigit():
         PENDING.pop(w[1], None)
+        if PENDING_MSG.get(w[1]):
+            wipe(OWNER, [PENDING_MSG.pop(w[1])])
         send_kb(w[1], "管理者暫時沒有開通你的持股追蹤。\n追價提醒、夜間選股結果還是會發在群組裡，不用開通就能看。")
         return f"已不允許 {w[1]}", False
     if w[0] == "移除" and len(w) >= 2:
@@ -511,13 +516,33 @@ def wipe(cid, ids):
         tg("deleteMessage", chat_id=cid, message_id=mid)
 
 
-def _tidy(cid, mark):
-    """這一輪結束（不在按鈕流程中）→ 把過程中的提示、你打的字全刪掉，只留最後一則回覆；下一輪開始時再刪掉它"""
+TRANSIENT_SEC = 6                                      # 「✅ 買進…」「已取消」這類結果訊息，顯示幾秒就自動消失
+KEEP_CMDS = ("持股", "說明", "使用者", "holdings", "help", "start", "指令")     # 這幾個是你要看的內容，留到下一次操作才刪
+
+
+def _schedule_wipe(cid, ids):
+    if not ids:
+        return
+    t = threading.Timer(TRANSIENT_SEC, wipe, args=(cid, list(ids)))
+    t.daemon = True
+    t.start()
+
+
+def _tidy(cid, mark, keep=False):
+    """這一輪結束（不在按鈕流程中）→ 過程中的提示、你打的字全刪掉。
+    最後一則回覆：結果類（✅、已取消）幾秒後自動消失，畫面只剩置頂的持股清單；
+    keep=True（持股、說明、使用者）則留著，等下一次操作才刪"""
     c = _track(cid)
     if cid in SESSIONS:
         return
-    wipe(cid, c["last"] + c["steps"][:mark])         # 上一輪的結果＋這一輪過程中的提示、你打的字，一次刪光
-    c["last"], c["steps"] = c["steps"][mark:], []
+    wipe(cid, c["last"] + c["steps"][:mark])         # 上一輪留下的＋這一輪過程中的提示、你打的字，一次刪光
+    final = c["steps"][mark:]
+    if keep:
+        c["last"] = final
+    else:
+        c["last"] = []
+        _schedule_wipe(cid, final)
+    c["steps"] = []
 
 
 def send_kb(cid, text, kb=None):
@@ -848,8 +873,10 @@ def _handle_message(m, state, asked):
         if cid not in asked:
             asked.add(cid)
             PENDING[cid] = frm.get("first_name") or frm.get("username") or "朋友"
-            tg("sendMessage", chat_id=OWNER, text=f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n請按下方「允許」或「不允許」",
-               reply_markup=keyboard_for(OWNER))
+            j = tg("sendMessage", chat_id=OWNER, text=f"👤 {name or '有人'} 想使用持股追蹤（ID {cid}）\n請按下方「允許」或「不允許」",
+                   reply_markup=keyboard_for(OWNER))
+            if (j.get("result") or {}).get("message_id"):
+                PENDING_MSG[cid] = j["result"]["message_id"]
         return
     if cid == OWNER:
         reply, changed = admin(text, users)
@@ -861,7 +888,12 @@ def _handle_message(m, state, asked):
             kb = None
             if text.strip().lstrip("/") == "使用者" and users:   # 看名單時，每個人一顆「移除」按鈕
                 kb = _kb([[f"移除 {u} {n}"] for u, n in users.items()] + [["取消"]])
+            c_ = _track(OWNER)
+            n0 = len(c_["steps"])
             send_kb(OWNER, reply, kb)                    # 用 send_kb 傳，順便把鍵盤換回最新的
+            if text.strip().lstrip("/") != "使用者":      # 「允許／不允許／移除」的結果幾秒後消失；名單留著給你按移除
+                _schedule_wipe(OWNER, c_["steps"][n0:])
+                del c_["steps"][n0:]
             return
     me = get(cid)
     c = _track(cid)
@@ -895,7 +927,7 @@ def _handle_message(m, state, asked):
         SESSIONS.pop(cid, None)
         send_kb(cid, "剛剛出了點問題，已回到主選單，請再試一次。")
     if not (reply or "").startswith("看不懂"):             # 看不懂的時候保留你打的字，才知道是哪句沒被接受
-        _tidy(cid, mark)
+        _tidy(cid, mark, keep=reply == HELP or text.strip().lstrip("/").split("@")[0] in KEEP_CMDS)
 
 
 def setup_menu():
