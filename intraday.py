@@ -231,6 +231,8 @@ MENU = []                      # 不再用輸入框旁的「Menu」選單，改�
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設"}
 KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "改價位"}], [{"text": "說明"}]],
             "resize_keyboard": True, "is_persistent": True}
+KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"] + [[{"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
+                  "resize_keyboard": True, "is_persistent": True}
 FORMAT = {
     "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 目標 1100\n（也可以按下方「買進」按鈕，一步一步輸入）",
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
@@ -384,7 +386,7 @@ def delete_msgs(cid, ids):
 
 def send_kb(cid, text, kb=None):
     """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。回傳訊息編號"""
-    j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or KEYBOARD)
+    j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or (KEYBOARD_OWNER if cid == OWNER else KEYBOARD))
     mid = (j.get("result") or {}).get("message_id")
     if mid and cid in SESSIONS:
         TRACK.setdefault(cid, []).append(mid)
@@ -472,20 +474,34 @@ def guided(cid, text, h):
                 return None
             s_["step"] = "qty"
             x = h[s_["code"]]
-            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？按「全部」，或輸入「1張」「500股」",
+            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？按「全部」，或輸入數字，例：1",
                     _kb([["全部"], ["取消"]]))
             return None
         name, _ = stock_name_suffix(s_["code"])
         s_["step"] = "qty"
-        send_kb(cid, f"{s_['code']} {name}\n買了多少？輸入「2張」或「500股」", _kb([["取消"]]))
+        send_kb(cid, f"{s_['code']} {name}\n買了多少？請輸入數字，例：2", _kb([["取消"]]))
         return None
-    if s_["step"] == "qty":
+    if s_["step"] == "qty" or s_["step"] == "unit":
         if s_["flow"] == "sell" and t == "全部":
             SESSIONS.pop(cid, None)
             return f"賣 {s_['code']}"
-        q = parse_qty(t)
+        if s_["step"] == "unit":                       # 剛才輸入了數字，現在按「張」或「股」
+            if t in ("張", "股"):
+                q = parse_qty(f"{s_['num']}{t}")
+            else:
+                send_kb(cid, f"{s_['num']} 是幾張還是幾股？請按下面的按鈕", _kb([["張", "股"], ["取消"]]))
+                return None
+        else:
+            q = parse_qty(t)
+            if q is None and re.fullmatch(r"[\d,]+(?:\.\d+)?", t):    # 只打了數字 → 問單位
+                s_["num"], s_["step"] = t.replace(",", ""), "unit"
+                send_kb(cid, f"{t} 是幾張還是幾股？", _kb([["張", "股"], ["取消"]]))
+                return None
         if q is None:
-            send_kb(cid, "要寫單位喔：例如「2張」或「500股」", _kb([["取消"]]))
+            send_kb(cid, "請輸入數字，例如 2，再按「張」或「股」", _kb([["取消"]]))
+            return None
+        if q <= 0:
+            send_kb(cid, "數量要大於 0", _kb([["取消"]]))
             return None
         if s_["flow"] == "sell":
             SESSIONS.pop(cid, None)
@@ -542,6 +558,11 @@ def handle_message(m, state, asked):
                            f"同意的話回覆：允許 {cid} {frm.get('first_name') or ''}".rstrip())
         return
     if cid == OWNER:
+        if text == "管理者":                          # 管理者按鈕：說明 + 目前使用者名單
+            delete_msgs(cid, LAST_HELP.pop(cid, []))
+            who = admin("使用者", users)[0]
+            LAST_HELP[cid] = [m.get("message_id"), send_kb(cid, ADMIN_HELP.strip() + "\n\n" + who)]
+            return
         reply, changed = admin(text, users)
         if reply:
             if changed:
@@ -563,7 +584,7 @@ def handle_message(m, state, asked):
         me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None)
     if reply == HELP:
         delete_msgs(cid, LAST_HELP.pop(cid, []))      # 舊的說明刪掉，聊天室只留最新一則
-        mid = send_kb(cid, HELP + (ADMIN_HELP if cid == OWNER else ""))
+        mid = send_kb(cid, HELP)
         LAST_HELP[cid] = [m.get("message_id"), mid]
     elif reply and (m.get("text") or "").strip() == "持股":
         delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的持股畫面刪掉，只留最新一則
