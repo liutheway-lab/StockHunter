@@ -211,7 +211,7 @@ def levels_for(code, suffix, price):
 # 輸入框按「/」會跳出的選單（Telegram 規定指令只能用英文，中文直接打也可以）
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設"}
-KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "說明"}]],
+KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "改價位"}], [{"text": "說明"}]],
             "resize_keyboard": True, "is_persistent": True}
 FORMAT = {
     "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 目標 1100\n（也可以按下方「買進」按鈕，一步一步輸入）",
@@ -223,9 +223,9 @@ HELP = ("🤖 *持股追蹤*\n"
         "買進　→ 輸入代號、數量、成交價\n"
         "賣出　→ 選股票、數量\n"
         "持股　→ 看目前持股與即時損益\n"
+        "改價位　→ 選股票、改出場價或目標價\n"
         "\n"
         "數量可以打「2張」或「500股」。\n"
-        "改價位：設 2330 出場 920（也可改 目標、前高）\n"
         "出場、目標價碰到時，機器人會私訊提醒你。")
 
 
@@ -244,6 +244,9 @@ def _opts(words):
 
 def handle(text, h):
     """處理一則持股指令（每個人自己的持股），回傳 (回覆文字, 持股是否有變)"""
+    m_ = re.match(r"^設\s*(\d{4,6})\s*(出場|目標|前高)\s*價?格?\s*[:：]?\s*([\d.,]+)\s*$", text.strip())
+    if m_:                                           # 「設6620出場價格123」這種寫法也看得懂
+        text = f"設 {m_.group(1)} {m_.group(2)} {m_.group(3).replace(',', '')}"
     w = text.replace("/", " ").replace("，", " ").split()
     if not w:
         return None, False
@@ -334,7 +337,7 @@ def admin(text, users):
         return None, False
     if w[0] == "允許" and len(w) >= 2 and w[1].isdigit():
         users[w[1]] = " ".join(w[2:]) or "朋友"
-        send_to(w[1], "✅ 管理者已開通你的持股追蹤\n" + HELP.replace("*", ""))
+        send_kb(w[1], "✅ 管理者已開通你的持股追蹤，請按下方按鈕開始\n\n" + HELP)
         return f"✅ 已允許 {w[1]} {users[w[1]]}", True
     if w[0] == "移除" and len(w) >= 2:
         if users.pop(w[1], None) is None:
@@ -379,7 +382,40 @@ def guided(cid, text, h):
         rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
         send_kb(cid, "要賣哪一檔？", _kb(rows))
         return None
+    if t == "改價位":
+        if not h:
+            send_kb(cid, "目前沒有持股")
+            return None
+        SESSIONS[cid] = {"flow": "edit", "step": "code"}
+        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
+        send_kb(cid, "要改哪一檔？", _kb(rows))
+        return None
     s_ = SESSIONS[cid]
+    if s_["flow"] == "edit":
+        if s_["step"] == "code":
+            cm = re.search(r"\d{4,6}", t)
+            if not cm or cm.group(0) not in h:
+                send_kb(cid, "請按下面的股票，或打「取消」", _kb([[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]))
+                return None
+            s_["code"], s_["step"] = cm.group(0), "field"
+            x = h[s_["code"]]
+            send_kb(cid, f"{s_['code']} {x['name']}\n出場價 {_fmt(x['stop'])}　目標價 {_fmt(x['target'])}\n要改哪一個？",
+                    _kb([["出場價", "目標價"], ["取消"]]))
+            return None
+        if s_["step"] == "field":
+            if t not in ("出場價", "目標價"):
+                send_kb(cid, "請按「出場價」或「目標價」", _kb([["出場價", "目標價"], ["取消"]]))
+                return None
+            s_["field"], s_["step"] = t[:2], "price"
+            send_kb(cid, f"新的{t}是多少？輸入數字，例：123", _kb([["取消"]]))
+            return None
+        try:
+            price = float(t.replace(",", ""))
+        except ValueError:
+            send_kb(cid, "請輸入數字，例如 123", _kb([["取消"]]))
+            return None
+        SESSIONS.pop(cid, None)
+        return f"設 {s_['code']} {s_['field']} {price:g}"
     code_m = re.search(r"\d{4,6}", t)
     if s_["step"] == "code":
         if not code_m:
@@ -469,7 +505,7 @@ def handle_message(m, state, asked):
             send_to(OWNER, reply)
             return
     me = get(cid)
-    if text in ("買進", "賣出", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+    if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
         line = guided(cid, text, me[0])
         if line is None:
             return
