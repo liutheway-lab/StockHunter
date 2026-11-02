@@ -42,6 +42,7 @@ OWNER = os.getenv("TG_OWNER_ID", "").strip()
 API = f"https://api.telegram.org/bot{TG_TOKEN}"
 POLL_SEC = 60
 OPEN_AT, CLOSE_AT = (9, 0), (13, 31)
+REPORT_AT = (13, 35)                                     # 收盤報告的時間
 HOLD_TAG = "📌 持股清單"
 RESULT_FILE = Path(__file__).parent / "scan_results.json"
 
@@ -85,11 +86,11 @@ def stop_tag(x):
     return "（保護獲利）" if x["stop"] > x["avg"] else "（停損）"
 
 
-_LVCACHE = {}  # {(代號, 買價): (時間, 價位)}
+_LVCACHE = {}  # {(代號, 成交價): (時間, 價位)}
 
 
 def levels_cached(code, sfx, price):
-    """levels_for 要下載一年的股價，比較慢；同一檔、同一個買價 10 分鐘內只算一次"""
+    """levels_for 要下載一年的股價，比較慢；同一檔、同一個成交價 10 分鐘內只算一次"""
     k = (code, round(price, 2))
     c = _LVCACHE.get(k)
     if c and time.time() - c[0] < 600:
@@ -271,7 +272,7 @@ def stock_name_suffix(code):
 
 def levels_for(code, suffix, price):
     """買進時自動算出場價、目標價、前波高點：
-    有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 10%，目標、前高留空"""
+    有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝成交價下 10%，目標、前高留空"""
     try:
         import yfinance as yf
         from data import _clean
@@ -290,7 +291,7 @@ def levels_for(code, suffix, price):
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
     return {"stop": st.tick(price * (1 - cfg.ATTACK_MAX_LOSS), "ceil"), "target": None, "key": None,
-            "note": f"這檔目前不符合創高拉回／噴後整理的盤整條件，出場價先設買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%，目標、前高留空，可用「設」指令修改"}
+            "note": f"這檔目前不符合創高拉回／噴後整理的盤整條件，出場價先設成交價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%，目標、前高留空，可用「設」指令修改"}
 
 
 # ================= 指令 =================
@@ -304,7 +305,7 @@ FORMAT = {
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
     "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000\n買錯了：設 2330 均價 950、設 2330 數量 2張\n移動停利：設 2330 回測 8（0 ＝ 關閉）",
 }
-BUILD = "11/02 13:50"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
+BUILD = "11/02 14:35"                  # 每次改版就換一個，按「說明」看得到，用來確認 Render 跑的是不是最新版
 
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
@@ -389,7 +390,7 @@ def handle(text, h):
             x.update(opt)
             h[code] = x
             note = lv["note"]
-            if "stop" in opt:                               # 出場價是使用者自己訂的，不要再說「系統先設買價下 10%」
+            if "stop" in opt:                               # 出場價是使用者自己訂的，不要再說「系統先設成交價下 10%」
                 note = "出場價用你設定的" + ("，目標、前高依盤整型態計算" if lv["target"] else "，目標、前高留空")
             msg = (f"✅ 買進 {code} {name} {fmt_qty(qty)} @{_fmt(price)}\n"
                    f"出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}\n"
@@ -590,18 +591,18 @@ def _kb(rows):
     return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True, "one_time_keyboard": True}
 
 
-BTN = ("系統建議", "保本", "買價下", "現價下", "現價", "均價下", "均價上", "前高")        # 按鈕開頭的字，後面接價位
+BTN = ("系統建議", "保本", "成交價下", "買價下", "現價下", "現價", "均價下", "均價上", "前高")        # 按鈕開頭的字，後面接價位
 TRAIL_ROWS = [["不用"], ["5%", "8%", "10%"], ["取消"]]
 
 
 def _stop_rows(price, sug):
-    """買進時出場價的選項：系統建議／保本（＝買價）／買價下 5%、10%。都是用你輸入的買價算，不依賴即時報價"""
+    """買進時出場價的選項：系統建議／保本（＝成交價）／成交價下 5%、10%。都是用你輸入的成交價算，不依賴即時報價"""
     p5, p10 = st.tick(price * 0.95, "ceil"), st.tick(price * 0.90, "ceil")
-    return [[f"系統建議 {sug:g}"], [f"保本 {price:g}"], [f"買價下5% {p5:g}", f"買價下10% {p10:g}"], ["取消"]]
+    return [[f"系統建議 {sug:g}"], [f"保本 {price:g}"], [f"成交價下5% {p5:g}", f"成交價下10% {p10:g}"], ["取消"]]
 
 
 def _pick(t):
-    """按鈕文字 → 最後那個數字（「買價下5% 844」→ 844）；不是按鈕就回傳 None（表示是自己打的）"""
+    """按鈕文字 → 最後那個數字（「成交價下5% 844」→ 844）；不是按鈕就回傳 None（表示是自己打的）"""
     if t.startswith(BTN):
         n = re.findall(r"\d+(?:\.\d+)?", t.replace(",", ""))
         return float(n[-1]) if n else None
@@ -832,14 +833,14 @@ def guided(cid, text, h):
         sug = levels_cached(s_["code"], sfx, price)["stop"]
         s_["price"], s_["sug"] = price, sug
         ask(cid, s_, "stop", f"{s_['code']} {name} @{price:g}\n出場價要設多少？\n"
-                              f"按下面的選項，或自己輸入價位（例：{sug:g}）\n或百分比（例：-8% ＝ 買價下 8%）",
+                              f"按下面的選項，或自己輸入價位（例：{sug:g}）\n或百分比（例：-8% ＝ 成交價下 8%）",
             _stop_rows(price, sug))
         return None
     if s_["step"] == "stop":
         price = s_["price"]
         tt = t.replace(",", "").replace(" ", "").replace("％", "%")
         stop = _pick(t)                                  # 按鈕
-        if stop is None:                                 # 自己打：百分比（買價下 N%）或價位
+        if stop is None:                                 # 自己打：百分比（成交價下 N%）或價位
             pm = re.fullmatch(r"-?(\d+(?:\.\d+)?)%", tt)
             try:
                 if pm:
@@ -849,7 +850,7 @@ def guided(cid, text, h):
                     stop = float(tt)
             except ValueError:
                 stop = None
-        if stop is None or stop <= 0:                    # 不檢查高低：低於買價是停損，高於買價是保護獲利
+        if stop is None or stop <= 0:                    # 不檢查高低：低於成交價是停損，高於成交價是保護獲利
             retry(cid, s_, f"請按選項，或輸入價位（例：{s_['sug']:g}）／百分比（例：-8%）")
             return None
         s_["stop"] = stop
@@ -1026,7 +1027,9 @@ def _twse_session():
     return _TWSE["s"]
 
 
-def _twse_quotes(pairs, timeout):
+def _twse_quotes(pairs, timeout, seen=None):
+    """只用「最後一筆成交價」。沒有成交價（還沒成交）就不給報價，絕不拿委買價、委賣價湊。
+    seen：證交所有認得的代號（不管有沒有成交價）"""
     out = {}
     if not pairs:
         return out
@@ -1040,10 +1043,12 @@ def _twse_quotes(pairs, timeout):
                     return float(str(q.get(k, "")).split("_")[0])
                 except ValueError:
                     return None
-            last = f("z") or f("b") or f("a")
+            if seen is not None:
+                seen.add(q.get("c"))
+            last = f("z")
             if last:
                 out[q["c"]] = {"last": last, "high": f("h") or last, "low": f("l") or last,
-                               "prev": f("y"), "date": q.get("d", "")}
+                               "prev": f("y"), "date": q.get("d", ""), "z": last, "time": q.get("t", "")}
     except Exception as e:
         print("證交所即時報價失敗：", repr(e))
         _TWSE["s"] = None                                   # 下次重新拿 cookie
@@ -1053,12 +1058,13 @@ def _twse_quotes(pairs, timeout):
 def get_quotes(items, timeout=15, yahoo=True):
     """items：[(code, suffix)]。回傳 {code: {"last", "high", "low", "prev", "date"}}。
     證交所即時報價；找不到的換另一個市場（上市／上櫃）再找一次；還是沒有才用 Yahoo"""
-    out = _twse_quotes(items, timeout)
-    missing = [(c, s) for c, s in items if c not in out]
-    if missing:                                             # 代號對到錯的市場（上市／上櫃）就會找不到
+    seen = set()
+    out = _twse_quotes(items, timeout, seen)
+    missing = [(c, s) for c, s in items if c not in seen]   # 證交所完全不認得：多半是上市／上櫃對錯了
+    if missing:
         flipped = [(c, ".TW" if s == ".TWO" else ".TWO") for c, s in missing]
-        out.update(_twse_quotes(flipped, timeout))
-    missing = [(c, s) for c, s in items if c not in out]
+        out.update(_twse_quotes(flipped, timeout, seen))
+    missing = [(c, s) for c, s in items if c not in seen]   # 證交所認得但還沒成交的，不去用 Yahoo 的延遲報價頂替
     if missing and yahoo:
         try:
             import yfinance as yf
@@ -1096,10 +1102,10 @@ def holdings_report(h, q):
             money = (p - x["avg"]) * x["shares"]
             total += money
             counted += 1
-            lines.append(f"　現價 {p:g}｜均價 {_fmt(x['avg'])}")
+            lines.append(f"　成交價 {p:g}｜均價 {_fmt(x['avg'])}")
             lines.append(f"　{'🟢' if money >= 0 else '🔴'} {money:+,.0f} 元（{(p / x['avg'] - 1) * 100:+.1f}%）")
         else:
-            lines.append(f"　均價 {_fmt(x['avg'])}（查不到現價）")
+            lines.append(f"　均價 {_fmt(x['avg'])}（查不到成交價）")
         lines.append(f"　出場 {_fmt(x['stop'])}{stop_tag(x)}")
         if p and x["stop"]:
             down = (1 - x["stop"] / p) * 100
@@ -1255,7 +1261,7 @@ def check_once(watch, books, sent, today, upd=None):
             back = "" if v["last"] >= w["chase"] else "，目前已拉回"
             to_group(f"🎯 *追價提醒*　{w['code']} {w['name']}\n"
                      f"盤中漲到追價點 {w['chase']:g}（最高 {v['high']:g}）\n"
-                     f"現價 {v['last']:g}（{chg:+.1f}%）{back}\n"
+                     f"成交價 {v['last']:g}（{chg:+.1f}%）{back}\n"
                      f"出場 {w['stop1']:g}｜目標 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
                      f"📊 {tv(w['code'], w['suffix'])}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
@@ -1265,11 +1271,11 @@ def check_once(watch, books, sent, today, upd=None):
             if not v or v.get("date") != today:
                 continue
             p = v["last"]
-            print(f"[{_now():%H:%M}] {code} 現價 {p:g}｜出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}")
+            print(f"[{_now():%H:%M}] {code} 成交價 {p:g}（成交時間 {v.get('time') or '?'}）｜出場 {_fmt(x['stop'])}｜目標 {_fmt(x['target'])}｜前高 {_fmt(x['key'])}")
             if x.get("trail"):                              # 移動停利：出場價跟著高點往上拉，只升不降
                 prev = _SEEN.get(code)
                 pk = _PEAK.get((cid, code))
-                if pk is None:                              # 第一次看到這筆持股：從現價起算，不採用買進前的高點
+                if pk is None:                              # 第一次看到這筆持股：從成交價起算，不採用買進前的高點
                     pk = p
                 else:
                     pk = max(pk, p, v["high"] if prev and v.get("high") and v["high"] > prev[1] else 0)
@@ -1286,20 +1292,20 @@ def check_once(watch, books, sent, today, upd=None):
                     extra = f"\n（兩次查價之間盤中最低曾到 {v['low']:g}）" if p > x["stop"] else ""
                     if x.get("trail"):
                         extra += f"\n移動停利：高點 {_PEAK[(cid, code)]:g} 回測 {x['trail']:g}%"
-                    send_to(cid, alert_head(key, kind) + f"🛑 *碰到出場價{stop_tag(x)}*　{code} {x['name']}\n現價 {p:g}，出場價 {x['stop']:g}{extra}\n"
+                    send_to(cid, alert_head(key, kind) + f"🛑 *碰到出場價{stop_tag(x)}*　{code} {x['name']}\n成交價 {p:g}，出場價 {x['stop']:g}{extra}\n"
                                  f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後，請按下方按鈕記錄", kb)
             if x["key"] and not x["added"]:
                 key = ("add", cid, code, x["key"])
                 kind = should_alert(key, touched(code, v, x["key"], "up"), p >= x["key"])
                 if kind:
-                    send_to(cid, alert_head(key, kind) + f"⬆️ *站上前波高點*　{code} {x['name']}\n現價 {p:g}，前高 {x['key']:g}\n"
+                    send_to(cid, alert_head(key, kind) + f"⬆️ *站上前波高點*　{code} {x['name']}\n成交價 {p:g}，前高 {x['key']:g}\n"
                                  f"可以加碼第二筆；加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
                                  f"加碼後回覆：買 {code} 數量 價格（例：買 {code} 1張 價格）")
             if x["target"]:
                 key = ("target", cid, code, x["target"])
                 kind = should_alert(key, touched(code, v, x["target"], "up"), p >= x["target"])
                 if kind:
-                    send_to(cid, alert_head(key, kind) + f"🎯 *碰到目標價*　{code} {x['name']}\n現價 {p:g}，目標 {x['target']:g}\n"
+                    send_to(cid, alert_head(key, kind) + f"🎯 *碰到目標價*　{code} {x['name']}\n成交價 {p:g}，目標 {x['target']:g}\n"
                                  f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n賣出後，請按下方按鈕記錄", kb)
     for code, v in q.items():                               # 記下這一輪的最低／最高，下一輪才看得出「又創新低／新高」
         if v.get("date") == today:
@@ -1414,9 +1420,15 @@ def run_market():
         set_monitor_status("stop", note="中途中止" if isinstance(e, KeyboardInterrupt) else "發生錯誤")
         raise
     set_monitor_status("stop")                                      # 收盤：「🔴 盤中監控已停止」
+    while (datetime.now(TZ).hour, datetime.now(TZ).minute) < REPORT_AT:    # 13:30 收盤撮合後，收盤價要過幾分鐘才完整公布，等一下再報
+        time.sleep(20)
     for cid, h in all_books().items():                      # 收盤後傳一次持股狀況給每個人
         if h:
-            send_to(cid, holdings_report(h, quotes_for(h)).replace("目前持股", "收盤持股"))
+            q = quotes_for(h)
+            for v in q.values():
+                if v.get("z"):                              # 收盤價＝最後一筆成交價
+                    v["last"] = v["z"]
+            send_to(cid, holdings_report(h, q).replace("目前持股", "收盤持股"))
 
 
 def _on_term(signum, frame):
