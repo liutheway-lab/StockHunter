@@ -566,16 +566,15 @@ LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
 if mk:
     mL, mR = st.columns([2, 3])          # 電腦：左邊數字和止跌條件、右邊圖；手機會自動變成上下排
     with mL:
-        c1, c2 = st.columns(2)
         _pv = float(mk["df"]["Close"].iloc[-2]) if len(mk["df"]) >= 2 else None
         _d = mk["close"] - _pv if _pv else 0.0                    # 跟圖左上角同一種寫法：現價　▼ 漲跌點（幅度），紅漲綠跌
         _col = "#e04a4a" if _d > 0 else "#2e9e4f" if _d < 0 else "#555"
         _ar = "▲" if _d > 0 else "▼" if _d < 0 else "─"
         _tail = f"　{_ar} {abs(_d):,.2f}（{_d / _pv * 100:+.2f}%）" if _pv else ""
-        c1.markdown(f"<div style='font-size:0.875rem;margin-bottom:0.2rem'>加權指數</div>"
-                    f"<div style='color:{_col};font-weight:700;font-size:1.45rem;white-space:nowrap'>"
+        st.markdown(f"<div style='font-size:0.875rem;margin-bottom:0.2rem'>加權指數</div>"
+                    f"<div style='color:{_col};font-weight:700;font-size:1.45rem'>"
                     f"{mk['close']:,.2f}{_tail}</div>", unsafe_allow_html=True)
-        c2.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
+        st.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
 
         show_stab = mk["stab"] if mk["layer"] in (4, 5) else None
         if show_stab is not None or mk["layer"] in (4, 5):
@@ -1113,8 +1112,9 @@ if target:
                     foldable(f"{code}_{sname}", label, body, default=r["ok"],
                              status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
 
-                sfx_bt = sfx                     # 上面實際抓到資料的市場別（.TW 或 .TWO）
-                foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
-                         lambda: stock_bt_body(code, sfx_bt, capital), default=False,
-                         status="用你的資金比例，模擬這檔過去每一次訊號")
+            st.divider()                         # 回測放在兩欄下面，整行寬度另外一區
+            sfx_bt = sfx                         # 上面實際抓到資料的市場別（.TW 或 .TWO）
+            foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
+                     lambda: stock_bt_body(code, sfx_bt, capital), default=False,
+                     status="用你的資金比例，模擬這檔過去每一次訊號")
 
