@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-03 22:31",
+ "generated_at": "2026-11-03 23:14",
  "data_date": "2026-11-03",
  "layer": 4,
  "layer_name": "空頭",
@@ -46,5 +46,35 @@
    }
   ],
   "flag": []
- }
+ },
+ "absorb": [
+  {
+   "code": "2465",
+   "name": "麗臺",
+   "suffix": ".TW",
+   "industry": "電腦及週邊設備業",
+   "market": "上市",
+   "close": 114.0,
+   "low": 106.0,
+   "high": 119.0,
+   "kind": "長下影",
+   "vol_mult": 6.2,
+   "chg": 1.79,
+   "turnover": 540792848
+  },
+  {
+   "code": "3287",
+   "name": "廣寰科",
+   "suffix": ".TWO",
+   "industry": "電腦及週邊設備業",
+   "market": "上櫃",
+   "close": 65.0,
+   "low": 57.5,
+   "high": 65.0,
+   "kind": "長紅",
+   "vol_mult": 2.2,
+   "chg": 9.98,
+   "turnover": 131681042
+  }
+ ]
 }
