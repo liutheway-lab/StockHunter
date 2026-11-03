@@ -693,9 +693,9 @@ def absorb_buttons(items, limit=15):
             pick(it)
             st.rerun()
         st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">'
-                    f'現價 {px(it["close"])}｜今日最低 {px(it["low"])}｜{it["kind"]}｜量 {it["vol_mult"]:.1f} 倍</div>',
+                    f'現價 {px(it["close"])}｜今日最低 {px(it["low"])}｜{it["kind"]}｜量能 {it["vol_mult"]:.1f} 倍</div>',
                     unsafe_allow_html=True)
-    st.caption(L("量＝今天量 ÷ 20 日均量", "隔天不破今天最低，才比較可信"))
+    st.caption(L("量能＝今天量 ÷ 20 日均量", "隔天不破今天最低，才比較可信"))
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
@@ -1046,8 +1046,8 @@ if target:
         pv = float(df["Close"].iloc[-2])
         clr = "red" if chg > 0 else "green" if chg < 0 else "gray"        # 紅漲綠跌
         ar = "▲" if chg > 0 else "▼" if chg < 0 else "─"
-        st.markdown(f"### {'🔴' if chg > 0 else '🟢'} {code} {name}")
-        st.markdown(f"#### 現價 :{clr}[{px(close)}　{ar} {abs(close - pv):.2f}（{chg:+.2f}%）]")
+        st.markdown(f"### {code} {name}")
+        st.markdown(f"#### :{clr}[{px(close)}　{ar} {abs(close - pv):.2f}（{chg:+.2f}%）]")
         if target["industry"]:
             st.caption(f"產業別：{target['industry']}")
         ex = "TPEX" if target.get("suffix") == ".TWO" else "TWSE"
