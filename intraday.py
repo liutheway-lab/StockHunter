@@ -74,9 +74,13 @@ def to_owner(text):
         print("[沒有設定 TG_OWNER_ID]", text)
 
 
-def send_alert(cid, text, code, name):
-    """持股提醒，下面附一顆「賣出」按鈕，按下去直接進賣出流程（要賣多少再問）"""
-    kb = {"inline_keyboard": [[{"text": f"賣出 {code} {name}", "callback_data": f"sell:{code}"}]]}
+def send_alert(cid, text, code, name, kind="sell"):
+    """持股提醒，下面附一顆按鈕：「賣出」進賣出流程、「加碼」進買進流程（數量再問）"""
+    label, data = (f"加碼 {code} {name}", f"buy:{code}") if kind == "buy" else (f"賣出 {code} {name}", f"sell:{code}")
+    row = [{"text": label, "callback_data": data}]
+    if kind == "buy":
+        row.append({"text": "不加碼", "callback_data": f"skip:{code}"})      # 不想加碼：按一下把這則提醒收掉
+    kb = {"inline_keyboard": [row]}
     j = tg("sendMessage", chat_id=cid, text=text, parse_mode="HTML", reply_markup=kb)
     if not j.get("ok"):
         j = tg("sendMessage", chat_id=cid, text=plain(text), reply_markup=kb)
@@ -528,7 +532,7 @@ def support_for(raw, price, days=5):
 
 
 def auto_support(code, suffix, price):
-    """價位調整用：抓歷史資料算支撐（失敗回 None）"""
+    """調價用：抓歷史資料算支撐（失敗回 None）"""
     try:
         import yfinance as yf
         from data import _clean
@@ -539,6 +543,15 @@ def auto_support(code, suffix, price):
         return None
     except Exception as e:
         print(f"{code} 抓支撐失敗：{e!r}")
+        return None
+
+
+def _now_price(code, sfx):
+    """現在的成交價（查不到、今天還沒成交回 None，這時就不檢查出場價高低）"""
+    try:
+        v = quotes_quick({code: {"suffix": sfx}}, 5).get(code) or {}
+        return None if v.get("notrade") else v.get("last")
+    except Exception:
         return None
 
 
@@ -577,7 +590,7 @@ def _levels_for(code, suffix, price):
                     return {"stop": stop, "target": r["target"], "key": st.tick(r["key"]), "sup": sup, "sup_why": sup_why,
                             "why": f"依{cfg.STRATEGY_NAMES[r['name']]}型態", "pattern": True,
                             "pname": cfg.STRATEGY_NAMES[r['name']],
-                            "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、壓力、前高\n依攻擊日規則自動算出\n要改請按「價位調整」"}
+                            "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、壓力、前高\n依攻擊日規則自動算出\n要改請按「調價」"}
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
     key = volume_key(raw, price) if raw is not None else None
@@ -586,14 +599,14 @@ def _levels_for(code, suffix, price):
     sup, sup_why = support_for(raw, price) if raw is not None else (None, "")
     return {"stop": st.tick(price * (1 - BUY_STOP_PCT), "ceil"), "target": None, "key": key, "sup": sup, "sup_why": sup_why,
             "why": f"買價下 {BUY_STOP_PCT * 100:.0f}%", "pattern": False,
-            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n壓力留空\n" + kline + "\n要改請按「價位調整」"}
+            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n壓力留空\n" + kline + "\n要改請按「調價」"}
 
 
 # ================= 指令 =================
 # 輸入框按「/」會跳出的選單（Telegram 規定指令只能用英文，中文直接打也可以）
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設", "quote": "查價", "price": "查價"}
-KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "價位調整"}], [{"text": "查價"}, {"text": "說明"}],
+KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "調價"}], [{"text": "查價"}, {"text": "說明"}],
                          [{"text": "清畫面"}]],
             "resize_keyboard": True, "is_persistent": True}
 KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
@@ -608,7 +621,7 @@ HELP = ("🤖 *持股追蹤*\n"
         "買進　→ 輸入代號、數量、成交價\n"
         "賣出　→ 選股票、數量\n"
         "持股　→ 看目前持股與即時損益\n"
-        "價位調整　→ 選股票、調整價位\n"
+        "調價　→ 選股票、調整價位\n"
         "查價　→ 輸入代號看最新成交價\n"
         "清畫面　→ 只留釘選的持股清單\n"
         "\n"
@@ -856,7 +869,7 @@ def guided(cid, text, h):
         rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
         send_kb(cid, "要查哪幾檔？\n輸入代號，可以一次多檔\n例：2330 2317" + ("\n或按下面的持股" if h else ""), _kb(rows))
         return None
-    if t == "價位調整":
+    if t == "調價":
         if not h:
             send_kb(cid, "目前沒有持股")
             return None
@@ -979,13 +992,19 @@ def guided(cid, text, h):
             SESSIONS.pop(cid, None)
             return f"賣 {s_['code']} {q}股"
         s_["qty"], s_["step"] = q, "price"
-        send_kb(cid, f"成交價是多少？例：950", _kb([["取消"]]))
+        now = _now_price(s_["code"], (h.get(s_["code"]) or {}).get("suffix") or stock_name_suffix(s_["code"])[1])
+        if now:                                        # 剛好用現價成交的話，按一下就好
+            s_["now_btn"] = f"用現價 {_n(now)}"
+            send_kb(cid, f"成交價是多少？\n現價 {_n(now)}\n按下方按鈕，或輸入數字", _kb([[s_["now_btn"]], ["取消"]]))
+        else:
+            send_kb(cid, "成交價是多少？\n輸入數字，例：950", _kb([["取消"]]))
         return None
     if s_["step"] == "price":
         try:
-            price = float(t.replace(",", ""))
+            m_ = re.match(r"^用現價\s*([\d,.]+)", t)
+            price = float((m_.group(1) if m_ else t).replace(",", ""))
         except ValueError:
-            send_kb(cid, "請輸入數字，例如 950", _kb([["取消"]]))
+            send_kb(cid, "請輸入數字，例如 950", _kb(([[s_["now_btn"]]] if s_.get("now_btn") else []) + [["取消"]]))
             return None
         if price <= 0:
             send_kb(cid, "價格要大於 0", _kb([["取消"]]))
@@ -995,11 +1014,14 @@ def guided(cid, text, h):
             SESSIONS.pop(cid, None)
             return f"買 {s_['code']} {s_['qty']}股 {price:g}"
         s_["step"] = "stop"
-        sug = st.tick(price * (1 - BUY_STOP_PCT), "ceil")
-        lines = [f"出場價要設多少？", "", f"建議 {_n(sug)}", f"（成交價下 {BUY_STOP_PCT * 100:.0f}%）"]
-        rows = [[f"用 {_n(sug)}（−{BUY_STOP_PCT * 100:.0f}%）"]]
-        s_["sug"] = sug
         sfx = stock_name_suffix(s_["code"])[1]
+        now = _now_price(s_["code"], sfx)                 # 出場價要跟「現價」比：股價上漲後可以把出場價拉高鎖利
+        sug, base = st.tick(price * (1 - BUY_STOP_PCT), "ceil"), "成交價"
+        if now and sug >= now:                             # 買了之後已經跌了：建議價改用現價往下算，才不會一設就被觸發
+            sug, base = st.tick(now * (1 - BUY_STOP_PCT), "ceil"), "現價"
+        lines = [f"出場價要設多少？", ""] + ([f"現價 {_n(now)}"] if now else []) + [f"建議 {_n(sug)}", f"（{base}下 {BUY_STOP_PCT * 100:.0f}%）"]
+        rows = [[f"用 {_n(sug)}（−{BUY_STOP_PCT * 100:.0f}%）"]]
+        s_["sug"], s_["now"] = sug, now
         lv = levels_for(s_["code"], sfx, price)
         if lv.get("pattern") and lv["stop"] != sug:
             s_["pat"] = lv["stop"]
@@ -1017,8 +1039,9 @@ def guided(cid, text, h):
         except ValueError:
             send_kb(cid, "請按下面的建議\n或輸入數字", _kb(s_["rows"]))
             return None
-        if stop <= 0 or stop >= s_["price"]:
-            send_kb(cid, f"出場價要低於成交價 {_n(s_['price'])}\n請重新輸入", _kb(s_["rows"]))
+        now = _now_price(s_["code"], stock_name_suffix(s_["code"])[1]) or s_.get("now")      # 重新查一次現價
+        if stop <= 0 or (now and stop >= now):
+            send_kb(cid, ("出場價要大於 0" if stop <= 0 else f"出場價要低於現價 {_n(now)}\n（不然一設定就會觸發）") + "\n請重新輸入", _kb(s_["rows"]))
             return None
         SESSIONS.pop(cid, None)
         return f"買 {s_['code']} {s_['qty']}股 {s_['price']:g} 出場 {stop:g}"
@@ -1119,12 +1142,12 @@ def _handle_message(m, state, asked):
         return
     if cid in SESSIONS and text in ("持股", "說明"):            # 做到一半按了別的功能：先中止目前這一串
         SESSIONS.pop(cid, None)
-    if text in ("買進", "賣出", "價位調整", "查價", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+    if text in ("買進", "賣出", "調價", "查價", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
         if text == "取消" and cid not in SESSIONS:
             TRACK.setdefault(cid, []).append(m.get("message_id"))   # 管理者選單的取消：連同選單一起清掉
-        if text in ("買進", "賣出", "價位調整", "查價"):
+        if text in ("買進", "賣出", "調價", "查價"):
             TRACK[cid] = []                            # 開始新的一次操作
-        if cid in SESSIONS or text in ("買進", "賣出", "價位調整", "查價"):
+        if cid in SESSIONS or text in ("買進", "賣出", "調價", "查價"):
             TRACK.setdefault(cid, []).append(m.get("message_id"))
         line = guided(cid, text, me[0])
         if line is None:
@@ -1152,8 +1175,8 @@ def handle_message(m, state, asked):
     """處理一則訊息。整串操作做完、有結果了，才把上面不需要的訊息清掉（釘選的持股清單和最新結果留著）"""
     chat = m.get("chat") or {}
     cid = str(chat.get("id", ""))
-    if (m.get("text") or "").strip() == "改價位":            # 舊按鈕名稱照樣看得懂
-        m = {**m, "text": "價位調整"}
+    if (m.get("text") or "").strip() in ("改價位", "價位調整"):   # 舊按鈕名稱照樣看得懂
+        m = {**m, "text": "調價"}
     private = chat.get("type") == "private" and bool(m.get("text"))
     if private:
         CHAT.setdefault(cid, []).append(m.get("message_id"))
@@ -1172,14 +1195,17 @@ def handle_message(m, state, asked):
 
 
 def handle_callback(cq, state, asked):
-    """按了提醒訊息下面的按鈕：目前只有「賣出」，直接跳到「要賣多少」那一步"""
+    """按了提醒訊息下面的按鈕：「賣出」跳到「要賣多少」，「加碼」跳到「買了多少」"""
     tg("answerCallbackQuery", callback_query_id=cq.get("id"))
     m = cq.get("message") or {}
     chat = m.get("chat") or {}
     data = cq.get("data") or ""
-    if chat.get("type") != "private" or not data.startswith("sell:"):
+    if chat.get("type") != "private" or not data.startswith(("sell:", "buy:", "skip:")):
         return
-    cid, code = str(chat["id"]), data[5:]
+    if data.startswith("skip:"):                       # 不加碼：把這則提醒刪掉就好
+        delete_msgs(str(chat["id"]), [m.get("message_id")])
+        return
+    cid, code = str(chat["id"]), data.split(":", 1)[1]
     h, mid, _ = load_holdings(cid)
     if not h and cid in _BOOK:
         h = _BOOK[cid][0]
@@ -1187,9 +1213,14 @@ def handle_callback(cq, state, asked):
         send_kb(cid, f"持股裡已經沒有 {code}\n可能已經賣掉了")
         return
     delete_msgs(cid, TRACK.pop(cid, []))               # 前一個沒做完的操作清掉
+    x = h[code]
+    if data.startswith("buy:"):                        # 加碼：代號已經知道，直接問買了多少
+        SESSIONS[cid] = {"flow": "buy", "step": "qty", "code": code}
+        TRACK[cid] = []
+        send_kb(cid, f"{code} {x['name']} 目前 {fmt_qty(x['shares'])}\n加碼買了多少？\n請輸入張數或股數\n例：1張、500股", _kb([["取消"]]))
+        return
     SESSIONS[cid] = {"flow": "sell", "step": "qty", "code": code}
     TRACK[cid] = []
-    x = h[code]
     send_kb(cid, f"{code} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入張數、股數\n例：1張、500股",
             _kb([["全部賣出"], ["取消"]]))
 
@@ -1656,11 +1687,10 @@ def check_once(watch, books, sent, today, last=None, now=None):
                             + f"{lag}\n要賣請按下方按鈕", code, x["name"], now)
             if x["key"] and not x["added"] and p >= x["key"] and ("add", cid, code) not in sent:
                 sent.add(("add", cid, code))
-                tg("sendMessage", chat_id=str(cid), parse_mode="HTML", text=(
-                    f"⬆️ <b>站上前波高點</b>　{code} {nm}\n"
-                    + kv([("成交價", f"{p:g}"), ("前高", f"{x['key']:g}"),
-                          ("加碼後出場", f"{st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}")])
-                    + f"\n可以加碼第二筆\n加碼請按「買進」\n或回覆：買 {code} 1張 價格"))
+                send_alert(cid, f"⬆️ <b>站上前波高點</b>　{code} {nm}\n"
+                           + kv([("成交價", f"{p:g}"), ("前高", f"{x['key']:g}"),
+                                 ("加碼後出場", f"{st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}")])
+                           + "\n可以加碼第二筆", code, x["name"], kind="buy")
             sup = x.get("sup")                              # 跌破支撐：先預警；已經跌破出場價的話 🛑 那則就夠了
             why = _due(last, ("sup", cid, code), bool(sup and p <= sup and not (x["stop"] and p <= x["stop"])), now)
             if why:
