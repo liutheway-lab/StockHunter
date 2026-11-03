@@ -371,7 +371,7 @@ def _result(name, checks, **kw):
     return {"name": name, "ok": all(c[1] for c in checks), "checks": checks, **kw}
 
 
-ATTACK_DAY_CHECKS = ("攻擊日：收盤突破盤整高點", "收紅 K", "攻擊日漲幅", "收在當天上 1/3", "攻擊日量能", "流動性")
+ATTACK_DAY_CHECKS = ("攻擊日：收盤突破盤整高點", "收紅 K", "攻擊日漲幅", "收盤位置", "攻擊日量能", "流動性")
 
 
 def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **extra):
@@ -379,7 +379,7 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
     pk：前波高點那一天；S：策略自己的起漲價（噴出後整理用來判斷回檔，不再拿來算目標）。
     目標價＝盤整最低點 ＋ 整段漲幅（前波高點 − 前高之前 30 日內的最低點），兩套共用同一種算法。
     盤整區＝前波高點之後到昨天（4～10 天、離前高 ≤ 10%）；
-    今天收盤第一次站上盤整高點、收紅 K、漲 ≥ 5%、收在當天上 1/3、量能 ≥ 前高那天的 9 成 → 攻擊日。
+    今天收盤第一次站上盤整高點、收紅 K、漲 ≥ 5%、收盤位置 ≥ 67%、量能 ≥ 前高那天的 9 成 → 攻擊日。
     回傳的 pre_ok＝「昨天為止的盤整條件都成立」，chase_px＝盤中追價點（漲 4% 且突破盤整高點）"""
     o, h, l, c, v = (df[x].to_numpy(float) for x in ("Open", "High", "Low", "Close", "Volume"))
     row = df.iloc[i]
@@ -410,7 +410,8 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
          f"盤整區 {lower:.2f}～{upper:.2f}，收盤 {E:.2f}" if n_cons >= 1 else "還沒有盤整區"),
         ("收紅 K", bool(c[i] > o[i]), f"開盤 {o[i]:.2f}、收盤 {E:.2f}"),
         ("攻擊日漲幅", bool(gain >= cfg.ATTACK_MIN_GAIN), f"今日漲 {gain * 100:+.1f}%（需 ≥ {cfg.ATTACK_MIN_GAIN * 100:.0f}%）"),
-        ("收在當天上 1/3", bool(pos >= cfg.ATTACK_CLOSE_POS), f"收盤在當天區間的 {pos * 100:.0f}% 位置"),
+        ("收盤位置", bool(pos >= cfg.ATTACK_CLOSE_POS),
+         f"收在當天最低（0%）到最高（100%）的 {pos * 100:.0f}% 處，要 {cfg.ATTACK_CLOSE_POS * 100:.0f}% 以上"),
         ("攻擊日量能", bool(vol_pk > 0 and vr >= cfg.ATTACK_VOL_VS_PEAK),
          f"今日量 = 前高那天的 {vr * 100:.0f}%（需 ≥ {cfg.ATTACK_VOL_VS_PEAK * 100:.0f}%）"),
     ]
