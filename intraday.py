@@ -2,7 +2,7 @@
 
 每個交易日 08:50 啟動，09:00～13:30 每 1 分鐘查一次證交所即時報價：
   🎯 追價提醒（傳到群組）：明日追價名單上的股票，盤中漲到追價點（漲 4% 且突破盤整高點）
-  🛑／⬆️／🎯 持股提醒（只傳給你）：跌破出場價、站上前波高點可加碼、碰到目標價
+  🛑／⬆️／🎯 持股提醒（只傳給你）：跌破出場價、站上前波高點可加碼、碰到壓力、跌破支撐
 同一檔、同一種提醒，一天只推播一次。
 
 持股用 Telegram 私訊機器人輸入。管理者（TG_OWNER_ID）可以開通朋友：
@@ -10,9 +10,9 @@
   每個人的持股分開存在自己跟機器人的私訊裡，提醒也只傳給本人。
 指令：
   買 2330 2 950            買進 2 張、950 元（已有持股就算加碼，自動算均價）
-  買 2330 2 950 出場 900 目標 1100   自己指定出場價、目標價
+  買 2330 2 950 出場 900 壓力 1100   自己指定出場價、壓力
   賣 2330                  全部賣出；賣 2330 1 ＝賣 1 張
-  設 2330 出場 920         修改出場價（也可以改 目標、前高）
+  設 2330 出場 920         修改出場價（也可以改 壓力、支撐、前高）
   持股                     看目前持股與距離出場價多遠
 持股存在各自跟機器人的私人對話裡（置頂的那則「📌 持股清單」），repo 是公開的也看不到。
 
@@ -77,9 +77,9 @@ def to_owner(text):
 def send_alert(cid, text, code, name):
     """持股提醒，下面附一顆「賣出」按鈕，按下去直接進賣出流程（要賣多少再問）"""
     kb = {"inline_keyboard": [[{"text": f"賣出 {code} {name}", "callback_data": f"sell:{code}"}]]}
-    j = tg("sendMessage", chat_id=cid, text=text, parse_mode="Markdown", reply_markup=kb)
+    j = tg("sendMessage", chat_id=cid, text=text, parse_mode="HTML", reply_markup=kb)
     if not j.get("ok"):
-        j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb)
+        j = tg("sendMessage", chat_id=cid, text=plain(text), reply_markup=kb)
     return (j.get("result") or {}).get("message_id")
 
 
@@ -126,9 +126,36 @@ def send_to(cid, text):
         print("[沒有對象]", text)
 
 
+# ---------- 訊息美編（HTML：標題粗體、數字放進灰底等寬區塊，跟早報一樣） ----------
+def esc(v):
+    return html.escape(str(v), quote=False)
+
+
+def _cells(t):
+    """顯示寬度：中文、全形符號算 2 格，其他算 1 格（等寬字對齊用）"""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
+
+
+def kv(rows, gap=2):
+    """[(名稱, 內容)] → 對齊的等寬區塊。名稱欄補空白到一樣寬，內容空的就略過"""
+    rows = [(k, v) for k, v in rows if v not in (None, "")]
+    w = max((_cells(k) for k, _ in rows), default=0)
+    return "<pre>" + "\n".join(f"{k}{' ' * (w - _cells(k) + gap)}{v}" for k, v in rows) + "</pre>"
+
+
+def is_html(t):
+    return "<b>" in t or "<pre>" in t
+
+
+def plain(t):
+    return html.unescape(re.sub(r"</?(b|pre|code|i)>", "", t))
+
+
 HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪|▲|▼|－)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|股)(・已加碼)?$")
 FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出場 ([\d,.]+|—)")),
-             ("target", re.compile(r"目標 ([\d,.]+|—)")), ("key", re.compile(r"前高 ([\d,.]+|—)")))
+             ("target", re.compile(r"(?:壓力|目標) ([\d,.]+|—)")), ("sup", re.compile(r"支撐 ([\d,.]+|—)")),
+             ("key", re.compile(r"前高 ([\d,.]+|—)")))
 _LASTQ = {}
 _LAST_Z = {}     # {代號: (日期, 最近一次成交價)}：證交所有時一瞬間沒回成交價，就用這個
 _STATUS = {}    # {chat id: 「⏱ 盤中監控…」那一行}，跟著置頂看板一起保存
@@ -188,7 +215,7 @@ def load_holdings(cid):
             code, name, qty, unit, added = m.groups()
             shares = float(qty.replace(",", "")) * (1000 if unit == "張" else 1)
             cur = {"name": name, "shares": int(round(shares)), "avg": None, "stop": None,
-                   "target": None, "key": None, "added": bool(added)}
+                   "target": None, "sup": None, "key": None, "added": bool(added)}
             h[code] = cur
             continue
         m = LINE_RE.match(ln)
@@ -196,7 +223,7 @@ def load_holdings(cid):
             code, name, qty, unit, avg, stop, target, key, added = m.groups()
             shares = float(qty.replace(",", "")) * (1000 if unit == "張" else 1)
             h[code] = {"name": name, "shares": int(round(shares)), "avg": float(avg), "stop": _num(stop),
-                       "target": _num(target), "key": _num(key), "added": added == "已"}
+                       "target": _num(target), "sup": None, "key": _num(key), "added": added == "已"}
             cur = None
             continue
         if cur is not None:
@@ -240,8 +267,8 @@ def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
                 stop_l += f"　距出場 {sg(d)}{abs(d):.1f}%"
         lines += ["", f"{lamp} {code} {x['name']}　{fmt_qty(x['shares'])}{'・已加碼' if x['added'] else ''}",
                   now_l, avg_l, stop_l]
-        if x["target"] is not None or x["key"] is not None:
-            lines.append(f"目標 {_n(x['target'])}　前高 {_n(x['key'])}")
+        if any(x.get(k) is not None for k in ("sup", "target", "key")):
+            lines.append(f"支撐 {_n(x.get('sup'))}　壓力 {_n(x['target'])}　前高 {_n(x['key'])}")
     if status:
         lines += ["", status]
     if users:
@@ -483,12 +510,44 @@ def auto_key(code, suffix, price):
         return None
 
 
+def support_for(raw, price, days=5):
+    """支撐＝近 5 個交易日裡「有量」（成交量不低於近 20 日平均）的那幾天中，最低的最低價（要低於買價）。
+    這 5 天都沒出量，就退而用近 5 日最低點，並標「無量」（參考性較低）。回傳 (價位, 說明)；找不到回 (None, "")"""
+    try:
+        d = raw.tail(days)
+        avg = float(raw["Volume"].tail(20).mean())
+        vol = d[(d["Volume"] >= avg) & (d["Low"] < price)]
+        if not vol.empty:
+            return st.tick(float(vol["Low"].min())), f"近 {days} 日有量的低點"
+        low = d[d["Low"] < price]
+        if not low.empty:
+            return st.tick(float(low["Low"].min())), f"近 {days} 日最低點（無量）"
+    except Exception as e:
+        print("算支撐失敗：", repr(e))
+    return None, ""
+
+
+def auto_support(code, suffix, price):
+    """價位調整用：抓歷史資料算支撐（失敗回 None）"""
+    try:
+        import yfinance as yf
+        from data import _clean
+        for sfx in dict.fromkeys([suffix or ".TW", ".TW", ".TWO"]):
+            raw = _clean(yf.Ticker(code + sfx).history(period="1y", auto_adjust=False))
+            if raw is not None and len(raw) >= 20:
+                return support_for(raw, price)[0]
+        return None
+    except Exception as e:
+        print(f"{code} 抓支撐失敗：{e!r}")
+        return None
+
+
 BUY_STOP_PCT = 0.08            # 買進時系統建議的出場價：成交價下 8%
 _LV_CACHE = {}
 
 
 def levels_for(code, suffix, price):
-    """買進時自動算出場價、目標價、前波高點（同一檔同一價 10 分鐘內不重算，買進流程問出場價時已經算過）"""
+    """買進時自動算出場價、支撐、壓力、前波高點（同一檔同一價 10 分鐘內不重算，買進流程問出場價時已經算過）"""
     k = (code, suffix, round(float(price), 4))
     hit = _LV_CACHE.get(k)
     if hit and time.time() - hit[0] < 600:
@@ -499,7 +558,7 @@ def levels_for(code, suffix, price):
 
 
 def _levels_for(code, suffix, price):
-    """有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 8%，目標留空、前高自動抓"""
+    """有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 8%，壓力留空、前高自動抓；支撐都會算"""
     raw = None
     try:
         import yfinance as yf
@@ -514,18 +573,20 @@ def _levels_for(code, suffix, price):
                     stop, _ = st.attack_stop(r, price)
                     if stop >= price or r["target"] <= price:      # 輸入的成交價跟現在的盤整區對不上（價位差太多），不能套用
                         break
-                    return {"stop": stop, "target": r["target"], "key": st.tick(r["key"]),
+                    sup, sup_why = support_for(raw, price)
+                    return {"stop": stop, "target": r["target"], "key": st.tick(r["key"]), "sup": sup, "sup_why": sup_why,
                             "why": f"依{cfg.STRATEGY_NAMES[r['name']]}型態", "pattern": True,
                             "pname": cfg.STRATEGY_NAMES[r['name']],
-                            "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、目標、前高\n依攻擊日規則自動算出\n要改請按「價位調整」"}
+                            "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、壓力、前高\n依攻擊日規則自動算出\n要改請按「價位調整」"}
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
     key = volume_key(raw, price) if raw is not None else None
     kline = (f"前高 {key:g}\n（近 65 日量最大那天的最高價）" if key
              else "前高留空\n（近 65 日沒有更高的價位）")
-    return {"stop": st.tick(price * (1 - BUY_STOP_PCT), "ceil"), "target": None, "key": key,
+    sup, sup_why = support_for(raw, price) if raw is not None else (None, "")
+    return {"stop": st.tick(price * (1 - BUY_STOP_PCT), "ceil"), "target": None, "key": key, "sup": sup, "sup_why": sup_why,
             "why": f"買價下 {BUY_STOP_PCT * 100:.0f}%", "pattern": False,
-            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n目標價留空\n" + kline + "\n要改請按「價位調整」"}
+            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n壓力留空\n" + kline + "\n要改請按「價位調整」"}
 
 
 # ================= 指令 =================
@@ -538,9 +599,9 @@ KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "�
 KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
                   "resize_keyboard": True, "is_persistent": True}
 FORMAT = {
-    "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 目標 1100\n也可以按下方「買進」按鈕",
+    "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 壓力 1100\n也可以按下方「買進」按鈕",
     "賣": "賣出格式：賣 代號（全部賣出）\n或 賣 2330 1張、賣 2330 500股",
-    "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：目標 1100、前高 1000",
+    "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：壓力 1100、支撐 900、前高 1000",
 }
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
@@ -556,9 +617,9 @@ HELP = ("🤖 *持股追蹤*\n"
 
 
 def _opts(words):
-    """把「出場 900 目標 1100 前高 1000」轉成 dict"""
+    """把「出場 900 壓力 1100 支撐 800 前高 1000」轉成 dict"""
     out = {}
-    names = {"出場": "stop", "目標": "target", "前高": "key"}
+    names = {"出場": "stop", "目標": "target", "壓力": "target", "支撐": "sup", "前高": "key"}
     for k in range(len(words) - 1):
         if words[k] in names:
             try:
@@ -570,7 +631,7 @@ def _opts(words):
 
 def handle(text, h):
     """處理一則持股指令（每個人自己的持股），回傳 (回覆文字, 持股是否有變)"""
-    m_ = re.match(r"^設\s*(\d{4,6})\s*(出場|目標|前高)\s*價?格?\s*[:：]?\s*([\d.,]+)\s*$", text.strip())
+    m_ = re.match(r"^設\s*(\d{4,6})\s*(出場|目標|壓力|支撐|前高)\s*價?格?\s*[:：]?\s*([\d.,]+)\s*$", text.strip())
     if m_:                                           # 「設6620出場價格123」這種寫法也看得懂
         text = f"設 {m_.group(1)} {m_.group(2)} {m_.group(3).replace(',', '')}"
     w = text.replace("/", " ").replace("，", " ").split()
@@ -606,13 +667,15 @@ def handle(text, h):
             x = h[code]
             x["avg"] = round((x["avg"] * x["shares"] + price * qty) / (x["shares"] + qty), 2)
             x["shares"] += qty
-            msg = f"✅ 已加碼 {code} {x['name']}\n加 {fmt_qty(qty)} @{_fmt(price)}\n共 {fmt_qty(x['shares'])}\n均價 {_fmt(x['avg'])}"
+            msg = (f"✅ <b>已加碼　{code} {esc(x['name'])}</b>\n"
+                   + kv([("加碼", f"{fmt_qty(qty)} @{_fmt(price)}"), ("共", fmt_qty(x['shares'])), ("均價", _fmt(x['avg']))]))
             if x["key"] and price >= x["key"] and not x["added"]:
                 x["added"] = True
                 new_stop = st.tick(x["key"] * (1 - cfg.ATTACK_STOP2_PCT))
                 if x["stop"] is None or new_stop > x["stop"]:
                     x["stop"] = new_stop
-                msg += f"\n\n突破前高後加碼\n出場價移到前高下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%\n出場 {_fmt(x['stop'])}"
+                msg += (f"\n⬆️ <b>突破前高後加碼</b>\n出場價移到前高下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%\n"
+                        + kv([("出場", _fmt(x['stop']))]))
             x.update(opt)
         else:
             name, sfx = stock_name_suffix(code)
@@ -620,24 +683,28 @@ def handle(text, h):
                 qi = quotes_quick({code: {"suffix": None}}, 6).get(code) or {}
                 name, sfx = qi.get("name") or code, qi.get("suffix") or sfx
             lv = levels_for(code, sfx, price)
-            x = {"name": name, "shares": qty, "avg": price, "stop": lv["stop"], "target": lv["target"],
+            x = {"name": name, "shares": qty, "avg": price, "stop": lv["stop"], "target": lv["target"], "sup": lv.get("sup"),
                  "key": lv["key"], "added": False, "suffix": sfx}
             h[code] = x
             sug = st.tick(price * (1 - BUY_STOP_PCT), "ceil")
             why = (lv["why"] if "stop" not in opt or abs(opt["stop"] - lv["stop"]) < 1e-9
                    else f"買價下 {BUY_STOP_PCT * 100:.0f}%" if abs(opt["stop"] - sug) < 1e-9 else "自己設定")
             x.update(opt)
-            price_l = (f"目標 {_fmt(x['target'])}　前高 {_fmt(x['key'])}" if x["target"] is not None or x["key"] is not None
-                       else "目標、前高　尚未設定")
-            msg = (f"✅ 已買進 {code} {name}\n{fmt_qty(qty)} @{_fmt(price)}\n\n"
-                   f"價位\n出場 {_fmt(x['stop'])}（{why}）\n{price_l}\n\n策略判斷\n{lv['note']}")
+            risk = (x["stop"] / price - 1) * 100
+            msg = (f"✅ <b>已買進　{code} {esc(name)}</b>\n{fmt_qty(qty)} @{_fmt(price)}\n\n"
+                   f"🎯 <b>價位</b>\n"
+                   + kv([("出場", f"{_fmt(x['stop'])}　{risk:+.1f}%".replace("-", "−")), ("", f"↳ {why}"),
+                         ("支撐", _fmt(x.get("sup"))), ("", f"↳ {lv['sup_why']}" if lv.get("sup_why") and x.get("sup") else ""),
+                         ("壓力", _fmt(x["target"])),
+                         ("前高", _fmt(x["key"]))])
+                   + f"\n🧭 <b>策略判斷</b>\n{esc(lv['note'])}")
         return msg, True
     if cmd == "賣" and len(w) == 2 and w[1] == "全部持股":          # 一次把所有持股都賣掉
         if not h:
             return "目前沒有持股", False
         names = "\n".join(f"{c} {x['name']}" for c, x in sorted(h.items()))
         h.clear()
-        return f"✅ 已全部賣出\n{names}\n\n持股已清空", True
+        return f"✅ <b>已全部賣出</b>\n<pre>{esc(names)}</pre>\n持股已清空", True
     if cmd == "賣" and len(w) >= 2:
         code = w[1]
         if code not in h:
@@ -651,22 +718,24 @@ def handle(text, h):
         h[code]["shares"] -= n
         if h[code]["shares"] <= 0:
             del h[code]
-            return f"✅ 已全部賣出 {code} {name}\n已從持股移除", True
-        return f"✅ 已賣出 {code} {name}\n賣 {fmt_qty(n)}\n剩 {fmt_qty(h[code]['shares'])}", True
+            return f"✅ <b>已全部賣出　{code} {esc(name)}</b>\n已從持股移除", True
+        return (f"✅ <b>已賣出　{code} {esc(name)}</b>\n"
+                + kv([("賣出", fmt_qty(n)), ("剩下", fmt_qty(h[code]['shares']))])), True
     if cmd == "設" and len(w) >= 4:
         code = w[1]
         if code not in h:
             return f"持股裡沒有 {code}", False
         opt = _opts(w[2:])
         if not opt:
-            return "格式：設 2330 出場 920\n也可以改：目標、前高", False
+            return "格式：設 2330 出場 920\n也可以改：壓力、支撐、前高", False
         h[code].update(opt)
         x = h[code]
-        msg = f"✅ 已更新 {code} {x['name']}\n出場 {_fmt(x['stop'])}\n目標 {_fmt(x['target'])}\n前高 {_fmt(x['key'])}"
+        msg = (f"✅ <b>已更新　{code} {esc(x['name'])}</b>\n"
+               + kv([("出場", _fmt(x["stop"])), ("支撐", _fmt(x.get("sup"))), ("壓力", _fmt(x["target"])), ("前高", _fmt(x["key"]))]))
         try:                                                   # 出場價已經高於現價 → 當場提醒，不用乾等
             pq = (quotes_for({code: x}).get(code) or {}).get("last")
             if pq and x["stop"] and pq <= x["stop"]:
-                msg += f"\n\n⚠️ 現價 {pq:g} 已低於出場價\n盤中監控下一輪（約 1 分鐘內）\n會送出跌破提醒"
+                msg += f"\n⚠️ <b>現價 {pq:g} 已低於出場價</b>\n盤中監控下一輪（約 1 分鐘內）\n會送出跌破提醒"
         except Exception:
             pass
         return msg, True
@@ -743,10 +812,10 @@ def clear_chat(cid, upto, keep):
 def send_kb(cid, text, kb=None, html_mode=False):
     """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。html_mode：文字是 HTML（查價用）。回傳訊息編號"""
     kb = kb or (KEYBOARD_OWNER if cid == OWNER else KEYBOARD)
-    if html_mode:
+    if html_mode or is_html(text):
         j = tg("sendMessage", chat_id=cid, text=text, parse_mode="HTML", reply_markup=kb)
         if not j.get("ok"):                              # HTML 出錯就去掉標籤再送
-            j = tg("sendMessage", chat_id=cid, text=html.unescape(re.sub(r"</?(b|code)>", "", text)), reply_markup=kb)
+            j = tg("sendMessage", chat_id=cid, text=plain(text), reply_markup=kb)
     else:
         j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb)
     mid = (j.get("result") or {}).get("message_id")
@@ -822,20 +891,31 @@ def guided(cid, text, h):
                 return None
             s_["code"], s_["step"] = cm.group(0), "field"
             x = h[s_["code"]]
-            send_kb(cid, f"{s_['code']} {x['name']}\n出場價 {_fmt(x['stop'])}\n目標價 {_fmt(x['target'])}\n前高 {_fmt(x['key'])}\n要改哪一個？",
-                    _kb([["出場價", "目標價", "前高"], ["取消"]]))
+            send_kb(cid, f"{s_['code']} {x['name']}\n出場價 {_fmt(x['stop'])}\n支撐 {_fmt(x.get('sup'))}\n壓力 {_fmt(x['target'])}\n前高 {_fmt(x['key'])}\n要改哪一個？",
+                    _kb([["出場價", "支撐"], ["壓力", "前高"], ["取消"]]))
             return None
         if s_["step"] == "field":
-            if t not in ("出場價", "目標價", "前高"):
-                send_kb(cid, "請按下面的按鈕", _kb([["出場價", "目標價", "前高"], ["取消"]]))
+            t = {"目標價": "壓力", "目標": "壓力"}.get(t, t)
+            if t not in ("出場價", "支撐", "壓力", "前高"):
+                send_kb(cid, "請按下面的按鈕", _kb([["出場價", "支撐"], ["壓力", "前高"], ["取消"]]))
                 return None
             s_["field"], s_["step"] = t[:2], "price"
             if t == "前高":
                 send_kb(cid, "新的前高是多少？\n輸入數字，例：123\n或按「自動抓」\n（近 65 日量最大那天的最高價）",
                         _kb([["自動抓"], ["取消"]]))
+            elif t == "支撐":
+                send_kb(cid, "新的支撐是多少？\n輸入數字，例：123\n或按「自動抓」\n（近 5 日有量的低點）", _kb([["自動抓"], ["取消"]]))
             else:
                 send_kb(cid, f"新的{t}是多少？\n輸入數字，例：123", _kb([["取消"]]))
             return None
+        if s_["field"] == "支撐" and t == "自動抓":
+            x = h[s_["code"]]
+            v = auto_support(s_["code"], x.get("suffix"), x["avg"])
+            if v is None:
+                send_kb(cid, "抓不到合適的支撐\n（近 5 日沒有比均價更低的價）\n請自己輸入數字", _kb([["取消"]]))
+                return None
+            SESSIONS.pop(cid, None)
+            return f"設 {s_['code']} 支撐 {v:g}"
         if s_["field"] == "前高" and t == "自動抓":
             x = h[s_["code"]]
             v = auto_key(s_["code"], x.get("suffix"), x["avg"])
@@ -1065,7 +1145,7 @@ def _handle_message(m, state, asked):
         delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的持股畫面刪掉，只留最新一則
         LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply)]
     elif reply:
-        send_kb(cid, reply, html_mode=reply.startswith("🔎"))
+        send_kb(cid, reply)
 
 
 def handle_message(m, state, asked):
@@ -1455,12 +1535,14 @@ def quote_report(codes):
             lamp = "▲" if diff > 0 else "▼" if diff < 0 else "－"
             chg = f"　{sg}{_n(round(abs(diff), 2))}　{sg}{abs(diff / prev * 100):,.2f}%" if diff else "　平盤"
         out += ["", f"{lamp} <b>{name}</b>　{c}", f"<b>{_n(last)}</b>{chg}"]
-        rows = ([("昨收", prev)] if prev else []) + [("最高", x.get("high")), ("最低", x.get("low"))]
-        w = max(len(_n(v)) for _, v in rows)
-        out.append("<code>" + "\n".join(f"{k} {_n(v):>{w}}" for k, v in rows) + "</code>")
+        rows = ([("昨收", _n(prev))] if prev else []) + [("最高", _n(x.get("high"))), ("最低", _n(x.get("low")))]
+        w = max(len(v) for _, v in rows)
+        body = [f"{k}  {v:>{w}}" for k, v in rows]
         pos = range_pos(last, x.get("high"), x.get("low"))
         if pos is not None:
-            out.append(f"<code>{range_bar(pos)}</code>")
+            body.append(range_bar(pos))
+        out.append("<pre>" + "\n".join(body) + "</pre>")
+        if pos is not None:
             vp = volume_profile(c, last) if time.time() < t_end else None
             if vp:
                 ps, poc = vp
@@ -1555,7 +1637,7 @@ def check_once(watch, books, sent, today, last=None, now=None):
             to_group(f"🎯 *追價提醒*　{w['code']} {w['name']}\n"
                      f"盤中漲到追價點 {w['chase']:g}\n最高 {v['high']:g}\n"
                      f"成交價 {v['last']:g}（{chg:+.1f}%）{back}\n"
-                     f"出場 {w['stop1']:g}｜目標 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
+                     f"出場 {w['stop1']:g}｜壓力 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
                      f"📊 {tv(w['code'], w['suffix'])}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
@@ -1564,21 +1646,34 @@ def check_once(watch, books, sent, today, last=None, now=None):
                 continue                                    # 今天還沒成交：last 是昨收，不拿來觸發提醒
             p = v["last"]
             lag = "\n（備用報價，約延遲 20 分）" if v.get("delayed") else ""
+            pl = f"{(p / x['avg'] - 1) * 100:+.1f}%".replace("-", "−")
+            nm = esc(x["name"])
             why = _due(last, ("stop", cid, code), bool(x["stop"] and p <= x["stop"]), now)
             if why:
                 _alert_once(cid, last, ("stop", cid, code), why,
-                            f"🛑 *跌破出場價*　{code} {x['name']}\n成交價 {p:g}，出場價 {x['stop']:g}\n"
-                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）{lag}\n要賣請按下方按鈕", code, x["name"], now)
+                            f"🛑 <b>跌破出場價</b>　{code} {nm}\n"
+                            + kv([("成交價", f"{p:g}"), ("出場價", f"{x['stop']:g}"), ("均價", f"{x['avg']:g}　{pl}")])
+                            + f"{lag}\n要賣請按下方按鈕", code, x["name"], now)
             if x["key"] and not x["added"] and p >= x["key"] and ("add", cid, code) not in sent:
                 sent.add(("add", cid, code))
-                send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n成交價 {p:g}，前高 {x['key']:g}\n"
-                             f"可以加碼第二筆\n加碼後出場價移到 {st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}\n"
-                             f"加碼請按「買進」\n或回覆：買 {code} 1張 價格")
+                tg("sendMessage", chat_id=str(cid), parse_mode="HTML", text=(
+                    f"⬆️ <b>站上前波高點</b>　{code} {nm}\n"
+                    + kv([("成交價", f"{p:g}"), ("前高", f"{x['key']:g}"),
+                          ("加碼後出場", f"{st.tick(x['key'] * (1 - cfg.ATTACK_STOP2_PCT)):g}")])
+                    + f"\n可以加碼第二筆\n加碼請按「買進」\n或回覆：買 {code} 1張 價格"))
+            sup = x.get("sup")                              # 跌破支撐：先預警；已經跌破出場價的話 🛑 那則就夠了
+            why = _due(last, ("sup", cid, code), bool(sup and p <= sup and not (x["stop"] and p <= x["stop"])), now)
+            if why:
+                _alert_once(cid, last, ("sup", cid, code), why,
+                            f"⚠️ <b>跌破支撐</b>　{code} {nm}\n"
+                            + kv([("成交價", f"{p:g}"), ("支撐", f"{sup:g}"), ("出場價", _fmt(x["stop"])), ("均價", f"{x['avg']:g}　{pl}")])
+                            + f"{lag}\n還沒到出場價，先預警\n要賣請按下方按鈕", code, x["name"], now)
             why = _due(last, ("target", cid, code), bool(x["target"] and p >= x["target"]), now)
             if why:
                 _alert_once(cid, last, ("target", cid, code), why,
-                            f"🎯 *碰到目標價*　{code} {x['name']}\n成交價 {p:g}，目標 {x['target']:g}\n"
-                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）{lag}\n要賣請按下方按鈕", code, x["name"], now)
+                            f"🎯 <b>碰到壓力</b>　{code} {nm}\n"
+                            + kv([("成交價", f"{p:g}"), ("壓力", f"{x['target']:g}"), ("均價", f"{x['avg']:g}　{pl}")])
+                            + f"{lag}\n要賣請按下方按鈕", code, x["name"], now)
     return len(traded)
 
 
