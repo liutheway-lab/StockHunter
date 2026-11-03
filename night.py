@@ -114,6 +114,23 @@ def market_block(mk):
 
 
 # ---------- 掃描 ----------
+def dedupe_similar(lists, active):
+    """創高拉回和噴出後整理再攻的攻擊日進場規則一樣，同一檔常常兩邊都符合。
+    兩邊都有的股票只留一份：預設留在「噴出後整理再攻」，並標上也符合創高拉回；
+    如果只有「創高拉回」是啟用的策略（例如大盤第 3 層），就留在創高拉回。"""
+    a, b = lists.get("pullback"), lists.get("flag")
+    if a is None or b is None:
+        return
+    keep_flag = "flag" in active or "pullback" not in active
+    keep, drop, kname, dname = (b, a, "flag", "pullback") if keep_flag else (a, b, "pullback", "flag")
+    dsyms = {h["sym"] for h in drop}
+    for h in keep:
+        if h["sym"] in dsyms:
+            h["also"] = cfg.STRATEGY_NAMES[dname]
+    ksyms = {h["sym"] for h in keep}
+    lists[dname][:] = [h for h in drop if h["sym"] not in ksyms]
+
+
 def scan(prices, mk, ratios):
     """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數)"""
     hits = {k: [] for k in ORDER}
@@ -154,13 +171,16 @@ def scan(prices, mk, ratios):
                 w = st.watch_tomorrow(raw, name)
                 if w:
                     plan = st.attack_plan(w, entry=w["chase_px"])
-                    watch[name].append({"sym": sym, "r": w, "plan": plan, "turnover": w["turnover"]})
+                    watch[name].append({"sym": sym, "r": w, "plan": plan, "turnover": w["turnover"],
+                                        "prev": float(raw["Close"].iloc[-2]) if len(raw) >= 2 else None})
         except Exception as e:   # 單一股票出錯不影響整體
             print(f"{sym} 分析失敗：{e!r}")
     for k in hits:
         hits[k].sort(key=lambda x: -x["turnover"])
     for k in watch:
         watch[k].sort(key=lambda x: -x["turnover"])
+    dedupe_similar(hits, mk["active"])
+    dedupe_similar(watch, mk["active"])
     return hits, liquid, stale, funnel, watch
 
 
@@ -215,7 +235,8 @@ def strategy_block(name, items, names, risk, note=""):
         code = h["sym"].split(".")[0]
         broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
         vl = h.get("vl")
-        labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else "") + (f" {vl['side']}" if vl else ""))
+        labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else "") + (f" {vl['side']}" if vl else "")
+                      + ("◆" if h.get("also") else ""))
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
     cols = [("現價", 3), ("突破價", 1), ("出場價", 1), ("目標", 1)]          # 表頭縮短，整行才不會被切成兩行
     lines = [_padr("代號 名稱", W) + "".join(" " * pad + c for c, pad in cols)]
@@ -239,6 +260,9 @@ def strategy_block(name, items, names, risk, note=""):
     legend = ("\n壓＝第1大量日最高點在現價上"
               "\n撐＝第1大量日最低點在現價下"
               "\n（65 日內成交量最大的那天）")
+    also = sorted({h["also"] for h in shown if h.get("also")})
+    if also:
+        legend += f"\n◆＝也符合{'、'.join(also)}"
     return title + "\n" + code_block(lines, header=True) + rr_txt + legend + more + "\n📊 TradingView 線圖：" + links
 
 
@@ -246,7 +270,8 @@ def watch_block(name, items, names, note=""):
     """明日追價名單：明天盤中漲 4% 且突破盤整高點，就是追價點"""
     title = f"*👀 明日追價名單・{cfg.STRATEGY_NAMES[name]}*　{len(items)} 檔" + note
     shown = items[:MAX_LIST]
-    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" for h in shown]
+    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" + ("◆" if h.get("also") else "")
+              for h in shown]
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
     cols = [("現價", 3), ("追價點", 1), ("出場價", 1), ("目標", 1)]
     lines = [_padr("代號 名稱", W) + "".join(" " * pad + c for c, pad in cols)]
@@ -260,6 +285,9 @@ def watch_block(name, items, names, note=""):
               f"\n盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天、離前高 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%"
               f"\n追價點離現價最多 {cfg.CHASE_MAX_DIST * 100:.0f}%"
               f"\n盤中看強弱再決定追不追")
+    also = sorted({h["also"] for h in shown if h.get("also")})
+    if also:
+        legend += f"\n◆＝也符合{'、'.join(also)}"
     links = "　".join(tv_link(h["sym"]) for h in shown)
     return title + "\n" + code_block(lines, header=True) + legend + more + "\n📊 TradingView 線圖：" + links
 
@@ -289,6 +317,7 @@ def save_results(mk, hits, names, directory, now, watch=None):
                 "close": round(h["r"]["close"], 2), "key": h["plan"]["key"], "stop1": h["plan"]["stop1"],
                 "target": h["plan"]["targets"][0][1], "turnover": round(h["turnover"]),
                 "broke": bool(name == "flag" and h["r"].get("status", "").startswith("已突破")),
+                **({"also": h["also"]} if h.get("also") else {}),
                 **({"vl_low": h["vl"]["level"], "vl_date": f"{h['vl']['date']:%m/%d}", "vl_vol": round(h["vl"]["vol"]),
                     "vl_side": h["vl"]["side"]} if h.get("vl") else {}),
             })
@@ -302,7 +331,8 @@ def save_results(mk, hits, names, directory, now, watch=None):
             rows.append({"code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
                          "industry": ind or "", "market": mkt or "", "close": round(h["r"]["close"], 2),
                          "chase": h["plan"]["e"], "stop1": h["plan"]["stop1"], "target": h["plan"]["targets"][0][1],
-                         "key": h["plan"]["key"], "days": int(h["r"].get("n_cons", 0)), "turnover": round(h["turnover"])})
+                         "key": h["plan"]["key"], "days": int(h["r"].get("n_cons", 0)), "turnover": round(h["turnover"]),
+                         **({"prev": round(h["prev"], 2)} if h.get("prev") else {})})
         out["watch"][name] = rows
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
