@@ -261,6 +261,34 @@ def vol_low(df, days=65):
             "vol": float(d.loc[day, "Volume"]) / 1000.0, "side": "壓" if pressure else "撐"}
 
 
+def check_absorb(df, i):
+    """恐慌承接（只做觀察名單）：今天殺低後被買回來，而且有量。
+    長下影＝下影線占當天高低差 ≥ 50%；長紅＝收紅且實體占 ≥ 80%（跟大盤止跌確認的 K 棒同一套）；兩者其一，量 ≥ 20 日均量 1.5 倍，當天振幅 ≥ 8%。
+    不符合回傳 None"""
+    r = df.iloc[i]
+    o, h, l, c = (float(r[k]) for k in ("Open", "High", "Low", "Close"))
+    mav20, vol = float(r["MAV20"]), float(r["Volume"])
+    rng = h - l
+    if rng <= 0 or not mav20 or mav20 != mav20 or vol <= 0:
+        return None
+    vm = vol / mav20
+    if vm < cfg.ABSORB_VOL_MULT:
+        return None
+    prev = float(df["Close"].iloc[i - 1]) if i >= 1 else c
+    if prev and rng / prev < cfg.ABSORB_MIN_RANGE:
+        return None
+    shadow, body = (min(o, c) - l) / rng, (c - o) / rng
+    kinds = []
+    if shadow >= cfg.STAB_SHADOW:
+        kinds.append("長下影")
+    if c > o and body >= cfg.STAB_RED_BODY:
+        kinds.append("長紅")
+    if not kinds:
+        return None
+    return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow,
+            "body": body, "chg": (c / prev - 1) if prev else 0.0, "turnover": float(r["TURN20"])}
+
+
 def active_strategies(layer, stab_ok):
     """依大盤層級決定哪些策略啟用。回傳 (策略清單, 是否要標示風險)"""
     if not cfg.USE_REGIME:
