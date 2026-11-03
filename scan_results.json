@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-03 18:17",
+ "generated_at": "2026-11-03 22:16",
  "data_date": "2026-11-03",
  "layer": 4,
  "layer_name": "空頭",
@@ -26,7 +26,8 @@
     "target": 88.2,
     "key": 83.0,
     "days": 5,
-    "turnover": 1033161743
+    "turnover": 1033161743,
+    "prev": 80.6
    },
    {
     "code": "2880",
@@ -40,21 +41,8 @@
     "target": 55.8,
     "key": 51.0,
     "days": 5,
-    "turnover": 654991580
-   },
-   {
-    "code": "2006",
-    "name": "東和鋼鐵",
-    "suffix": ".TW",
-    "industry": "鋼鐵工業",
-    "market": "上市",
-    "close": 89.6,
-    "chase": 94.0,
-    "stop1": 89.5,
-    "target": 105.0,
-    "key": 96.0,
-    "days": 5,
-    "turnover": 155307775
+    "turnover": 654991580,
+    "prev": 49.6
    }
   ],
   "flag": []
