@@ -46,7 +46,7 @@ API = f"https://api.telegram.org/bot{TG_TOKEN}"
 POLL_SEC = 60
 OPEN_AT, CLOSE_AT = (9, 0), (13, 31)
 REPEAT_SEC = 30 * 60          # 條件一直成立：每 30 分鐘再提醒一次
-TAIL_AT = (13, 15)            # 尾盤：13:15 之後再補一次
+TAIL_AT = (13, 15)            # 尾盤：13:15 一定要再提醒一次（盤中監控每分鐘查，所以 13:15～13:16 就會送出）；送過就不再定期提醒
 HOLD_TAG = "📌 持股清單"
 STATUS_TAG = "⏱ 盤中監控"
 HIDE_URL = "https://t.me/zhezhe_users?d="      # 使用者名單藏在置頂標題 📌 的連結裡（畫面上看不到）
@@ -1619,18 +1619,19 @@ def tv(code, sfx):
 
 
 def _due(last, key, hit, now):
-    """持股提醒要不要送：None＝不用、first＝第一次、again＝過了 30 分鐘還成立、tail＝尾盤補一次。條件消失就清掉紀錄"""
+    """持股提醒要不要送：None＝不用、first＝第一次、again＝過了 30 分鐘還成立、tail＝尾盤最後提醒。條件消失就清掉紀錄。
+    尾盤（13:15 起）：還成立、而且還沒送過尾盤提醒 → 馬上送一次（不管離上一則多久），優先於 30 分鐘一次的定期提醒；
+    送過尾盤提醒之後，就不再定期提醒了"""
     if not hit:
         last.pop(key, None)
         return None
     rec = last.get(key)
     if rec is None:
         return "first"
-    gap = (now - rec["t"]).total_seconds()
-    if gap >= REPEAT_SEC:
+    if (now.hour, now.minute) >= TAIL_AT:
+        return None if rec["tail"] else "tail"
+    if (now - rec["t"]).total_seconds() >= REPEAT_SEC:
         return "again"
-    if (now.hour, now.minute) >= TAIL_AT and not rec["tail"] and gap >= 600:
-        return "tail"
     return None
 
 
