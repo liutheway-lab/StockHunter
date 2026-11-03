@@ -631,18 +631,13 @@ def rec_buttons(prefix, strategy, items, limit=15):
 def watch_buttons(name, items, limit=15):
     for it in items[:limit]:
         up = (it["chase"] / it["close"] - 1) * 100 if it["close"] else 0
-        # 按鈕只放名稱和現價，追價、出場放在下面一行小字，手機上每一行都不會被切斷
-        prev = it.get("prev")                          # 前一天收盤（舊的掃描結果沒有，就只顯示現價）
-        chg = f" {'▲' if it['close'] > prev else '▼' if it['close'] < prev else '─'}{abs(it['close'] - prev):.2f}（{(it['close'] / prev - 1) * 100:+.1f}%）" \
-            if prev else ""
-        if st.button(f"{it['code']} {it['name']} {px(it['close'])}{chg}",
-                     key=f"watch_{name}_{it['code']}", use_container_width=True):
+        if st.button(f"{it['code']} {it['name']}", key=f"watch_{name}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()
-        st.caption(f"追價點 {px(it['chase'])}（{up:+.1f}%）　　　出場價 {px(it['stop1'])}")
+        st.caption(f"現價 {px(it['close'])}　追價點 {px(it['chase'])}（{up:+.1f}%）　出場價 {px(it['stop1'])}")
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
-    st.caption(L("第一行：資料日收盤、漲跌點、幅度", "追價點＝明天要漲到的價格", "（%）＝追價點比現價高多少",
+    st.caption(L("現價＝資料日收盤", "追價點＝明天要漲到的價格", "（%）＝追價點比現價高多少",
                  f"追價點是漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點", "盤中看強弱再決定追不追"))
 
 
@@ -937,23 +932,22 @@ if target:
                 st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
                                 config={"displayModeBar": False, "staticPlot": True})
 
-            vi = vol_low_info(df)
-            if vi:
-                m_ = vi["main"]
-                head = f"**近 65 交易日{m_['name']}　{m_['key']}（{m_['vol']:,.0f} 張）**"
-                if m_["pressure"]:
-                    st.markdown(L(head, f"最高點 {px(m_['high'])}，高於現價 {px(close)}",
-                                  "🔴 很可能是短線壓力，不利上攻"))
-                    sp = vi["sup"]
-                    if sp:
-                        st.markdown(L(f"**近 65 交易日{sp['name']}　{sp['key']}（{sp['vol']:,.0f} 張）**",
-                                      f"最低點 {px(sp['low'])}，低於現價 {px(close)}（{(sp['low'] / close - 1) * 100:+.1f}%）",
-                                      "🟢 可作短線支撐，或出場價的參考"))
-                    else:
-                        st.caption("近 65 交易日的前 5 大量，最低點都在現價之上，下方沒有明確支撐")
-                else:
-                    st.markdown(L(head, f"最低點 {px(m_['low'])}，低於現價 {px(close)}",
-                                  "🟢 可作為短期支撐，或出場價的參考"))
+            try:                                       # 壓力／支撐：跟圖上畫的虛線同一套規則（chart_png.vol_levels）
+                lv = chart_png.vol_levels(df)
+            except Exception:
+                lv = {"press": None, "supp": None}
+            pr, sp = lv["press"], lv["supp"]
+            if pr:
+                st.markdown(L(f"**壓力　{pr['day']:%m/%d}　大量 {pr['vol']:,.0f} 張**",
+                              f"最高點 {px(pr['level'])}，高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
+                              "🔴 上方套牢區，漲上去容易有賣壓"))
+            if sp:
+                st.markdown(L(f"**支撐　{sp['day']:%m/%d}　大量 {sp['vol']:,.0f} 張**",
+                              f"最低點 {px(sp['level'])}，低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
+                              "🟢 可作短線支撐，或出場價的參考"))
+            if not pr and not sp:
+                st.caption("近 65 交易日沒有明顯的大量（需達 20 日均量 1.5 倍），上下都沒有標壓力或支撐")
+            st.caption("取近 65 交易日；日期標在圖上，太久以前的大量參考價值較低")
             st.caption(L(f"以下依可用資金 {capital:,.0f} 元", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
