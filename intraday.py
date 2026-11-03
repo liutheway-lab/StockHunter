@@ -515,8 +515,8 @@ def levels_for(code, suffix, price):
 # ================= 指令 =================
 # 輸入框按「/」會跳出的選單（Telegram 規定指令只能用英文，中文直接打也可以）
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
-ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設"}
-KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "改價位"}], [{"text": "說明"}]],
+ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設", "quote": "查價", "price": "查價"}
+KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "改價位"}], [{"text": "查價"}, {"text": "說明"}]],
             "resize_keyboard": True, "is_persistent": True}
 KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"] + [[{"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
                   "resize_keyboard": True, "is_persistent": True}
@@ -531,6 +531,7 @@ HELP = ("🤖 *持股追蹤*\n"
         "賣出　→ 選股票、數量\n"
         "持股　→ 看目前持股與即時損益\n"
         "改價位　→ 選股票、改價位\n"
+        "查價　→ 輸入代號看最新成交價\n"
         "\n"
         "數量可以打「2張」或「500股」。\n"
         "價位碰到時，機器人會私訊你。")
@@ -563,6 +564,11 @@ def handle(text, h):
         return HELP, False
     if cmd in FORMAT and len(w) < (2 if cmd == "賣" else 4):
         return FORMAT[cmd], False                    # 只打了指令、沒打完 → 告訴你格式
+    if cmd == "查價":
+        codes = list(dict.fromkeys(re.findall(r"\d{4,6}", " ".join(w[1:]))))[:10]
+        if not codes:
+            return "查價格式：查價 2330\n一次查多檔：查價 2330 2317\n也可以按下方「查價」按鈕", False
+        return quote_report(codes), False
     if cmd == "持股":
         q = quotes_quick(h, 10)
         apply_quote_info(h, q)
@@ -732,6 +738,11 @@ def guided(cid, text, h):
         rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["全部持股一次賣出"], ["取消"]]
         send_kb(cid, "要賣哪一檔？\n或一次全部賣掉", _kb(rows))
         return None
+    if t == "查價":
+        SESSIONS[cid] = {"flow": "quote", "step": "code"}
+        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
+        send_kb(cid, "要查哪幾檔？\n輸入代號，可以一次多檔\n例：2330 2317" + ("\n或按下面的持股" if h else ""), _kb(rows))
+        return None
     if t == "改價位":
         if not h:
             send_kb(cid, "目前沒有持股")
@@ -741,6 +752,13 @@ def guided(cid, text, h):
         send_kb(cid, "要改哪一檔？", _kb(rows))
         return None
     s_ = SESSIONS[cid]
+    if s_["flow"] == "quote":
+        codes = list(dict.fromkeys(re.findall(r"\d{4,6}", t)))
+        if not codes:
+            send_kb(cid, random.choice(NAME_JOKES), _kb([["取消"]]))
+            return None
+        SESSIONS.pop(cid, None)
+        return "查價 " + " ".join(codes[:10])
     if s_["flow"] == "sell" and s_["step"] == "code" and t == "全部持股一次賣出":
         s_["step"] = "confirm_all"
         names = "\n".join(f"{c} {x['name']} {fmt_qty(x['shares'])}" for c, x in sorted(h.items()))
@@ -933,12 +951,12 @@ def _handle_message(m, state, asked):
     me = get(cid)
     if cid in SESSIONS and text in ("持股", "說明"):            # 做到一半按了別的功能：先中止目前這一串
         SESSIONS.pop(cid, None)
-    if text in ("買進", "賣出", "改價位", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
+    if text in ("買進", "賣出", "改價位", "查價", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
         if text == "取消" and cid not in SESSIONS:
             TRACK.setdefault(cid, []).append(m.get("message_id"))   # 管理者選單的取消：連同選單一起清掉
-        if text in ("買進", "賣出", "改價位"):
+        if text in ("買進", "賣出", "改價位", "查價"):
             TRACK[cid] = []                            # 開始新的一次操作
-        if cid in SESSIONS or text in ("買進", "賣出", "改價位"):
+        if cid in SESSIONS or text in ("買進", "賣出", "改價位", "查價"):
             TRACK.setdefault(cid, []).append(m.get("message_id"))
         line = guided(cid, text, me[0])
         if line is None:
@@ -1068,7 +1086,7 @@ def _twse_fetch(ex):
                 return None
         last = f("z") or f("y")        # 只用最後一筆成交價；今天還沒成交就用昨收，不拿買賣報價
         if last:
-            res[q["c"]] = {"last": last, "high": f("h") or last, "prev": f("y"), "date": q.get("d", ""),
+            res[q["c"]] = {"last": last, "high": f("h") or last, "low": f("l") or last, "prev": f("y"), "date": q.get("d", ""),
                            "name": (q.get("n") or "").strip() or None,
                            "suffix": {"otc": ".TWO", "emg": ".EMG"}.get(q.get("ex"), ".TW")}
     return res
@@ -1112,7 +1130,7 @@ def _get_quotes_once(items):
                         last = float(fi["last_price"])
                     except Exception:
                         continue
-                    out[code] = {"last": last, "high": float(fi.get("day_high") or last),
+                    out[code] = {"last": last, "high": float(fi.get("day_high") or last), "low": float(fi.get("day_low") or last),
                                  "prev": float(fi.get("previous_close") or 0) or None,
                                  "date": datetime.now(TZ).strftime("%Y%m%d"), "name": None, "suffix": sf}
                     break
@@ -1146,6 +1164,28 @@ def apply_quote_info(h, q):
 
 def quotes_for(h):
     return get_quotes([(c, x.get("suffix") or guess_suffix(c)) for c, x in h.items()])
+
+
+def quote_report(codes):
+    """查價：任意股票的最新成交價、昨收、今日高低（最多 10 檔）"""
+    q = quotes_quick({c: {"suffix": None} for c in codes}, 10)
+    lines = [f"🔎 查價　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
+    for c in codes:
+        x = q.get(c)
+        if not x:
+            lines += ["", f"⚪ {c}　查不到"]
+            continue
+        last, prev = x["last"], x.get("prev")
+        lamp, now_l = "⚪", f"成交價 {_n(last)}"
+        if prev:
+            pct = (last / prev - 1) * 100
+            lamp = "🔴" if pct > 0 else "🟢" if pct < 0 else "⚪"
+            now_l += f"　{'+' if pct >= 0 else '−'}{abs(pct):,.1f}%"
+        lines += ["", f"{lamp} {c} {x.get('name') or c}", now_l]
+        if prev:
+            lines.append(f"昨收 {_n(prev)}")
+        lines.append(f"今日高 {_n(x.get('high'))}　低 {_n(x.get('low'))}")
+    return "\n".join(lines)
 
 
 def holdings_report(h, q, title="📋 持股"):
