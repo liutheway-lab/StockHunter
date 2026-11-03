@@ -24,7 +24,6 @@ def _pos(index, d):
 
 
 BADGE = "#1c7ed6"      # 現價標籤的顏色（藍底白字，跟紅漲綠跌、各種虛線都分得開）
-EXTRA = 8              # 圖右側多留幾根的空白，現價標籤放在這裡，不會壓到 K 線或其他字
 
 
 def _price_header(fig, close, decimals=2, y=0.925):
@@ -40,12 +39,33 @@ def _price_header(fig, close, decimals=2, y=0.925):
              fontweight="bold", ha="left", va="top")
 
 
-def _price_badge(ax, n, last, decimals=2):
-    """現價：從最後一根 K 線拉一小段線到右側空白區，標籤是藍底白字"""
-    ax.plot([n - 1, n - 0.3], [last, last], color=BADGE, linewidth=1.3, zorder=7, clip_on=False)
-    ax.text(n - 0.1, last, f"現價\n{last:,.{decimals}f}", fontsize=9, color="white", fontweight="bold", ha="left",
-            va="center", zorder=8, clip_on=False, linespacing=1.15,
-            bbox=dict(boxstyle="round,pad=0.25", fc=BADGE, ec="none"))
+def _price_line(ax, d, last, decimals=2, avoid=()):
+    """現價：整張圖畫一條藍色虛線，字標在線上方，位置挑「沒有 K 線、沒有其他標籤」的地方，不會壓到字。
+    avoid＝其他已經在圖上的文字（y 值），d＝畫出來的那些日線"""
+    n = len(d)
+    ylo, yhi = ax.get_ylim()
+    rng = yhi - ylo
+    ax.axhline(last, color=BADGE, linestyle=(0, (5, 3)), linewidth=1.3, zorder=4)
+    h, w = rng * 0.07, 13                       # 字大約佔的高度（價格）和寬度（根數）
+    y0, y1 = last + rng * 0.008, last + rng * 0.008 + h
+    if y1 > yhi - rng * 0.02:                    # 太靠上緣就改標在線下方
+        y1 = last - rng * 0.008
+        y0 = y1 - h
+    hi, lo = d["High"].to_numpy(float), d["Low"].to_numpy(float)
+    best = None
+    for x0 in sorted(set([1, 8, 18, 28, 38, 48, max(n - w - 1, 1)])):
+        if x0 + w > n:
+            continue
+        pen = int(((lo[x0:x0 + w] <= y1) & (hi[x0:x0 + w] >= y0)).sum())
+        pen += sum(6 for ay in avoid if y0 - rng * 0.03 <= ay <= y1 and x0 + w >= n - 17)   # 右側的壓力、支撐字
+        if y1 > yhi - rng * 0.10 and x0 < 24:                                              # 左上角圖例
+            pen += 6
+        if best is None or pen < best[0]:
+            best = (pen, x0)
+    x0 = best[1] if best else 1
+    ax.text(x0, y0 if y0 > last else y0, f"現價 {last:,.{decimals}f}", fontsize=9, color="white", fontweight="bold",
+            ha="left", va="bottom" if y0 > last else "bottom", zorder=8,
+            bbox=dict(boxstyle="round,pad=0.2", fc=BADGE, ec="none", alpha=0.95))
 
 
 def market_chart(mk, bars=45):
@@ -154,8 +174,8 @@ def market_chart(mk, bars=45):
     ticks = list(range(0, len(d), step))
     last_ax.set_xticks(ticks)
     last_ax.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
-    last_ax.set_xlim(-1, len(d) + EXTRA)
-    _price_badge(ax, len(d), float(d["Close"].iloc[-1]), 0)
+    last_ax.set_xlim(-1, len(d))
+    _price_line(ax, d, float(d["Close"].iloc[-1]), 0)
 
     if stab_mode:
         verdict = "通過" if mk["stab"].get("ok") else ("無法確認" if mk["stab"].get("vol_missing") else "未通過")
@@ -259,7 +279,8 @@ def stock_chart(df, title="", bars=65):
     for k, (val, txt, col, ls) in enumerate(marks):
         ax.axhline(val, color=col, linestyle=ls, linewidth=0.9, alpha=0.75)
         ax.text(n - 1.2, ys[k] + rng_v * 0.012, txt, fontsize=9, color=col, va="bottom", ha="right", bbox=bb, zorder=7)
-    _price_badge(ax, n, last)
+    ax.set_xlim(-1, n)
+    _price_line(ax, d, last, 2, avoid=[m[0] for m in marks])
     ax.set_ylabel("價格")
     ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
     ax.grid(alpha=0.15)
@@ -287,7 +308,7 @@ def stock_chart(df, title="", bars=65):
     ticks = list(range(0, n, step))
     axv.set_xticks(ticks)
     axv.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
-    axv.set_xlim(-1, n + EXTRA)
+    axv.set_xlim(-1, n)
     fig.suptitle(f"{title}　{idx[0]:%m/%d}–{idx[-1]:%m/%d}".strip(), fontsize=11, x=0.02, ha="left")
     _price_header(fig, d["Close"])
     fig.tight_layout(rect=(0, 0, 1, 0.92))
