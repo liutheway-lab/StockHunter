@@ -306,14 +306,15 @@ def absorb_block(items, names, note=""):
     shown = items[:MAX_LIST]
     labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" for h in shown]
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    lines = [_padr("代號 名稱", W) + " 現價 今日最低 量"]
+    lines = [_padr("代號 名稱", W) + " 現價 今日最低 量能"]
     for h, lab in zip(shown, labels):
         r = h["r"]
         lines.append(_padr(lab, W) + f" {fp(r['close']):>5} {fp(r['low']):>5} {r['vol_mult']:.1f}倍")
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
     legend = (f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
               f"\n長紅＝收紅且實體占 {cfg.STAB_RED_BODY * 100:.0f}% 以上"
-              f"\n量＝今天量 ÷ 20 日均量（要 {cfg.ABSORB_VOL_MULT} 倍以上）"
+              f"\n量能＝今天量 ÷ 20 日均量"
+              f"\n要 {cfg.ABSORB_VOL_MULT} 倍以上"
               f"\n當天振幅要 {cfg.ABSORB_MIN_RANGE * 100:.0f}% 以上"
               f"\n只供追蹤，沒有追價點"
               f"\n隔天不破今天最低，才比較可信")
