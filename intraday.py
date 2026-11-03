@@ -1082,13 +1082,51 @@ def get_quotes(items, tries=3, gap=2):
     return out
 
 
+_TWSE_HEAD = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+              "Referer": "https://mis.twse.com.tw/stock/index.jsp", "Accept": "application/json, text/javascript, */*; q=0.01",
+              "Accept-Language": "zh-TW,zh;q=0.9"}
+_TWSE_SESS = {}
+TWSE_STATE = {"fail": 0}       # 連續幾次證交所沒回資料（給盤中監控通知管理者用）
+
+
+def _twse_session(fresh=False):
+    """證交所要先打開首頁拿到 cookie（JSESSIONID），不然常常只回空資料；沒有 cookie 的連續請求還會被擋"""
+    if fresh:
+        _TWSE_SESS.clear()
+    if "s" not in _TWSE_SESS:
+        try:
+            ss = requests.Session()
+        except Exception:
+            _TWSE_SESS["s"] = requests
+            return requests
+        try:
+            ss.get("https://mis.twse.com.tw/stock/index.jsp", headers=_TWSE_HEAD, timeout=8)
+        except Exception as e:
+            print("證交所首頁連線失敗：", repr(e))
+        _TWSE_SESS["s"] = ss
+    return _TWSE_SESS["s"]
+
+
+def _twse_raw(ex, fresh=False):
+    ss = _twse_session(fresh)
+    r = ss.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+               params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
+               headers=_TWSE_HEAD, timeout=8)
+    return r.json()
+
+
 def _twse_fetch(ex):
-    r = requests.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
-                     params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
-                     headers={"User-Agent": "Mozilla/5.0", "Referer": "https://mis.twse.com.tw/stock/index.jsp"},
-                     timeout=8)
+    try:
+        j = _twse_raw(ex)
+        if not j.get("msgArray"):                    # 空的：換一個新的連線再問一次
+            j = _twse_raw(ex, fresh=True)
+    except Exception:
+        _twse_session(fresh=True)
+        j = _twse_raw(ex)
+    if not j.get("msgArray"):
+        print("證交所沒回資料：", str(j.get("rtmessage") or j.get("rtcode") or "")[:80])
     res = {}
-    for q in r.json().get("msgArray", []):
+    for q in j.get("msgArray", []):
         def f(k):
             try:
                 return float(str(q.get(k, "")).split("_")[0])
@@ -1138,6 +1176,10 @@ def _get_quotes_once(items):
         except Exception as e:
             print("興櫃報價查詢失敗：", repr(e))
     missing = [(c, s) for c, s in items if c not in out]
+    if items and not out:
+        TWSE_STATE["fail"] += 1
+    elif out:
+        TWSE_STATE["fail"] = 0
     if missing:
         try:
             import yfinance as yf
@@ -1152,7 +1194,7 @@ def _get_quotes_once(items):
                         continue
                     out[code] = {"last": last, "high": float(fi.get("day_high") or last), "low": float(fi.get("day_low") or last),
                                  "prev": float(fi.get("previous_close") or 0) or None,
-                                 "date": datetime.now(TZ).strftime("%Y%m%d"), "name": None, "suffix": sf}
+                                 "date": datetime.now(TZ).strftime("%Y%m%d"), "name": None, "suffix": sf, "delayed": True}
                     break
         except Exception as e:
             print("Yahoo 報價失敗：", repr(e))
@@ -1205,6 +1247,8 @@ def quote_report(codes):
         if prev:
             lines.append(f"昨收 {_n(prev)}")
         lines.append(f"今日高 {_n(x.get('high'))}　低 {_n(x.get('low'))}")
+        if x.get("delayed"):
+            lines.append("⚠️ 備用來源，約延遲 20 分")
     return "\n".join(lines)
 
 
@@ -1365,6 +1409,7 @@ def _run_market():
     sent = set()
     last = {}                                                # 持股提醒最近一次送出的時間
     no_trade_checks = 0
+    warned = [datetime(2000, 1, 1, tzinfo=TZ)]
     while True:
         now = datetime.now(TZ)
         if (now.hour, now.minute) >= CLOSE_AT:
@@ -1373,6 +1418,9 @@ def _run_market():
         if (now.hour, now.minute) >= OPEN_AT:
             books = all_books()
             n = check_once(watch, books, sent, today, last)
+            if TWSE_STATE["fail"] >= 3 and (now - warned[0]).total_seconds() >= 1800:
+                warned[0] = now                              # 證交所連續沒回資料：只剩延遲報價，通知管理者
+                to_owner(f"⚠️ 證交所報價連不上　{now:%H:%M}\n目前改用備用來源（約延遲 20 分）\n停損提醒可能慢")
             if n == 0 and (watch or any(books.values())):
                 no_trade_checks += 1
                 if no_trade_checks >= 15:                    # 開盤 15 分鐘都沒有成交資料 → 今天休市
