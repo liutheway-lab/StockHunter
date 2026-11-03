@@ -27,6 +27,21 @@ def _tick_size(p):
     return 5.00
 
 
+def _fp(x):
+    """價位寫法：依台股跳動單位決定小數位數，並去掉多餘的 0（2300.00 → 2300、114.50 → 114.5）"""
+    t = _tick_size(x)
+    d = 0 if t >= 1 else (1 if t in (0.5, 0.1) else 2)
+    out = f"{x:,.{d}f}".replace(",", "")
+    return out.rstrip("0").rstrip(".") if "." in out else out
+
+
+def _gauge(pos, thr, n=20):
+    """橫線＋圓點：圓點＝今天收盤在當天最低（左）到最高（右）的哪裡；粗線＝要收到的範圍"""
+    k = min(n - 1, max(0, int(round(pos * (n - 1)))))
+    cut = int(math.ceil(thr * (n - 1) - 1e-9))
+    return "".join("●" if j == k else ("━" if j >= cut else "─") for j in range(n))
+
+
 def tick(price, mode="round"):
     """轉成台股合法跳動單位。mode: round / floor / ceil"""
     if price is None or price != price or price <= 0:
@@ -403,15 +418,16 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
          cfg.ATTACK_MIN_CONSOL <= n_cons <= mc,
          f"前波高點 {df.index[pk]:%m/%d} 之後已盤整 {max(n_cons, 0)} 天"),
         (f"盤整深度 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%", bool(n_cons >= 1 and lower >= H * (1 - cfg.ATTACK_MAX_DEPTH)),
-         f"盤整最低 {lower:.2f}，離前高 {(1 - lower / H) * 100:.1f}%" if n_cons >= 1 else "還沒有盤整區"),
+         f"盤整最低 {_fp(lower)}，離前高 {(1 - lower / H) * 100:.1f}%" if n_cons >= 1 else "還沒有盤整區"),
     ]
     attack_checks = [
         ("攻擊日：收盤突破盤整高點", bool(broke),
-         f"盤整區 {lower:.2f}～{upper:.2f}，收盤 {E:.2f}" if n_cons >= 1 else "還沒有盤整區"),
-        ("收紅 K", bool(c[i] > o[i]), f"開盤 {o[i]:.2f}、收盤 {E:.2f}"),
+         f"盤整區 {_fp(lower)}～{_fp(upper)}，收盤 {_fp(E)}" if n_cons >= 1 else "還沒有盤整區"),
+        ("收紅 K", bool(c[i] > o[i]), f"開盤 {_fp(o[i])}、收盤 {_fp(E)}"),
         ("攻擊日漲幅", bool(gain >= cfg.ATTACK_MIN_GAIN), f"今日漲 {gain * 100:+.1f}%（需 ≥ {cfg.ATTACK_MIN_GAIN * 100:.0f}%）"),
         ("收盤位置", bool(pos >= cfg.ATTACK_CLOSE_POS),
-         f"收在當天最低（0%）到最高（100%）的 {pos * 100:.0f}% 處，要 {cfg.ATTACK_CLOSE_POS * 100:.0f}% 以上"),
+         f"最低 {_gauge(pos, cfg.ATTACK_CLOSE_POS)} 最高；"
+         f"今天收在 {pos * 100:.0f}% 處（圓點）；要收到粗線範圍（{cfg.ATTACK_CLOSE_POS * 100:.0f}% 以上）"),
         ("攻擊日量能", bool(vol_pk > 0 and vr >= cfg.ATTACK_VOL_VS_PEAK),
          f"今日量 = 前高那天的 {vr * 100:.0f}%（需 ≥ {cfg.ATTACK_VOL_VS_PEAK * 100:.0f}%）"),
     ]
@@ -427,7 +443,7 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
     leg_lo = float(l[max(0, pk - cfg.PB_LEG_LOOKBACK):pk + 1].min())       # 整段漲幅的起點：前高之前 30 日內最低點
     target = tick(lower + (H - leg_lo))
     if target <= entry:
-        checks.append(("目標價高於進場價", False, f"目標 {target}、進場 {entry}"))
+        checks.append(("目標價高於進場價", False, f"目標 {_fp(target)}、進場 {_fp(entry)}"))
     status = f"已突破 +{(E / H - 1) * 100:.1f}%" if E >= H else f"還差 {(1 - E / H) * 100:.1f}%"
     r = _result(name, checks, close=E, entry=entry, key=H, peak_date=df.index[pk], leg_start=leg_lo,
                 cons_hi=upper, cons_lo=lower, attack=bool(broke), pre_ok=pre_ok, chase_px=chase_px, n_cons=n_cons,
@@ -466,8 +482,8 @@ def check_pullback(df, i, ratios=None, max_consol=None):
     base = [
         _liq(row),
         ("前高是近期新高", bool(pd.isna(prior_high) or H >= prior_high * 0.98),
-         f"前高 {H:.2f}（{df.index[pk]:%m/%d}），更早的高點 {prior_high:.2f}"),
-        ("趨勢向上", bool(ema20 > ema60), f"月線 {ema20:.2f}、季線 {ema60:.2f}"),
+         f"前高 {_fp(H)}（{df.index[pk]:%m/%d}），更早的高點 {_fp(prior_high)}"),
+        ("趨勢向上", bool(ema20 > ema60), f"月線 {_fp(ema20)}、季線 {_fp(ema60)}"),
     ]
     quality = [
         ("盤整量縮", bool(cons_vol == cons_vol and v[pk] > 0 and cons_vol <= cfg.PB_CONS_VOL_RATIO * v[pk]),
@@ -497,12 +513,12 @@ def check_breakout(df, i):
     checks = [
         _liq(row),
         (f"盤整：近 {bd} 日低點 ≥ 高點 {cfg.BO_BOX_RATIO * 100:.0f}%", bool(box_lo >= cfg.BO_BOX_RATIO * box_hi),
-         f"近 {bd} 日高 {box_hi:.2f}、低 {box_lo:.2f}（低點是高點的 {box_lo / box_hi * 100:.0f}%）"),
+         f"近 {bd} 日高 {_fp(box_hi)}、低 {_fp(box_lo)}（低點是高點的 {box_lo / box_hi * 100:.0f}%）"),
         (f"離60日低點漲幅 ≤ {cfg.BO_MAX_RISE * 100:.0f}%", bool(rise <= cfg.BO_MAX_RISE), f"目前 +{rise * 100:.1f}%"),
-        (f"突破 {cfg.BO_PLATFORM} 日頸線", close > neck, f"頸線 {neck:.2f}、收盤 {close:.2f}"),
+        (f"突破 {cfg.BO_PLATFORM} 日頸線", close > neck, f"頸線 {_fp(neck)}、收盤 {_fp(close)}"),
         (f"爆量 ≥ {cfg.BO_VOL_MULT:.1f} 倍", bool(volx >= cfg.BO_VOL_MULT), f"今日 {volx:.1f} 倍 20 日均量"),
         ("站上季線且月線翻揚", bool(close >= ema60 and ema20 > ema20_prev),
-         f"月線 {ema20:.2f}（昨 {ema20_prev:.2f}）、季線 {ema60:.2f}"),
+         f"月線 {_fp(ema20)}（昨 {_fp(ema20_prev)}）、季線 {_fp(ema60)}"),
     ]
     E = tick(close)
     stop1 = tick(min(neck * 0.98, E * (1 - cfg.BO_STOP_PCT)))
@@ -529,7 +545,7 @@ def check_dry(df, i, mkt=None):
         _liq(row),
         ("量縮", bool(mav20 > 0 and vol3 <= cfg.DRY_VOL_RATIO * mav20),
          f"3日均量 = 20日均量的 {_ratio(vol3, mav20) * 100:.0f}%（需 ≤ {cfg.DRY_VOL_RATIO * 100:.0f}%）"),
-        (f"{k}日不破前低", low3 > L, f"最近{k}日最低 {low3:.2f}，前低 {L:.2f}"),
+        (f"{k}日不破前低", low3 > L, f"最近{k}日最低 {_fp(low3)}，前低 {_fp(L)}"),
     ]
     rs_ok, rs_detail = False, "大盤資料不足，無法比較"
     if mkt is not None and len(mkt):
@@ -557,10 +573,10 @@ def check_dry(df, i, mkt=None):
     if vl0 and vl0["side"] == "壓":
         dist = (vl0["high"] - close) / vl0["high"]
         checks.append((f"離上方大量壓力 ≤ {cfg.DRY_MAX_PRESSURE_DIST * 100:.0f}%", bool(dist <= cfg.DRY_MAX_PRESSURE_DIST),
-                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {vl0['high']:.2f}、現價 {close:.2f}（差 {dist * 100:.1f}%）"))
+                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {_fp(vl0['high'])}、現價 {_fp(close)}（差 {dist * 100:.1f}%）"))
     elif vl0:
         checks.append((f"離上方大量壓力 ≤ {cfg.DRY_MAX_PRESSURE_DIST * 100:.0f}%", True,
-                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {vl0['high']:.2f} 已在現價之下，上方沒有這個壓力"))
+                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {_fp(vl0['high'])} 已在現價之下，上方沒有這個壓力"))
     checks.append(("出場價低於買價", bool(stop1 < E), f"出場 {stop1}、買價 {E}"))
     target = tick(key)                                                                # 第一目標＝前高（突破價）
     # 第二目標（參考）：依序找上方最近的壓力 → 65 日第 1 大量日最高點（要在前高之上）→ 近 60 日高點 → 買價＋2.5 倍風險
@@ -629,7 +645,7 @@ def check_flag(df, i, max_consol=None):
     base = [liq, ("噴出", True, f"{df.index[bp]:%m/%d} {kind}漲幅 {g * 100:.1f}%，量 {vmult:.1f} 倍均量")]
     quality = [
         (f"回檔 ≤ 噴出漲幅的 {cfg.FLAG_MAX_PULLBACK * 100:.0f}%", bool(len(cons_close) and min_close >= mid),
-         f"噴出 {S:.2f}→{H:.2f}，要守住 {mid:.2f}；盤整最低收盤 {min_close:.2f}"),
+         f"噴出 {_fp(S)}→{_fp(H)}，要守住 {_fp(mid)}；盤整最低收盤 {_fp(min_close)}"),
         ("守月線(MA20)", bool(len(cons_close) and (cons_close >= cons_ma).all()),
          f"盤整期間收盤都在 MA20 之上" if len(cons_close) and (cons_close >= cons_ma).all() else "盤整期間有跌破 MA20"),
         (f"盤整量縮（≤ 噴出期 {cfg.FLAG_VOL_RATIO * 100:.0f}%）",
