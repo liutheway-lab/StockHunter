@@ -43,7 +43,7 @@ GH_BRANCH = os.getenv("GH_BRANCH", "main")
 TPE = dt.timezone(dt.timedelta(hours=8))
 # name：顯示用；file：workflow 檔名；at：開始檢查；until：超過就不補；since：這個時間之後建立的紀錄才算「這一次」
 JOBS = [
-    {"name": "night", "file": "night.yml", "at": (22, 15), "until": (23, 50), "since": (21, 0)},
+    {"name": "night", "file": "night.yml", "at": (22, 5), "until": (23, 50), "since": (21, 0)},
     {"name": "morning", "file": "morning.yml", "at": (8, 35), "until": (9, 30), "since": (7, 30)},
     {"name": "intraday", "file": "intraday.yml", "at": (8, 56), "until": (13, 0), "since": (8, 0)},
 ]
