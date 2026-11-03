@@ -39,15 +39,17 @@ def _price_header(fig, close, decimals=2, y=0.925):
              fontweight="bold", ha="left", va="top")
 
 
-def _place_label(ax, d, y, txt, color, taken, fontsize=9, badge=False, ma=()):
+def _place_label(ax, d, y, txt, color, taken, fontsize=9, badge=False, ma=(), hl=()):
     """在線的上方或下方，找一塊「沒有 K 棒、沒有其他字、沒有圖例」的空白處放字。
     要在 tight_layout 之後呼叫，量出來的字寬才準。
-    taken：已經放好的字的範圍（x0, x1, y0, y1，資料座標），放好後會把自己加進去，後面的字就會避開"""
+    taken：已經放好的字的範圍（x0, x1, y0, y1，資料座標），放好後會把自己加進去，後面的字就會避開
+    hl：圖上其他橫線（現價、支撐、壓力…）的價位，字不能壓在線上；上面擠就放線的下面
+    原則：不壓到字、不壓到線最重要，其次才是 K 棒"""
     n = len(d)
     fig = ax.figure
     rend = fig.canvas.get_renderer()
     style = dict(boxstyle="round,pad=0.2", fc=BADGE, ec="none", alpha=0.95) if badge else \
-        dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85)
+        dict(boxstyle="round,pad=0.15", fc="none", ec="none")
     t = ax.text(0, y, txt, fontsize=fontsize, color="white" if badge else color, fontweight="bold" if badge else None,
                 ha="left", va="bottom", zorder=8, bbox=style)
     bb = t.get_window_extent(rend).transformed(ax.transData.inverted())        # 實際量字的大小（資料座標）
@@ -56,8 +58,10 @@ def _place_label(ax, d, y, txt, color, taken, fontsize=9, badge=False, ma=()):
     rng = yhi - ylo
     hi, lo = d["High"].to_numpy(float), d["Low"].to_numpy(float)
     best = None
-    for above in (True, False):
-        y0 = y + rng * 0.008 if above else y - rng * 0.008 - h
+    cands = [(above, k) for k in range(5) for above in (True, False)]    # 線旁邊太擠時，可以離線遠一點
+    for above, k in cands:
+        off = rng * 0.008 + k * h * 0.5
+        y0 = y + off if above else y - off - h
         y1 = y0 + h
         if y1 > yhi - rng * 0.005 or y0 < ylo + rng * 0.005:
             continue
@@ -67,11 +71,14 @@ def _place_label(ax, d, y, txt, color, taken, fontsize=9, badge=False, ma=()):
             pen = int(((lo[a_:b_] <= y1) & (hi[a_:b_] >= y0)).sum()) * 10            # 壓到 K 棒
             for m in ma:                                                              # 壓到均線（輕一點）
                 seg = m[a_:b_]
-                pen += int(((seg >= y0) & (seg <= y1)).sum())
+                pen += int(((seg >= y0) & (seg <= y1)).sum()) * 5
+            for yl in hl:                                                             # 壓到其他橫線
+                if abs(yl - y) > rng * 1e-6 and y0 - rng * 0.004 < yl < y1 + rng * 0.004:
+                    pen += 500
             for tx0, tx1, ty0, ty1 in taken:                                         # 壓到其他字或圖例
                 if x0 < tx1 and x0 + w > tx0 and y0 < ty1 and y1 > ty0:
                     pen += 1000
-            pen += (n - (x0 + w)) * 0.02 + (0 if above else 0.5)                     # 一樣好時，靠右、放線上方
+            pen += (n - (x0 + w)) * 0.02 + (0 if above else 0.5) + k * 30             # 一樣好時，靠右、貼著線、放線上方
             if best is None or pen < best[0]:
                 best = (pen, x0, y0, y1)
             x0 += 0.5
@@ -104,11 +111,11 @@ def _text_boxes(ax):
     return out
 
 
-def _price_line(ax, d, last, decimals=2, taken=None, ma=()):
+def _price_line(ax, d, last, decimals=2, taken=None, ma=(), hl=()):
     """現價：整張圖畫一條藍色虛線，字放在空白處（要在 tight_layout 之後呼叫）"""
     ax.axhline(last, color=BADGE, linestyle=(0, (5, 3)), linewidth=1.3, zorder=4)
     _place_label(ax, d, last, f"現價 {last:,.{decimals}f}", BADGE,
-                 taken if taken is not None else _legend_box(ax) + _text_boxes(ax), badge=True, ma=ma)
+                 taken if taken is not None else _legend_box(ax) + _text_boxes(ax), badge=True, ma=ma, hl=hl)
 
 
 def market_chart(mk, bars=45):
@@ -160,23 +167,14 @@ def market_chart(mk, bars=45):
     pl, pld = s.get("prior_low"), s.get("prior_low_date")
     rl, rld = s.get("recent_low"), s.get("recent_low_date")
     lowest = min([v for v in (bot_v, pl, rl) if v is not None])
-    ax.set_ylim(lowest - rng_v * (0.20 if stab_mode else 0.04), top_v + rng_v * 0.04)    # 空頭時下方留白放標註
+    ax.set_ylim(lowest - rng_v * (0.10 if stab_mode else 0.04), top_v + rng_v * 0.04)    # 空頭時下方留白放標註
+    low_marks = []                                        # 虛線＋字（字等排版完才放到空白處，不用箭頭）
     if pl is not None:
         ax.axhline(pl, color="#00a8d6", linestyle="--", linewidth=1)
-        p = _pos(idx, pld)
-        if p is not None:
-            ax.scatter([p], [pl], marker="^", color="#00a8d6", zorder=5, s=34)
-            ax.annotate(f"{nm}最低 {pl:,.0f}（{pld:%m/%d}）", xy=(p, pl),
-                        xytext=(max(p - 20, 0.5), lowest - rng_v * 0.05), fontsize=9, color="#0086ad",
-                        arrowprops=dict(arrowstyle="->", color="#00a8d6", linewidth=0.9))
-        else:
-            ax.text(0.5, pl + rng_v * 0.02, f"{nm}最低 {pl:,.0f}", fontsize=9, color="#333")
+        low_marks.append((pl, f"最低點 {pl:,.0f}" + (f"（{pld:%m/%d}）" if pld is not None else ""), "#0086ad"))
     if rl is not None and _pos(idx, rld) is not None:
-        rp = _pos(idx, rld)
-        ax.scatter([rp], [rl], color="#8e6bd8", zorder=5, s=28)
-        ax.annotate(f"之後最低 {rl:,.0f}（{rld:%m/%d}）", xy=(rp, rl),
-                    xytext=(max(rp - 15, 0), lowest - rng_v * 0.13), fontsize=9, color="#8e6bd8",
-                    arrowprops=dict(arrowstyle="->", color="#8e6bd8"))
+        ax.axhline(rl, color="#8e6bd8", linestyle="--", linewidth=1)
+        low_marks.append((rl, f"低點日後最低 {rl:,.0f}（{rld:%m/%d}）", "#8e6bd8"))
     dd0 = s.get("dump_date")
     dpp = _pos(idx, dd0) if dd0 is not None else None
     if dpp is not None:                                   # 爆量下跌日那根 K 線也用橘色粗框框起來
@@ -227,12 +225,18 @@ def market_chart(mk, bars=45):
     fig.suptitle(title, fontsize=11, x=0.02, ha="left")
     if stab_mode:
         for k, (txt, col) in enumerate([("■ 黃色區＝低點日起（最近 3 天內股價最低的那天）", "#b8860b"),
-                                        ("┄ 水藍虛線＝低點日的最低點（上圖）", "#0086ad"),
+                                        ("┄ 水藍虛線＝最低點（上圖）", "#0086ad"),
                                         ("┄ 橘色虛線＝爆量下跌日的成交額（下圖）", "#e67300")][::-1]):
             fig.text(0.02, 0.008 + k * 0.026, txt, fontsize=8.5, color=col, ha="left", va="bottom")
     _price_header(fig, full["Close"])
     fig.tight_layout(rect=(0, 0.09 if stab_mode else 0, 1, 0.915))
-    _price_line(ax, d, float(d["Close"].iloc[-1]), 0, ma=[m.to_numpy(float) for m in (ma5, ma10, ma20, ma60)])
+    mas = [m.to_numpy(float) for m in (ma5, ma10, ma20, ma60)]
+    last = float(d["Close"].iloc[-1])
+    hl = [m[0] for m in low_marks] + [last]
+    taken = _legend_box(ax) + _text_boxes(ax)
+    for val, txt, col in low_marks:
+        _place_label(ax, d, val, txt, col, taken, ma=mas, hl=hl)
+    _price_line(ax, d, last, 0, taken=taken, ma=mas, hl=hl)
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
@@ -374,9 +378,10 @@ def stock_chart(df, title="", bars=65):
     _price_header(fig, d["Close"])
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     taken = _legend_box(ax)                                     # 價位標籤：排版完成後才放，都放在空白處
+    hl = [m[0] for m in merged] + [last]
     for val, txt, col, ls in merged:
-        _place_label(ax, d, val, txt, col, taken, ma=mas)
-    _price_line(ax, d, last, 2, taken=taken, ma=mas)
+        _place_label(ax, d, val, txt, col, taken, ma=mas, hl=hl)
+    _price_line(ax, d, last, 2, taken=taken, ma=mas, hl=hl)
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
