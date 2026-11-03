@@ -8,7 +8,7 @@ import time
 import json
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -51,7 +51,8 @@ _missing = [f for f, ok in (("config.py", hasattr(cfg, "names_join")),
                             ("strategies.py", "split" in S.attack_plan.__code__.co_varnames),
                             ("backtest.py", "entry_mode" in backtest.run_stock.__code__.co_varnames),
                             ("guide.py", "強勢續攻" in open(guide.__file__, encoding="utf-8").read()),
-                            ("chart_png.py", hasattr(chart_png, "_place_label"))) if not ok]
+                            ("chart_png.py", hasattr(chart_png, "_place_label")),
+                            ("data.py", hasattr(data, "patch_with_twse"))) if not ok]
 if _missing:
     st.error("⚠️ GitHub 上這幾個檔案還是舊版，請重新上傳：" + "、".join(_missing))
     st.stop()
@@ -602,6 +603,18 @@ if mk:
             "大盤目前允許：" + cfg.names_join(mk["active"]))
     else:
         st.error("🔴 尚未止跌，不建議建立多頭部位")
+    try:                                               # 資料日比預期的舊：提醒一聲（休市日除外，所以只是提醒）
+        _now = datetime.now(ZoneInfo("Asia/Taipei"))
+        _exp = _now.date() - (timedelta(days=1) if _now.hour < 14 else timedelta(0))      # 14:00 前今天還沒有收盤資料
+        while _exp.weekday() >= 5:
+            _exp -= timedelta(days=1)
+        _last = mk["date"].date()
+        if _last < _exp:
+            st.warning(L(f"大盤資料只到 {_last:%m/%d}，應該要有 {_exp:%m/%d}",
+                         "如果那天不是休市，代表資料來源還沒更新",
+                         str(mkt_df.attrs.get("twse_note", "")) or "（沒有證交所補資料的紀錄，data.py 可能還是舊版）"))
+    except Exception:
+        pass
     mL, mR = st.columns([2, 3])          # 電腦：左邊數字和止跌條件、右邊圖；手機會自動變成上下排
     with mL:
         _pv = float(mk["df"]["Close"].iloc[-2]) if len(mk["df"]) >= 2 else None
