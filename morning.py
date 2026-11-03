@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import requests
 import yfinance as yf
 
@@ -48,29 +49,37 @@ def _num(v):
         return None
 
 
-ET = ZoneInfo("America/New_York")
-SETTLE_ET = 17      # 美國期貨每天 17:00（美東）休息一小時，休息前最後一筆當作「前一盤收盤」
+# 期貨的「前一盤收盤」要抓幾點的價格：{代號: (時區, 時, 分)}。要跟券商看盤軟體的「漲跌」基準一致。
+# 美股期貨：用美東 16:00（美股現貨收盤、結算價的時間）；日經：用日本 15:45（日經期貨日盤收盤）。
+FUT_BASE = {
+    "NQ=F": ("America/New_York", 16, 0),
+    "ES=F": ("America/New_York", 16, 0),
+    "YM=F": ("America/New_York", 16, 0),
+    "NIY=F": ("Asia/Tokyo", 15, 45),
+}
 
 
 def get_quote_fut(symbol):
-    """期貨：最新價 vs 前一個交易盤的收盤（跟券商看盤軟體的「漲跌」同一個基準）。
-    用 5 分 K：最新一筆 = 最新價；最近一次美東 17:00 之前的最後一筆 = 前一盤收盤。
-    回傳 (最新價, 前一盤收盤, 前一盤日期)"""
+    """期貨：最新價 vs 前一盤收盤。用 5 分 K：最新一筆 = 最新價；
+    最近一次「基準時間」（見 FUT_BASE）之前的最後一筆 = 前一盤收盤。回傳 (最新價, 前一盤收盤, 前一盤日期)"""
+    tzname, hh, mm = FUT_BASE.get(symbol, ("America/New_York", 16, 0))
+    tz = ZoneInfo(tzname)
     h = yf.Ticker(symbol).history(period="5d", interval="5m").dropna(subset=["Close"])
     if len(h) < 20:
         raise ValueError("5 分 K 資料不足")
-    idx = h.index.tz_convert(ET) if h.index.tz is not None else h.index.tz_localize("UTC").tz_convert(ET)
+    idx = h.index.tz_convert(tz) if h.index.tz is not None else h.index.tz_localize("UTC").tz_convert(tz)
     last_t = idx[-1]
-    cut = last_t.replace(hour=SETTLE_ET, minute=0, second=0, microsecond=0)
-    if last_t < cut:
-        cut -= timedelta(days=1)
-    while cut.weekday() >= 5:                           # 週六、週日沒有交易盤，往前找到週五 17:00
-        cut -= timedelta(days=1)
+    day = last_t.date()                                 # 用「牆上日期」算基準時間，換日光節約時間那週才不會差一小時
+    if (last_t.hour, last_t.minute) < (hh, mm):
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:                           # 週六、週日沒有交易盤，往前找到週五
+        day -= timedelta(days=1)
+    cut = pd.Timestamp(datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz))
     before = [k for k in range(len(idx)) if idx[k] < cut]
     if not before:
         raise ValueError("找不到前一盤收盤")
     k = before[-1]
-    if (cut - idx[k]) > timedelta(hours=6):             # 前一盤最後一筆離休息時間太遠 = 資料有缺，不可信
+    if (cut - idx[k]) > timedelta(hours=3):             # 基準時間前最後一筆離太遠 = 資料有缺，不可信
         raise ValueError("前一盤收盤資料有缺")
     curr, prev = float(h["Close"].iloc[-1]), float(h["Close"].iloc[k])
     print(symbol, "5分K：最新", idx[-1].strftime("%m/%d %H:%M"), round(curr, 2),
@@ -82,7 +91,7 @@ def get_quote_fut(symbol):
 
 def get_quote(symbol):
     """回傳 (最新價, 前收, 最新資料日期)。
-    期貨用 get_quote_fut（對前一盤收盤）；失敗或其他商品，用日線最後兩筆（點數與百分比必定一致）。"""
+    期貨用 get_quote_fut（對前一盤收盤，基準時間見 FUT_BASE）；失敗或其他商品，用日線最後兩筆（點數與百分比必定一致）。"""
     if symbol.endswith("=F"):
         try:
             return get_quote_fut(symbol)
