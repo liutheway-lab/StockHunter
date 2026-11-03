@@ -489,10 +489,26 @@ def show_table(head, rows, **kw):
     st.markdown(html_table(head, rows, **kw), unsafe_allow_html=True)
 
 
+def split_sents(text):
+    """用 ；，、 切成一個一個句子；括號（）裡面的不切，才不會從括號中間斷開"""
+    out, buf, depth = [], "", 0
+    for ch in str(text):
+        if ch in "（(":
+            depth += 1
+        elif ch in "）)":
+            depth = max(0, depth - 1)
+        if ch in "；，、" and depth == 0:
+            out.append(buf)
+            buf = ""
+        else:
+            buf += ch
+    out.append(buf)
+    return [x.strip() for x in out if x.strip()]
+
+
 def md_cond(rows):
     """條件表（結果 | 條件 | 現況）。現況欄可以換行，其他欄不換行"""
-    import re as _re
-    rows = [(a, b, _re.sub(r"[；，、]", "\n", str(c))) for a, b, c in rows]      # 一個句子一行，不會從句子中間斷開
+    rows = [(a, b, "\n".join(split_sents(c))) for a, b, c in rows]      # 一個句子一行，不會從句子中間斷開
     show_table(["", "條件", "現況"], rows, wrap=(2,), left=(1,))
 
 
@@ -500,7 +516,7 @@ def md_fail(rows):
     """沒通過的條件：一條一組，名稱一行、現況一個句子一行，用整個畫面寬度，不會從句子中間斷開"""
     import re as _re
     for name, detail in rows:
-        parts = [x.strip() for x in _re.split(r"[；，、]", str(detail)) if x.strip()]
+        parts = split_sents(detail)
         inner = "".join(f'<span class="p">{html.escape(x)}</span>' for x in parts)
         st.markdown(f'<div class="cf"><div class="cn">❌ <b>{html.escape(str(name))}</b></div>'
                     f'<div class="cd">{inner}</div></div>', unsafe_allow_html=True)
