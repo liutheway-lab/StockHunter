@@ -596,7 +596,7 @@ if mk:
                         use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
     if mk["active"]:
         (st.warning if mk["risk"] else st.success)(
-            "大盤目前允許：" + "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"]))
+            "大盤目前允許：" + cfg.names_join(mk["active"]))
     else:
         st.error("🔴 尚未止跌，不建議建立多頭部位")
 
@@ -644,10 +644,13 @@ def watch_buttons(name, items, limit=15):
         if st.button(f"{it['code']} {it['name']}", key=f"watch_{name}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()
-        st.caption(f"現價 {px(it['close'])}｜追價點 {px(it['chase'])}（{up:+.1f}%）｜出場價 {px(it['stop1'])}")
+        st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">'
+                    f'現價 {px(it["close"])}｜追價點 {px(it["chase"])}（{up:+.1f}%）｜出場價 {px(it["stop1"])}</div>',
+                    unsafe_allow_html=True)
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
-    st.caption("追價點（%）＝明天要追買的價格（漲幅）")
+    st.markdown('<div style="text-align:center;opacity:.65;font-size:.85rem;">追價點（%）＝明天要追買的價格（漲幅）</div>',
+                unsafe_allow_html=True)
 
 
 st.divider()
@@ -660,7 +663,7 @@ else:
     st.caption(L(f"資料日 {scan['data_date']}｜夜間掃描 {scan['generated_at']}",
                  "依成交金額由大到小｜點股票會帶入下方診斷"))
     if active:
-        names_on = "、".join(cfg.STRATEGY_NAMES[a] for a in active)
+        names_on = cfg.names_join(active)
         (st.warning if scan["risk"] else st.success)(
             L(f"大盤第 {scan['layer']} 層・{scan['layer_name']}", f"啟用：{names_on}" + ("（方向未明，請縮小部位）" if scan["risk"] else "")))
         for name in ORDER:
@@ -702,11 +705,11 @@ else:
 
 # ==================== 資金比例 ====================
 st.divider()
-st.subheader("⚙️ 資金與三段投入比例")
+st.subheader("⚙️ 資金與投入比例")
 capital = st.number_input("可用資金（元）", min_value=10000, max_value=100_000_000, value=1_000_000,
                           step=50000, key="capital",
                           help="可以直接輸入金額，或按 + / − 調整，每次 5 萬")
-st.caption(L("可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）", "選好標的後，各策略會依這筆資金", "換算每一筆可買的股數與出場損益"))
+st.caption("可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）")
 if "w1" not in st.session_state:
     st.session_state.w1 = int(round(cfg.TRANCHES[0] * 100))
     st.session_state.w2 = int(round(cfg.TRANCHES[1] * 100))
@@ -733,21 +736,36 @@ tot = w1 + w2 + w3                                                  # 合計可�
 capital_all = capital
 capital = capital_all * tot / 100                                   # 後面所有試算都用「實際要投入的資金」
 ratios = S.norm_ratios((w1, w2, w3))
-st.markdown(f"**各階段可投入**  \n"
-            f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）  \n"
-            f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）  \n"
-            f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）  \n"
-            f"合計投入 {capital:,.0f} 元（{tot}%），留現金 {capital_all - capital:,.0f} 元")
-st.caption(L("這個比例用在「盤整後噴出」「量縮抗跌」",
-             f"「創高拉回」「噴後整理」固定攻擊日 {cfg.ATTACK_SPLIT[0] * 100:.0f}%、突破日 {cfg.ATTACK_SPLIT[1] * 100:.0f}%",
-             "資金用來試算每一筆可以買幾股"))
+st.markdown(L("**低位階起漲、量縮抗跌　適用**",
+              f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）",
+              f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）",
+              f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）",
+              f"合計投入 {capital:,.0f} 元（{tot}%），保留現金 {capital_all - capital:,.0f} 元"))
+
+# 強勢續攻（創高拉回、噴出後整理）：只有兩筆（攻擊日、突破日），比例另外設定
+if "a1" not in st.session_state:
+    st.session_state.a1 = int(round(cfg.ATTACK_SPLIT[0] * 100))
+    st.session_state.a2 = int(round(cfg.ATTACK_SPLIT[1] * 100))
+_a1 = min(max(int(st.session_state.a1), 5), 100)
+_a2 = min(int(st.session_state.a2), 100 - _a1)
+st.session_state.a1, st.session_state.a2 = _a1, _a2
+st.markdown(L("**強勢續攻　適用**", "（創高拉回、噴出後整理）"))
+ca1, ca2 = st.columns(2)
+a1 = ca1.number_input("攻擊日 (%)", 5, 100, step=5, key="a1")
+a2 = ca2.number_input("突破日 (%)", 0, max(0, 100 - a1), step=5, key="a2")
+atk_tot = a1 + a2
+capital_atk = capital_all * atk_tot / 100
+atk_split = (a1 / 100, a2 / 100)
+st.markdown(L(f"攻擊日　{capital_atk * a1 / atk_tot:,.0f} 元（{a1}%）",
+              f"突破日　{capital_atk * a2 / atk_tot:,.0f} 元（{a2}%）",
+              f"合計投入 {capital_atk:,.0f} 元（{atk_tot}%），保留現金 {capital_all - capital_atk:,.0f} 元"))
 
 # ==================== 單檔回測 ====================
 BT_MODE = {"ladder_avg": "分 3 次買｜買到第 2 筆後，出場價上移到平均成本（保本）",
            "ladder_stop2": "分 3 次買｜買到第 2 筆後，出場價上移到突破價下 5%",
            "ladder_stop1": "分 3 次買｜出場價一直不動",
            "single": "一次全部買進｜出場價不動"}
-BT_SHORT = {"pullback": "創高拉回", "flag": "噴後整理", "breakout": "盤整噴出", "dry": "量縮抗跌"}
+BT_SHORT = {"pullback": "續攻・創高拉回", "flag": "續攻・噴出後整理", "breakout": "低位階起漲", "dry": "量縮抗跌"}
 BT_REASON = {"target": "🎯", "stop": "🛑", "time": "⏰"}
 CRASH_NOTE = {
     "2020 疫情崩盤": "新冠肺炎全球爆發，各國封城，全球股市恐慌性崩跌",
@@ -774,10 +792,10 @@ def stock_bt_body(code, suffix, capital):
     import backtest as BT
     mode = "ladder_avg"            # 照你設定的進場邏輯：三段比例，買到第 2 筆後出場價拉到平均成本
     only_active = st.toggle("只在大盤啟用該策略時進場（照目前規則）", value=True, key="sbt_active")
-    st.caption(L(f"創高拉回、噴後整理：盤中漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點就追（你的習慣）",
+    st.caption(L(f"強勢續攻：盤中漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點就追（你的習慣）",
                  f"攻擊日買 {cfg.ATTACK_SPLIT[0] * 100:.0f}%、突破日買 {cfg.ATTACK_SPLIT[1] * 100:.0f}%",
                  f"跌破盤整低點出場（最多賠 {cfg.ATTACK_MAX_LOSS * 100:.0f}%），突破後出場價移到前高下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%",
-                 f"盤整後噴出、量縮抗跌：分 3 次買（{w1}/{w2}/{w3}），買到第 2 筆後出場價拉到平均成本"))
+                 f"低位階起漲、量縮抗跌：分 3 次買（{w1}/{w2}/{w3}），買到第 2 筆後出場價拉到平均成本"))
     periods = {"近 5 年": None, **{k: v for k, v in CRASHES.items()}}
     period = st.selectbox("期間", list(periods), key="sbt_period")
     with st.spinner("回測中…第一次要載入 8 年的大盤資料，約需 30 秒"):
@@ -808,7 +826,7 @@ def stock_bt_body(code, suffix, capital):
         pnl = T["ret_plan"] * capital
         st.markdown(L(f"**每次都投入 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
 
-    # 追價 vs 收盤確認（只比較創高拉回、噴後整理）
+    # 追價 vs 收盤確認（只比較強勢續攻）
     T_close = stock_backtest(code, suffix, tuple(ratios), mode, only_active, "close")
     rows_c = []
     for label, X in (("盤中漲 4% 就追", T_all), ("收盤確認才買", T_close)):
@@ -822,7 +840,7 @@ def stock_bt_body(code, suffix, capital):
         s_ = BT.trade_stats(X)
         rows_c.append((label, f"{s_['n']}", f"{s_['win'] * 100:.0f}%", f"{s_['mean'] * 100:+.1f}%",
                        f"{(X['ret_plan'] * capital).sum():+,.0f}"))
-    st.markdown("**追價 vs 收盤確認**（創高拉回、噴後整理）")
+    st.markdown("**追價 vs 收盤確認**（強勢續攻）")
     show_table(["買法", "筆數", "勝率", "期望值", "損益（元）"], rows_c)
     st.caption(L("盤中追：漲 4% 且突破盤整高點就買，收盤不一定是攻擊日",
                  "收盤確認：收盤符合全部攻擊日條件，用收盤價買"))
@@ -965,7 +983,7 @@ if target:
             if not pr and not sp:
                 st.caption("近 65 交易日沒有明顯的大量（需達 20 日均量 1.5 倍），上下都沒有標壓力或支撐")
             st.caption("取近 65 交易日；日期標在圖上，太久以前的大量參考價值較低")
-            st.caption(L(f"以下依投入資金 {capital:,.0f} 元（可用資金的 {tot}%）", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
+            st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
                 label = cfg.STRATEGY_NAMES[sname]
@@ -995,13 +1013,13 @@ if target:
                     if "key" not in r or "stop1" not in r:
                         st.info("目前沒有符合的型態，無法試算。")
                     else:
-                        plan = S.plan_for(sname, r, ratios)
+                        plan = S.plan_for(sname, r, ratios, split=atk_split)
                         if plan["stop1"] >= plan["e"]:
                             st.info("現價已低於出場價，無法試算。")
                         else:
                             if not r["ok"]:
                                 st.warning(L("尚未符合條件", "以下試算僅供參考"))
-                            show_plan(plan, capital, close)
+                            show_plan(plan, capital_atk if sname in ("pullback", "flag") else capital, close)
 
                 foldable(f"{code}_{sname}", label, body, default=r["ok"],
                          status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
