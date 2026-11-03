@@ -91,11 +91,24 @@ def _legend_box(ax):
     return [(bb.x0, bb.x1, bb.y0, bb.y1)]
 
 
+def _text_boxes(ax):
+    """圖上已經有的文字（標註、箭頭字）佔的範圍（資料座標），放現價時要避開"""
+    rend = ax.figure.canvas.get_renderer()
+    inv = ax.transData.inverted()
+    out = []
+    for t in ax.texts:
+        if not t.get_text().strip():
+            continue
+        bb = t.get_window_extent(rend).transformed(inv)
+        out.append((bb.x0, bb.x1, bb.y0, bb.y1))
+    return out
+
+
 def _price_line(ax, d, last, decimals=2, taken=None, ma=()):
     """現價：整張圖畫一條藍色虛線，字放在空白處（要在 tight_layout 之後呼叫）"""
     ax.axhline(last, color=BADGE, linestyle=(0, (5, 3)), linewidth=1.3, zorder=4)
-    _place_label(ax, d, last, f"現價 {last:,.{decimals}f}", BADGE, taken if taken is not None else _legend_box(ax),
-                 badge=True, ma=ma)
+    _place_label(ax, d, last, f"現價 {last:,.{decimals}f}", BADGE,
+                 taken if taken is not None else _legend_box(ax) + _text_boxes(ax), badge=True, ma=ma)
 
 
 def market_chart(mk, bars=45):
@@ -232,14 +245,19 @@ def market_chart(mk, bars=45):
 VOL_MULT = 1.5     # 大量＝當天量至少是當時 20 日均量的 1.5 倍，普通的量不標
 
 
+MIN_BACK = 3       # 起點太近（例如就是今天）時，至少回看 3 個交易日，才看得出「相對」低點／高點
+
+
 def vol_levels(df, bars=65):
     """壓力／支撐（近 bars 日內找）。「帶量」＝當天量 >= 20 日均量 1.5 倍，不分紅黑。
-    支撐：最近一根帶量 K（收盤在現價或現價之下，今天也算），從那天到今天的最低價。
+    支撐：最近一根帶量 K（收盤在現價或現價之下，今天也算），從那天到今天的最低價；
+          下方找不到帶量 K，就用近 bars 日的最低點（前低）。
     壓力：最近一根帶量 K（收盤在現價之上），從那天到今天的最高價；
-          上方找不到帶量 K，就用近 bars 日的最高點（前高）當壓力。
-    回傳 {"press": {...} 或 None, "supp": {...} 或 None}
-    每項：day＝最高／最低價那天、level＝價位、vday＝帶量 K 棒那天（用前高時是 None）、
-          vol＝那天的量（張）、top＝是不是整段最大量、fallback＝是不是用前高"""
+          上方找不到帶量 K，就用近 bars 日的最高點（前高）。
+    起點離今天不到 MIN_BACK 天，就從 MIN_BACK 天前開始算。
+    回傳 {"press": {...} 或 None, "supp": {...} 或 None}（現價已經在前高／前低時，那一邊是 None）
+    每項：day＝最高／最低價那天、level＝價位、vday＝帶量 K 棒那天（用前高前低時是 None）、
+          vol＝那天的量（張）、top＝是不是整段最大量、fallback＝是不是用前高前低"""
     full = df[df["Volume"] > 0]
     d = full.iloc[-bars:]
     if len(d) < 2:
@@ -256,15 +274,18 @@ def vol_levels(df, bars=65):
             out[key] = None
             continue
         vday = cand.index[-1]                                   # 最近的那一根
-        seg = d.loc[vday:, col]
+        start = min(d.index.get_loc(vday), len(d) - MIN_BACK)
+        seg = d[col].iloc[max(start, 0):]
         day = seg.idxmin() if col == "Low" else seg.idxmax()
         out[key] = {"day": day, "level": float(seg.loc[day]), "vday": vday,
                     "vol": float(d.loc[vday, "Volume"]) / 1000.0, "top": vday == top_day, "fallback": False}
-    if out["press"] is None:                                    # 上方沒有帶量 K：前高就是壓力
-        day = d["High"].idxmax()
-        hi = float(d.loc[day, "High"])
-        out["press"] = ({"day": day, "level": hi, "vday": None, "vol": 0.0, "top": False, "fallback": True}
-                        if hi > last else None)
+    for key, col in (("press", "High"), ("supp", "Low")):       # 沒有帶量 K：前高／前低就是壓力／支撐
+        if out.get(key) is None:
+            day = d[col].idxmax() if col == "High" else d[col].idxmin()
+            lv = float(d.loc[day, col])
+            ok = lv > last if col == "High" else lv < last
+            out[key] = ({"day": day, "level": lv, "vday": None, "vol": 0.0, "top": False, "fallback": True}
+                        if ok else None)
     return out
 
 
@@ -303,7 +324,8 @@ def stock_chart(df, title="", bars=65):
         if not it:
             continue
         col = "#ff8c00" if it["top"] else ("#e04a4a" if key == "press" else "#2e9e4f")      # 整段最大量固定橘色
-        marks.append((it["level"], f"{nm} {it['level']:,.1f}（{it['day']:%m/%d}）", col, "--"))
+        nm2 = "前低／支撐" if (it["fallback"] and key == "supp") else nm
+        marks.append((it["level"], f"{nm2} {it['level']:,.1f}（{it['day']:%m/%d}）", col, "--"))
         if it["vday"] is not None:                                                         # 框起來的是帶量的那根
             vol_marks.append((_pos(idx, it["vday"]), "第1大量" if it["top"] else nm, col))
     top_v, bot_v = float(d["High"].max()), float(d["Low"].min())
@@ -338,9 +360,6 @@ def stock_chart(df, title="", bars=65):
     axv.bar(x, v.values, color=cols, width=0.65)
     axv.plot(x, vma20.values, color="#e67e22", linewidth=1.1, label="20日均量")
     vmax = float(v.max())
-    for p_, rank, col in sorted([m for m in vol_marks if m[0] is not None], key=lambda m: m[0]):
-        axv.add_patch(plt.Rectangle((p_ - 0.5, 0), 1.0, float(v.iloc[p_]) * 1.03, fill=False,
-                                    edgecolor=col, linewidth=1.1, zorder=6, clip_on=False))
     axv.set_ylim(0, vmax * 1.12)
     axv.set_ylabel("成交量（張）")
     axv.legend(loc="upper left", fontsize=8, frameon=False)
