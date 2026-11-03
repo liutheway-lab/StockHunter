@@ -45,19 +45,29 @@ def code_block(lines, header=False, lang=""):
 def market_block(mk):
     ma = mk["ma"]
     head = f"🌐 *大盤｜第 {mk['layer']} 層・{mk['layer_name']}* {LAYER_ICON[mk['layer']]}"
+    if mk.get("tag"):
+        head += f"\n{'🔥' if mk['tag'] == '過熱' else '😱'} *{mk['tag']}*"
+
+    def lab(t, w=5):                                          # 中文字占 2 格，用顯示寬度補空白才會對齊
+        return t + " " * max(0, w - sum(2 if ord(ch) > 0x2E80 else 1 for ch in t))
 
     def two(l1, v1, l2="", v2=None):
-        s = f"{l1:<5}{v1:>8,.0f}"
-        return s + (f"   {l2:<5}{v2:>8,.0f}" if v2 is not None else "")
+        s = f"{lab(l1)}{v1:>8,.0f}"
+        return s + (f"   {lab(l2)}{v2:>8,.0f}" if v2 is not None else "")
 
-    # 全部是半形字，所以一定對齊
-    tbl = [two("MA5", ma[5], "MA10", ma[10]),
-           two("MA20", ma[20], "MA60", ma[60])]
+    tbl = [two("5日", ma[5], "10日", ma[10]),
+           two("月線", ma[20], "季線", ma[60])]
     cc = mk["df"]["Close"]
     chg = float(cc.iloc[-1] - cc.iloc[-2]) if len(cc) > 1 else 0.0
     pct = chg / float(cc.iloc[-2]) * 100 if len(cc) > 1 else 0.0
     arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"          # 只用箭頭，不用紅綠燈（紅綠燈留給利多／利空，避免搞混）
     out = [head, f"收盤　{mk['close']:,.0f}\n{arrow} {abs(chg):,.0f} 點（{pct:+.2f}%）", code_block(tbl)]
+    if mk.get("why"):
+        out.append("\n".join(mk["why"]))
+    if mk.get("tag"):
+        out.append(st.SHORT_TAG_NOTE[mk["tag"]])
+    if mk.get("dd") is not None and mk["dd"] <= -cfg.DROP_WARN:
+        out.append(f"⚠️ 離近 60 日高點\n已經跌了 {abs(mk['dd']) * 100:.1f}%")
 
     if mk["layer"] in (4, 5):
         s = mk["stab"]
@@ -96,7 +106,8 @@ def market_block(mk):
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
-        out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明，請縮小部位" if mk["risk"] else ""))
+        out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明\n只開最保守的策略，部位減半" if mk["risk"] else ""))
+        out.append(f"💰 部位：{('過熱，維持正常部位，不加碼' if mk.get('tag') == '過熱' else cfg.LAYER_SIZE.get(mk['layer'], ''))}")
     else:
         out.append("🔴 尚未止跌，不建議建立多頭部位" if mk["layer"] in (4, 5) else "🔴 沒有啟用的策略")
     return "\n".join(out)
