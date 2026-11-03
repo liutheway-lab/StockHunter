@@ -146,3 +146,109 @@ def market_chart(mk, bars=45):
     fig.savefig(buf, format="png")
     plt.close(fig)
     return buf.getvalue()
+
+
+# =====================================================
+# 個股線圖（跟大盤同一種風格：K 線 + 均線 + 成交量，右邊標價位）
+# =====================================================
+def _big_volume_days(d, close, rank_max=5):
+    """近 65 日成交量排名：第 1 大量；它的最高點在現價之上＝壓力，再往後找最低點在現價之下的＝支撐"""
+    v = d[d["Volume"] > 0]["Volume"]
+    if v.empty:
+        return []
+    order = list(v.sort_values(ascending=False).index)
+    out = []
+    main = order[0]
+    pressure = float(d.loc[main, "High"]) > close
+    out.append((main, 1, "壓力" if pressure else "支撐", float(d.loc[main, "High" if pressure else "Low"])))
+    if pressure:
+        for r, day in enumerate(order[1:rank_max], start=2):
+            if float(d.loc[day, "Low"]) < close:
+                out.append((day, r, "支撐", float(d.loc[day, "Low"])))
+                break
+    return out
+
+
+def stock_chart(df, title="", bars=65):
+    """個股日線圖，回傳 PNG 的 bytes。df 需有 Open/High/Low/Close/Volume（Volume 是股數）"""
+    plt.rcParams["font.sans-serif"] = FONTS
+    plt.rcParams["axes.unicode_minus"] = False
+    full = df[df["Volume"] > 0]
+    c = full["Close"]
+    ma5, ma10, ma20, ma60 = (c.rolling(n).mean().iloc[-bars:] for n in (5, 10, 20, 60))
+    vma20 = (full["Volume"] / 1000.0).rolling(20).mean().iloc[-bars:]
+    d = full.iloc[-bars:]
+    idx = d.index
+    x = list(range(len(d)))
+    n = len(d)
+    last = float(d["Close"].iloc[-1])
+
+    fig, (ax, axv) = plt.subplots(2, 1, figsize=(8, 6.2), dpi=150, sharex=True, gridspec_kw={"height_ratios": [3, 1.3]})
+    for xi, (o, h, l, cl) in enumerate(zip(d["Open"], d["High"], d["Low"], d["Close"])):
+        col = UP if cl >= o else DOWN
+        ax.vlines(xi, l, h, color=col, linewidth=1)
+        ax.bar(xi, max(abs(cl - o), (h - l) * 0.02), bottom=min(o, cl), width=0.65, color=col)
+    ax.plot(x, ma5.values, color="#e6a700", linewidth=0.8, label="5日")
+    ax.plot(x, ma10.values, color="#16a085", linewidth=0.8, label="10日")
+    ax.plot(x, ma20.values, color=MA20_C, linewidth=1.2, label="月線")
+    ax.plot(x, ma60.values, color=MA60_C, linewidth=1.2, label="季線")
+
+    # --- 右側標價位：前高、大量日的最高／最低點 ---
+    hi_i = int(d["High"].to_numpy().argmax())
+    hi_v = float(d["High"].iloc[hi_i])
+    marks = [(hi_v, f"前高 {hi_v:,.1f}", "#e64980", ":")]
+    vol_marks = []
+    for day, rank, side, level in _big_volume_days(d, last):
+        col = "#e04a4a" if side == "壓力" else "#2e9e4f"
+        pt = "最高" if side == "壓力" else "最低"
+        marks.append((level, f"第{rank}大量{pt} {level:,.1f}", col, "--"))
+        vol_marks.append((_pos(idx, day), rank, col))
+    top_v, bot_v = float(d["High"].max()), float(d["Low"].min())
+    allv = [m[0] for m in marks] + [top_v, bot_v]
+    lo_y, hi_y = min(allv), max(allv)
+    rng_v = max(hi_y - lo_y, 1e-9)
+    if ma60.notna().any():                                      # 季線盡量留在圖裡（最多把範圍放大 35%，K 線才不會被壓扁）
+        lo_y = min(lo_y, max(float(ma60.min()), lo_y - rng_v * 0.35))
+        hi_y = max(hi_y, min(float(ma60.max()), hi_y + rng_v * 0.35))
+        rng_v = max(hi_y - lo_y, 1e-9)
+    ax.set_ylim(lo_y - rng_v * 0.06, hi_y + rng_v * 0.08)
+    gap = rng_v * 0.075                                         # 右側文字上下至少隔開一點，才不會疊在一起
+    ys = {}
+    for k, (val, _, _, _) in sorted(enumerate(marks), key=lambda t: -t[1][0]):
+        ys[k] = val if not ys else min(val, min(ys.values()) - gap)
+    for k, (val, txt, col, ls) in enumerate(marks):
+        ax.axhline(val, color=col, linestyle=ls, linewidth=0.9, alpha=0.75)
+        ax.text(n + 0.6, ys[k], txt, fontsize=8.5, color=col, va="center", ha="left", clip_on=False)
+    ax.plot([n - 1], [last], marker="<", color="#333", markersize=0)
+    ax.text(n + 0.6, last, f"現價 {last:,.1f}", fontsize=8.5, color="#333", va="center", ha="left", clip_on=False,
+            fontweight="bold") if all(abs(last - ys[k]) > gap * 0.8 for k in ys) else None
+    ax.set_ylabel("價格")
+    ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
+    ax.grid(alpha=0.15)
+
+    # --- 成交量（張）---
+    v = d["Volume"] / 1000.0
+    cols = [UP if cl >= o else DOWN for o, cl in zip(d["Open"], d["Close"])]
+    axv.bar(x, v.values, color=cols, width=0.65)
+    axv.plot(x, vma20.values, color="#e67e22", linewidth=1.1, label="20日均量")
+    for p_, rank, col in vol_marks:
+        if p_ is not None:
+            axv.bar([p_], [float(v.iloc[p_])], color="none", edgecolor=col, linewidth=2.2, width=0.65)
+            axv.annotate(f"第{rank}大量", xy=(p_, float(v.iloc[p_])), xytext=(p_, float(v.iloc[p_]) * 1.04),
+                         fontsize=8, color=col, ha="center", va="bottom")
+    axv.set_ylim(0, float(v.max()) * 1.3)
+    axv.set_ylabel("成交量（張）")
+    axv.legend(loc="upper left", fontsize=8, frameon=False)
+    axv.grid(alpha=0.15)
+
+    step = max(1, n // 9)
+    ticks = list(range(0, n, step))
+    axv.set_xticks(ticks)
+    axv.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
+    axv.set_xlim(-1, n)
+    fig.suptitle(f"{title}　{idx[0]:%m/%d}–{idx[-1]:%m/%d}".strip(), fontsize=11, x=0.02, ha="left")
+    fig.tight_layout(rect=(0, 0, 0.86, 0.96))
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    return buf.getvalue()
