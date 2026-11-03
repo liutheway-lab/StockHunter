@@ -3,6 +3,7 @@
 資料口徑跟夜間掃描完全相同（data.py、strategies.py 共用）。
 """
 import html
+import os
 import time
 import json
 import re
@@ -31,16 +32,21 @@ for _m in (cfg, lookup, data, S, backtest, guide, chart_png):
 
 st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="centered")
 # 檢查其他檔案是不是也更新了（只換了 app.py、沒換 config.py／strategies.py 時，給清楚的提示）
-_missing = [f for f, ok in (("config.py", hasattr(cfg, "WATCH_MAX_CONSOL")),
-                            ("strategies.py", hasattr(S, "watch_tomorrow")),
+_missing = [f for f, ok in (("config.py", hasattr(cfg, "names_join")),
+                            ("strategies.py", "split" in S.attack_plan.__code__.co_varnames),
                             ("backtest.py", "entry_mode" in backtest.run_stock.__code__.co_varnames),
-                            ("guide.py", "CHASE_GAIN" in open(guide.__file__, encoding="utf-8").read()),
-                            ("chart_png.py", hasattr(chart_png, "stock_chart"))) if not ok]
+                            ("guide.py", "強勢續攻" in open(guide.__file__, encoding="utf-8").read()),
+                            ("chart_png.py", hasattr(chart_png, "_place_label"))) if not ok]
 if _missing:
     st.error("⚠️ GitHub 上這幾個檔案還是舊版，請重新上傳：" + "、".join(_missing))
     st.stop()
 st.title("📈 台股戰情室")
-st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}")
+try:                                                    # 程式更新時間＝app.py 這個檔案最後一次更新（重新部署）的時間
+    _upd = datetime.fromtimestamp(os.path.getmtime(__file__), ZoneInfo("Asia/Taipei"))
+    _upd_txt = f"｜程式更新 {_upd:%m-%d %H:%M}"
+except Exception:
+    _upd_txt = ""
+st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}{_upd_txt}")
 
 def guide_markdown():
     """說明書原本是 Telegram 格式；轉成網頁 Markdown：*粗體* → **粗體**，每個換行都保留"""
@@ -1002,6 +1008,9 @@ if target:
             except Exception:
                 lv = {"press": None, "supp": None}
             pr, sp = lv["press"], lv["supp"]
+            if any(x and "vday" not in x for x in (pr, sp)):          # chart_png.py 還是舊版（沒有起點那根 K 棒的資料）
+                st.warning(L("chart_png.py 是舊版", "請把最新的 chart_png.py 上傳到 GitHub"))
+                pr = sp = None
             if pr:
                 st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（{pr['day']:%m/%d} 最高）**",
                               f"高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
