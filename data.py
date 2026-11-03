@@ -49,9 +49,8 @@ def _clean(df):
     return df if len(df) else None
 
 
-def fetch_twse_turnover(months=4):
-    """證交所官方：加權市場每日成交金額（元）。回傳 Series（索引是日期）。
-    Yahoo 的加權指數成交量不可靠，所以止跌確認的量能改用這份。"""
+def fetch_twse_daily(months=4):
+    """證交所官方 FMTQIK：每天的成交金額（元）和加權指數收盤。回傳 DataFrame（amount, close），索引是日期"""
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     y, m = now.year, now.month
     out = {}
@@ -62,10 +61,13 @@ def fetch_twse_turnover(months=4):
                 r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
                 j = r.json()
                 if j.get("stat") == "OK" and j.get("data"):
-                    col = j["fields"].index("成交金額")
+                    f = j["fields"]
+                    ca = f.index("成交金額")
+                    cc = next((n for n, x in enumerate(f) if "加權" in str(x)), None)
                     for row in j["data"]:
                         yy, mm, dd = (int(x) for x in row[0].strip().split("/"))
-                        out[pd.Timestamp(yy + 1911, mm, dd)] = float(str(row[col]).replace(",", ""))
+                        out[pd.Timestamp(yy + 1911, mm, dd)] = {
+                            "amount": _numf(row[ca]), "close": _numf(row[cc]) if cc is not None else None}
                 break
             except Exception as e:
                 print(f"證交所成交金額 {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
@@ -76,7 +78,13 @@ def fetch_twse_turnover(months=4):
             y, m = y - 1, 12
     if not out:
         raise RuntimeError("證交所成交金額抓不到")
-    return pd.Series(out).sort_index()
+    return pd.DataFrame.from_dict(out, orient="index").sort_index()
+
+
+def fetch_twse_turnover(months=4):
+    """證交所官方：加權市場每日成交金額（元）。回傳 Series（索引是日期）。
+    Yahoo 的加權指數成交量不可靠，所以止跌確認的量能改用這份。"""
+    return fetch_twse_daily(months)["amount"].dropna()
 
 
 def fetch_twse_ohlc(months=3):
@@ -86,10 +94,11 @@ def fetch_twse_ohlc(months=3):
     y, m = now.year, now.month
     rows = {}
     for _ in range(months):
-        url = f"https://www.twse.com.tw/exchangeReport/MI_5MINS_HIST?response=json&date={y}{m:02d}01"
-        for k in range(3):
+        urls = [f"https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date={y}{m:02d}01&response=json",   # 新網址
+                f"https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={y}{m:02d}01"]  # 舊網址
+        for k in range(4):
             try:
-                r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                r = requests.get(urls[k % 2], timeout=20, headers={"User-Agent": "Mozilla/5.0"})
                 j = r.json()
                 if j.get("stat") == "OK" and j.get("data"):
                     for row in j["data"]:
@@ -100,7 +109,7 @@ def fetch_twse_ohlc(months=3):
                 break
             except Exception as e:
                 print(f"證交所加權指數 {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
-                time.sleep(2)
+                time.sleep(1)
         time.sleep(0.5)
         m -= 1
         if m == 0:
@@ -161,30 +170,95 @@ def fetch_mi_index_amounts(day):
     return out
 
 
+def _fix_hl(raw):
+    """Yahoo 最後一天有時只有收盤、沒有開高低：用收盤補上，才不會整天被丟掉"""
+    if raw is None or len(raw) == 0:
+        return raw
+    raw = raw.copy()
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+    if "Close" in raw.columns:
+        for c in ("Open", "High", "Low"):
+            if c in raw.columns:
+                raw[c] = raw[c].fillna(raw["Close"])
+    return raw
+
+
+def _add_missing(df, extra, note):
+    """把 extra 裡 df 沒有的日子加進來（只加新的日子，不改舊的）"""
+    if extra is None or len(extra) == 0:
+        return df, 0
+    extra = extra[extra.index > df.index[-1]]
+    if len(extra) == 0:
+        return df, 0
+    df = pd.concat([df, extra[COLS]]).sort_index()
+    df = df[~df.index.duplicated(keep="first")]
+    return df, len(extra)
+
+
+def _yahoo_recent():
+    """Yahoo 另一種抓法（跟個股一樣用 history），只抓最近一個月"""
+    h = yf.Ticker("^TWII").history(period="1mo", interval="1d", auto_adjust=False)
+    return _clean(_fix_hl(h))
+
+
+def _yahoo_intraday_days():
+    """Yahoo 盤中 5 分 K 合成日 K：日線還沒更新時，用它補最近幾天"""
+    h = yf.Ticker("^TWII").history(period="5d", interval="5m", auto_adjust=False)
+    h = _clean(_fix_hl(h))
+    if h is None:
+        return None
+    g = h.groupby(h.index.normalize())
+    out = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(), "Low": g["Low"].min(),
+                        "Close": g["Close"].last(), "Volume": 0.0})
+    return out
+
+
 def fetch_market(period="2y", retries=3):
     """加權指數日線（^TWII）。價格來自 Yahoo；Volume 欄位換成證交所官方的「成交金額」。
+    Yahoo 日線偶爾少最近一天，依序用這些補：Yahoo 另一種抓法 → Yahoo 盤中 5 分 K → 證交所官方開高低收 → 證交所收盤。
     成交金額抓不到時 Volume 全部留空，止跌確認會顯示『無法確認』，而不是用錯的數字。"""
     last = None
     for k in range(retries):
         try:
             raw = yf.download("^TWII", period=period, interval="1d", progress=False, auto_adjust=False)
-            df = _clean(raw)
+            df = _clean(_fix_hl(raw))
             if df is not None and len(df) >= 70:
-                df = patch_with_twse(df)
-                try:
-                    s = fetch_twse_turnover()
-                    df["Volume"] = s.reindex(df.index)
-                    df.attrs["vol_source"] = "twse"
-                except Exception as e:
-                    print("大盤成交金額抓取失敗：", repr(e))
-                    df["Volume"] = np.nan
-                    df.attrs["vol_source"] = "none"
-                return df
+                break
             last = "資料不足"
         except Exception as e:
             last = repr(e)
         time.sleep(3 * (k + 1))
-    raise RuntimeError(f"加權指數抓取失敗：{last}")
+    else:
+        raise RuntimeError(f"加權指數抓取失敗：{last}")
+    notes = []                                                   # 補了什麼，顯示在 App 的提醒裡
+    for name, fn in (("Yahoo 日線（另一種抓法）", _yahoo_recent), ("Yahoo 盤中資料", _yahoo_intraday_days)):
+        try:
+            df, n = _add_missing(df, fn(), name)
+            if n:
+                notes.append(f"{name}補上 {n} 天")
+        except Exception as e:
+            print(f"{name} 補資料失敗：", repr(e))
+    df = patch_with_twse(df)                                     # 證交所官方開高低收：補缺的、校正有落差的
+    notes.append(df.attrs.get("twse_note", ""))
+    try:
+        tw = fetch_twse_daily()
+        if tw["close"].notna().any():                            # 還是缺的日子：至少用證交所收盤補上
+            c = tw["close"].dropna()
+            c = c[c.index > df.index[-1]]
+            if len(c):
+                extra = pd.DataFrame({"Open": c, "High": c, "Low": c, "Close": c, "Volume": 0.0})
+                df, n = _add_missing(df, extra, "")
+                if n:
+                    notes.append(f"證交所收盤補上 {n} 天（沒有開高低）")
+        df["Volume"] = tw["amount"].reindex(df.index)
+        df.attrs["vol_source"] = "twse"
+    except Exception as e:
+        print("大盤成交金額抓取失敗：", repr(e))
+        df["Volume"] = np.nan
+        df.attrs["vol_source"] = "none"
+    df.attrs["twse_note"] = "\n".join(x for x in notes if x)
+    return df
 
 
 def _extract(raw, t, single=False):
