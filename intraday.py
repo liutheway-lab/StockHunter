@@ -171,12 +171,6 @@ FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出
 _LASTQ = {}
 _LAST_Z = {}     # {代號: (日期, 最近一次成交價)}：證交所有時一瞬間沒回成交價，就用這個
 _STATUS = {}    # {chat id: 「⏱ 盤中監控…」那一行}，跟著置頂看板一起保存
-NAME_JOKES = ["哲哲老師只認得代號喔😊\n麻煩幫我打代號好嗎？\n例：2330",
-              "哲哲老師從國外留學回來\n不太認識中文😅\n請打代號，例：2330",
-              "哲哲老師在國外念書\n中文都還給老師了🤣\n只看得懂數字，例：2330",
-              "哲哲老師出國太久\n只記得代號😆\n請打數字代號，例：2330",
-              "抱歉，哲哲老師中文不好🙏\n留學回來只會看代號\n例：2330",
-              "名字哲哲老師看不懂啦😂\n他只認得代號\n拜託打代號，例：2330"]
 LOST_REPLIES = [
     "謝謝你傳訊息給我～😊\n不過哲哲老師看不太懂這句\n請用下方按鍵上的指令唷～",
     "哇～收到你的訊息了！🥰\n可是這句超出老師的功力\n麻煩點下面的按鈕吧～",
@@ -454,6 +448,10 @@ def start_dir_loader():
             try:
                 from lookup import load_directory
                 d = load_directory(timeout=15)
+                if d.attrs.get("errors"):                    # 證交所清單抓不全（常擋國外主機）：改用富果的完整清單
+                    fd = fugle_directory()
+                    if fd is not None and len(fd) >= len(d):
+                        d = fd
                 _DIR = d
                 if not d.attrs.get("errors"):
                     return
@@ -464,6 +462,34 @@ def start_dir_loader():
 
     _dir_thread = threading.Thread(target=run, daemon=True)
     _dir_thread.start()
+
+
+def fugle_directory():
+    """用富果的股票清單（上市＋上櫃，一共兩次請求）建出跟 lookup.load_directory 一樣格式的表；沒金鑰或失敗回 None"""
+    if not FUGLE_KEY:
+        return None
+    try:
+        import pandas as pd
+        rows = []
+        for ex, sfx, mk in (("TWSE", ".TW", "上市"), ("TPEx", ".TWO", "上櫃")):
+            SRC["fugle_calls"].append(time.time())
+            r = requests.get("https://api.fugle.tw/marketdata/v1.0/stock/intraday/tickers",
+                             params={"type": "EQUITY", "exchange": ex},
+                             headers={"X-API-KEY": FUGLE_KEY}, timeout=15)
+            r.raise_for_status()
+            for d in r.json().get("data") or []:
+                code, name = str(d.get("symbol") or ""), str(d.get("name") or "").strip()
+                if code.isdigit() and 4 <= len(code) <= 6 and name:
+                    rows.append({"code": code, "name": name, "industry": "", "suffix": sfx, "market": mk})
+        if len(rows) < 500:                                  # 太少，當作失敗（正常上市上櫃加起來有 1800 多檔）
+            return None
+        df = pd.DataFrame(rows).drop_duplicates("code")
+        df.attrs["errors"] = []
+        print(f"股票清單：改用富果，共 {len(df)} 檔", flush=True)
+        return df
+    except Exception as e:
+        print("富果股票清單失敗：", repr(e), flush=True)
+        return None
 
 
 def get_dir():
@@ -477,8 +503,13 @@ def get_dir():
     try:
         from lookup import load_directory
         _DIR = load_directory()
+        if _DIR.attrs.get("errors"):
+            fd = fugle_directory()
+            if fd is not None and len(fd) >= len(_DIR):
+                _DIR = fd
     except Exception as e:
         print("股票清單抓取失敗：", repr(e))
+        _DIR = fugle_directory()
     return _DIR
 
 
@@ -522,6 +553,30 @@ def find_stock(text):
     except Exception as e:
         print("股票清單查詢失敗：", repr(e))
         return []
+
+
+def pick_stock(cid, text, flow):
+    """把輸入（代號、中文名稱，可以多檔）轉成代號。回傳 (代號清單, 要回給使用者的話或 None, 要顯示的選項按鈕或 None)"""
+    tokens = [t for t in re.split(r"[\s,，、]+", text.strip()) if t]
+    codes, notes, rows = [], [], None
+    for tk in tokens:
+        m = re.match(r"^(\d{4,6})(?:\.(?:TWO|TW))?$", tk, re.I)
+        if m:
+            codes.append(m.group(1))
+            continue
+        res = find_stock(tk)
+        if res is None:
+            return [], "股票清單還在載入中\n請先輸入代號，例：2330\n或過一分鐘再試", None
+        if len(res) == 1:
+            codes.append(str(res[0]["code"]))
+        elif not res:
+            notes.append(f"找不到「{tk}」")
+        elif len(tokens) == 1:                              # 只輸入一個名稱、有好幾檔：做成按鈕讓他選
+            rows = [[f"{r['code']} {r['name']}"] for r in res]
+            return [], f"「{tk}」有 {len(res)} 檔\n請按下面要的那一檔", rows
+        else:
+            notes.append(f"「{tk}」有多檔，請打完整名稱或代號")
+    return list(dict.fromkeys(codes)), "\n".join(notes) or None, None
 
 
 def volume_key(raw, price, days=65):
@@ -656,11 +711,11 @@ FORMAT = {
 }
 HELP = ("🤖 *持股追蹤*\n"
         "按下方按鈕就行：\n"
-        "買進　→ 輸入代號、數量、成交價\n"
+        "買進　→ 輸入名稱或代號、數量、成交價\n"
         "賣出　→ 選股票、數量\n"
         "持股　→ 看目前持股與即時損益\n"
         "調價　→ 選股票、調整價位\n"
-        "查價　→ 輸入代號看最新成交價\n"
+        "查價　→ 輸入名稱或代號看成交價\n"
         "清畫面　→ 只留釘選的持股清單\n"
         "\n"
         "數量可以打「2張」或「500股」。\n"
@@ -892,7 +947,7 @@ def guided(cid, text, h):
         return "持股"                                  # 取消後回到持股畫面
     if t == "買進":
         SESSIONS[cid] = {"flow": "buy", "step": "code"}
-        send_kb(cid, "要買哪一檔？\n請輸入股票代號\n例：2330", _kb([["取消"]]))
+        send_kb(cid, "要買哪一檔？\n請輸入股票名稱或代號\n例：台積電、2330", _kb([["取消"]]))
         return None
     if t == "賣出":
         if not h:
@@ -905,7 +960,7 @@ def guided(cid, text, h):
     if t == "查價":
         SESSIONS[cid] = {"flow": "quote", "step": "code"}
         rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
-        send_kb(cid, "要查哪幾檔？\n輸入代號，可以一次多檔\n例：2330 2317" + ("\n或按下面的持股" if h else ""), _kb(rows))
+        send_kb(cid, "要查哪幾檔？\n輸入名稱或代號，可以多檔\n例：台積電 2317" + ("\n或按下面的持股" if h else ""), _kb(rows))
         return None
     if t == "調價":
         if not h:
@@ -917,9 +972,10 @@ def guided(cid, text, h):
         return None
     s_ = SESSIONS[cid]
     if s_["flow"] == "quote":
-        codes = list(dict.fromkeys(re.findall(r"\d{4,6}", t)))
-        if not codes:
-            send_kb(cid, random.choice(NAME_JOKES), _kb([["取消"]]))
+        codes, note, rows = pick_stock(cid, t, "quote")
+        if not codes or note:                                 # 有一個認不得就先停下來，不要默默少查一檔
+            send_kb(cid, (note + "\n請重新輸入") if note and codes else (note or "請輸入股票名稱或代號\n例：台積電、2330"),
+                    _kb((rows or []) + [["取消"]]))
             return None
         SESSIONS.pop(cid, None)
         return "查價 " + " ".join(codes[:10])
@@ -985,11 +1041,21 @@ def guided(cid, text, h):
     code_m = re.search(r"\d{4,6}", t)
     if s_["step"] == "code":
         if not code_m:
-            if s_["flow"] == "buy":
-                send_kb(cid, random.choice(NAME_JOKES), _kb([["取消"]]))
+            if s_["flow"] == "sell":                           # 賣出：直接在持股裡比對名稱
+                hit = [c for c, x in h.items() if t and (t == x["name"] or t in x["name"])]
+                if len(hit) == 1:
+                    code_m = re.match(r"(\d+)", hit[0])
+                else:
+                    rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items()) if c in hit] or [[f"{c} {x['name']}"] for c, x in sorted(h.items())]
+                    send_kb(cid, "請按下面的股票\n或輸入名稱、代號", _kb(rows + [["取消"]]))
+                    return None
             else:
-                send_kb(cid, "請輸入股票代號\n（4～6 位數字）\n例：2330", _kb([["取消"]]))
-            return None
+                codes, note, rows = pick_stock(cid, t, s_["flow"])
+                if len(codes) != 1 or note:
+                    send_kb(cid, (note + "\n請重新輸入") if note and codes else (note or "請輸入股票名稱或代號\n例：台積電、2330"),
+                            _kb((rows or []) + [["取消"]]))
+                    return None
+                code_m = re.match(r"(\d+)", codes[0])
         s_["code"] = code_m.group(0)
         if s_["flow"] == "sell":
             if s_["code"] not in h:
