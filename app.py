@@ -672,7 +672,7 @@ st.divider()
 st.subheader("🌟 今日推薦")
 scan = get_scan()
 if not scan:
-    st.info(L("還沒有夜間掃描資料", "每個交易日 22:30 掃描完成後，這裡就會出現推薦"))
+    st.info(L("還沒有夜間掃描資料", "每個交易日晚上 22:00 左右掃描完成後，這裡就會出現推薦"))
 else:
     hits, active = scan["hits"], scan["active"]
     st.caption(L(f"資料日 {scan['data_date']}｜夜間掃描 {scan['generated_at']}",
