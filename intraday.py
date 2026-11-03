@@ -126,7 +126,7 @@ def send_to(cid, text):
         print("[沒有對象]", text)
 
 
-HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|股)(・已加碼)?$")
+HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪|▲|▼|－)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|股)(・已加碼)?$")
 FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出場 ([\d,.]+|—)")),
              ("target", re.compile(r"目標 ([\d,.]+|—)")), ("key", re.compile(r"前高 ([\d,.]+|—)")))
 _LASTQ = {}
@@ -226,11 +226,11 @@ def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
         lines += ["", "（目前沒有持股）"]
     for code, x in sorted(h.items()):
         p = (q.get(code) or {}).get("last")
-        lamp, now_l, avg_l, stop_l = "⚪", "成交價 —", f"均價 {_n(x['avg'])}", f"出場 {_n(x['stop'])}"
+        lamp, now_l, avg_l, stop_l = "－", "成交價 —", f"均價 {_n(x['avg'])}", f"出場 {_n(x['stop'])}"
         if p:
             pct = (p / x["avg"] - 1) * 100
             money = (p - x["avg"]) * x["shares"]
-            lamp = "🔴" if pct > 0 else "🟢" if pct < 0 else "⚪"
+            lamp = "▲" if pct > 0 else "▼" if pct < 0 else "－"
             sg = lambda v: "+" if v >= 0 else "−"
             now_l = f"成交價 {_n(p)}　{sg(pct)}{abs(pct):,.1f}%"
             avg_l += f"　損益 {sg(money)}{abs(money):,.0f} 元"
@@ -1173,13 +1173,13 @@ def quote_report(codes):
     for c in codes:
         x = q.get(c)
         if not x:
-            lines += ["", f"⚪ {c}　查不到"]
+            lines += ["", f"－ {c}　查不到"]
             continue
         last, prev = x["last"], x.get("prev")
-        lamp, now_l = "⚪", f"成交價 {_n(last)}"
+        lamp, now_l = "－", f"成交價 {_n(last)}"
         if prev:
             pct = (last / prev - 1) * 100
-            lamp = "🔴" if pct > 0 else "🟢" if pct < 0 else "⚪"
+            lamp = "▲" if pct > 0 else "▼" if pct < 0 else "－"
             now_l += f"　{'+' if pct >= 0 else '−'}{abs(pct):,.1f}%"
         lines += ["", f"{lamp} {c} {x.get('name') or c}", now_l]
         if prev:
