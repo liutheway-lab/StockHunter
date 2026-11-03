@@ -266,7 +266,7 @@ def active_strategies(layer, stab_ok):
     if not cfg.USE_REGIME:
         return ["pullback", "breakout", "dry", "flag"], False
     if layer in (1, 2):
-        return ["pullback", "flag", "breakout"], False       # 盤整後噴出：底部起漲不限空頭，各種行情都可能出現
+        return ["pullback", "flag", "breakout"], False       # 低位階起漲：底部起漲不限空頭，各種行情都可能出現
     if layer == 3:
         return list(cfg.LAYER3_ACTIVE), True                 # 方向未明：只開最保守的，部位減半
     if layer in (4, 5):
@@ -328,7 +328,7 @@ def describe_market(mk):
             if s["ok"]:
                 lines.append("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
     if mk["active"]:
-        names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
+        names = cfg.names_join(mk["active"])
         lines.append(f"✅ 目前啟用的策略：{names}" + ("\n⚠️ 第 3 層方向未明，只開最保守的策略，部位減半" if mk["risk"] else ""))
         lines.append(f"💰 部位：{('過熱，維持正常部位，不加碼' if mk.get('tag') == '過熱' else cfg.LAYER_SIZE.get(mk['layer'], ''))}")
     else:
@@ -347,8 +347,8 @@ ATTACK_DAY_CHECKS = ("攻擊日：收盤突破盤整高點", "收紅 K", "攻擊
 
 
 def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **extra):
-    """創高拉回、噴後整理共用的「攻擊日」判斷。
-    pk：前波高點那一天；S：策略自己的起漲價（噴後整理用來判斷回檔，不再拿來算目標）。
+    """強勢續攻（創高拉回、噴出後整理）共用的「攻擊日」判斷。
+    pk：前波高點那一天；S：策略自己的起漲價（噴出後整理用來判斷回檔，不再拿來算目標）。
     目標價＝盤整最低點 ＋ 整段漲幅（前波高點 − 前高之前 30 日內的最低點），兩套共用同一種算法。
     盤整區＝前波高點之後到昨天（4～10 天、離前高 ≤ 10%）；
     今天收盤第一次站上盤整高點、收紅 K、漲 ≥ 5%、收在當天上 1/3、量能 ≥ 前高那天的 9 成 → 攻擊日。
@@ -418,7 +418,7 @@ def attack_stop(r, entry):
 
 
 def check_pullback(df, i, ratios=None, max_consol=None):
-    """策略 1：創高拉回。近 30 日創新高 → 盤整（量縮、離前高 ≤ 10%）→ 攻擊日進場。df 需先 add_indicators"""
+    """強勢續攻之一：創高拉回。近 30 日創新高 → 盤整（量縮、離前高 ≤ 10%）→ 攻擊日進場。df 需先 add_indicators"""
     if i < 69 or i >= len(df):
         return None
     row = df.iloc[i]
@@ -449,7 +449,7 @@ def check_pullback(df, i, ratios=None, max_consol=None):
 
 
 def check_breakout(df, i):
-    """策略 2：盤整後噴出（低檔爆量起漲，突破 30 日頸線）"""
+    """低位階起漲（低檔爆量起漲，突破 30 日頸線）"""
     if i < 69 or i >= len(df):
         return None
     row = df.iloc[i]
@@ -484,7 +484,7 @@ def check_breakout(df, i):
 
 
 def check_dry(df, i, mkt=None):
-    """策略 3：量縮抗跌。mkt：加權指數日線 DataFrame（用來比較抗跌）"""
+    """量縮抗跌。mkt：加權指數日線 DataFrame（用來比較抗跌）"""
     if i < 69 or i >= len(df):
         return None
     row = df.iloc[i]
@@ -552,7 +552,7 @@ def check_dry(df, i, mkt=None):
 
 
 def check_flag(df, i, max_consol=None):
-    """策略 4：噴出後整理再攻。以昨天(j)為基準判斷型態，今天(i)判斷是否接近/突破前波高點"""
+    """強勢續攻之二：噴出後整理。以昨天(j)為基準判斷型態，今天(i)判斷是否接近/突破前波高點"""
     if i < 69 or i >= len(df):
         return None
     j = i - 1
@@ -680,9 +680,13 @@ def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_n
     }
 
 
-def attack_plan(r, entry=None):
-    """創高拉回、噴後整理：攻擊日買 50%，站上前波高點（突破日）再買 50%。entry：實際買價（回測追價用）"""
-    t = tuple(cfg.ATTACK_SPLIT)
+def attack_plan(r, entry=None, split=None):
+    """強勢續攻：攻擊日買 50%，站上前波高點（突破日）再買 50%。entry：實際買價（回測追價用）
+    split：自訂兩筆比例（攻擊日, 突破日），不給就用 config 預設；會自動換算成合計 1"""
+    t = tuple(float(x) for x in (split or cfg.ATTACK_SPLIT))
+    if len(t) != 2 or any(x < 0 for x in t) or sum(t) <= 0:
+        t = tuple(cfg.ATTACK_SPLIT)
+    t = (t[0] / sum(t), t[1] / sum(t))
     e = tick(entry if entry is not None else r["entry"])
     stop1, note = attack_stop(r, e) if entry is not None else (r["stop1"], r.get("stop1_note", ""))
     k = tick(r["key"])
@@ -700,12 +704,12 @@ def attack_plan(r, entry=None):
     }
 
 
-def plan_for(name, r, ratios=None):
-    """依策略結果 r 產生交易計畫"""
+def plan_for(name, r, ratios=None, split=None):
+    """依策略結果 r 產生交易計畫（split＝強勢續攻的兩筆比例）"""
     if r is None:
         return None
     if name in ("pullback", "flag"):
-        return attack_plan(r)
+        return attack_plan(r, split=split)
     labels = {"breakout": "突破當天最高價", "dry": "近20日高點"}
     return ladder_plan(r["close"], r["key"], r["stop1"], r["target"], ratios,
                        key_label=f"突破{labels[name]}", stop1_note=r.get("stop1_note", ""),
@@ -743,11 +747,11 @@ def verdict(ev):
     ok_names = [n for n, r in ev["results"].items() if r and r["ok"]]
     go = [n for n in ok_names if ev["results"][n]["active"]]
     if go:
-        names = "、".join(cfg.STRATEGY_NAMES[n] for n in go)
+        names = cfg.names_join(go)
         risk = "（大盤第 3 層，部位減半）" if mk and mk["risk"] else ""
         return "go", f"✅ 符合【{names}】，且大盤目前適用{risk}"
     if ok_names:
-        names = "、".join(cfg.STRATEGY_NAMES[n] for n in ok_names)
+        names = cfg.names_join(ok_names)
         return "watch", f"⚠️ 型態符合【{names}】，但目前大盤層級不適用這套策略，先觀察"
     if mk and not mk["active"]:
         return "stop", "🔴 大盤尚未止跌，不建議建立多頭部位；這檔也沒有符合的策略"
