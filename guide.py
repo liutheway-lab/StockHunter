@@ -135,11 +135,41 @@ def build():
 　突破後移到前高下 {pct(cfg.ATTACK_STOP2_PCT)}
 目標：前波高點＋前一波漲幅
 
+🌱 *盤整後噴出*
+低檔盤整後，爆量突破
+① 近 {cfg.BO_BOX_DAYS} 日低點
+　≥ 高點的 {pct(cfg.BO_BOX_RATIO)}（區間夠窄）
+② 離 60 日低點漲幅
+　≤ {pct(cfg.BO_MAX_RISE)}（還在低檔）
+③ 收盤突破 {cfg.BO_PLATFORM} 日高點（頸線）
+④ 量 ≥ 20 日均量 {cfg.BO_VOL_MULT:g} 倍
+⑤ 站上季線，月線翻揚
+出場：頸線下 2%
+　與買價下 {pct(cfg.BO_STOP_PCT)} 取較低
+目標：買價 +{pct(cfg.BO_TARGET_PCT)}
+
+🛡 *量縮抗跌*
+大盤跌時，它不跌也沒量
+① 3 日均量
+　≤ 20 日均量的 {pct(cfg.DRY_VOL_RATIO)}
+② {cfg.STAB_DAYS} 日不破前低
+③ 比大盤抗跌：
+　大盤自高點起算的跌幅，
+　個股最大回檔 ≤ 它的 {pct(cfg.DRY_RS_RATIO)}
+④ 離上方大量壓力
+　≤ {pct(cfg.DRY_MAX_PRESSURE_DIST)}
+　（上方沒有大量壓力就算過）
+⑤ 出場價低於買價
+出場：近 {cfg.DRY_STOP_DAYS} 日最低點
+目標：近 {cfg.DRY_KEY_LOOKBACK} 日高點（突破價）
+　第二目標看上方壓力
+
 *四、各層啟用的策略*
 第 1、2 層：
 　創高拉回、噴出後整理再攻
 　盤整後噴出
-第 3 層：同上，標示風險、縮小部位
+第 3 層：只開創高拉回
+　部位減半
 第 4、5 層：預設不進場
 　止跌確認通過才啟用
 　盤整後噴出、量縮抗跌
