@@ -247,7 +247,15 @@ def stock_chart(df, title="", bars=65):
     axv.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
     axv.set_xlim(-1, n)
     fig.suptitle(f"{title}　{idx[0]:%m/%d}–{idx[-1]:%m/%d}".strip(), fontsize=11, x=0.02, ha="left")
-    fig.tight_layout(rect=(0, 0, 0.86, 0.96))
+    if n >= 2:                                                  # 現價、漲跌點、幅度（紅漲綠跌，跟看盤軟體一致）
+        prev = float(d["Close"].iloc[-2])
+        chg = last - prev
+        pct = chg / prev * 100 if prev else 0.0
+        col = UP if chg > 0 else DOWN if chg < 0 else "#555"
+        arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"
+        fig.text(0.02, 0.925, f"{last:,.2f}　{arrow} {abs(chg):,.2f}（{pct:+.2f}%）", fontsize=13, color=col,
+                 fontweight="bold", ha="left", va="top")
+    fig.tight_layout(rect=(0, 0, 0.86, 0.92))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
