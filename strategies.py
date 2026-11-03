@@ -359,7 +359,7 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
     H = float(h[pk])
     n_cons = i - 1 - pk
     if n_cons >= 1:
-        upper, lower = float(h[pk + 1:i].max()), float(l[pk + 1:i].min())
+        upper, lower = float(h[pk:i].max()), float(l[pk + 1:i].min())      # 盤整高點把前波高點也算進去
     else:
         upper = lower = float("nan")
     E = float(c[i])
