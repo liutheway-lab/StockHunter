@@ -35,11 +35,10 @@ def _fp(x):
     return out.rstrip("0").rstrip(".") if "." in out else out
 
 
-def _gauge(pos, thr, n=20):
-    """橫線＋圓點：圓點＝今天收盤在當天最低（左）到最高（右）的哪裡；粗線＝要收到的範圍"""
+def _gauge(pos, n=20):
+    """橫線＋圓點：圓點＝今天收盤在當天最低（左）到最高（右）的哪裡，圓點旁邊標出幾 %"""
     k = min(n - 1, max(0, int(round(pos * (n - 1)))))
-    cut = int(math.ceil(thr * (n - 1) - 1e-9))
-    return "".join("●" if j == k else ("━" if j >= cut else "─") for j in range(n))
+    return "".join(f"●{pos * 100:.0f}%" if j == k else "─" for j in range(n))
 
 
 def tick(price, mode="round"):
@@ -426,8 +425,7 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
         ("收紅 K", bool(c[i] > o[i]), f"開盤 {_fp(o[i])}、收盤 {_fp(E)}"),
         ("攻擊日漲幅", bool(gain >= cfg.ATTACK_MIN_GAIN), f"今日漲 {gain * 100:+.1f}%（需 ≥ {cfg.ATTACK_MIN_GAIN * 100:.0f}%）"),
         ("收盤位置", bool(pos >= cfg.ATTACK_CLOSE_POS),
-         f"最低 {_gauge(pos, cfg.ATTACK_CLOSE_POS)} 最高；"
-         f"今天收在 {pos * 100:.0f}% 處（圓點）；要收到粗線範圍（{cfg.ATTACK_CLOSE_POS * 100:.0f}% 以上）"),
+         f"最低 {_gauge(pos)} 最高；要 {cfg.ATTACK_CLOSE_POS * 100:.0f}% 以上"),
         ("攻擊日量能", bool(vol_pk > 0 and vr >= cfg.ATTACK_VOL_VS_PEAK),
          f"今日量 = 前高那天的 {vr * 100:.0f}%（需 ≥ {cfg.ATTACK_VOL_VS_PEAK * 100:.0f}%）"),
     ]
