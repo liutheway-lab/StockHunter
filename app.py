@@ -236,7 +236,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
                       line=dict(color="rgba(0,168,214,0.8)", width=1, dash="dot"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"最低點 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
+             f"近 {cfg.STAB_DAYS} 日最低點 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
                  f"低點日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#b388ff", -4, 108)
