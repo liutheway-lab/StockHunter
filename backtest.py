@@ -99,7 +99,7 @@ def simulate(O, H, L, C, i, plan, mode, max_hold=MAX_HOLD, fee=None, entry_px=No
             price = max(levels[filled], o) if d > j or levels[filled] <= o else levels[filled]
             fill(filled, price)
             if filled >= 2 and plan.get("stop_after2") and mode != "ladder_stop1":
-                stop = max(stop, float(plan["stop_after2"]))     # 創高拉回、噴後整理：上移到前波高點下 5%
+                stop = max(stop, float(plan["stop_after2"]))     # 強勢續攻：上移到前波高點下 5%
             elif mode == "ladder_avg" and filled >= 2:
                 stop = max(stop, st.tick(cs / sh, "ceil"))
             elif mode == "ladder_stop2" and filled >= 2:
@@ -147,7 +147,7 @@ def prescreen(df, ratios):
 # ================= 單一股票回測 =================
 def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_active=False, entry_mode="chase"):
     """raw：個股日線（不還原）；mkt：加權指數日線；mstate：market_states(mkt)。
-    entry_mode（只影響創高拉回、噴後整理）：
+    entry_mode（只影響強勢續攻）：
       chase＝你的習慣：盤整條件成立時，盤中漲到 4% 且突破盤整高點就追（不管收盤是不是攻擊日）
       close＝收盤確認是攻擊日才用收盤價買
     其他兩套策略一律訊號隔天開盤買。回傳每一筆交易的 DataFrame"""
