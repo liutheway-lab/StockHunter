@@ -2,7 +2,7 @@ name: night
 
 on:
   schedule:
-    - cron: "10 14 * * 1-5"   # 台灣時間 週一到週五 22:10（GitHub 用 UTC，所以是 14:10；避開整點半點比較不會延遲）
+    - cron: "55 13 * * 1-5"   # 台灣時間 週一到週五 21:55（GitHub 用 UTC，所以是 13:55；避開整點半點比較不會延遲）
   workflow_dispatch:          # 也可以手動執行：Actions → night → Run workflow
     inputs:
       diag:
