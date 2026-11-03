@@ -665,26 +665,29 @@ else:
         st.error(L("🔴 尚未止跌，不建議建立多頭部位", f"已讀取 {scan['data_date']} 夜間掃描：今日無推薦"))
 
     wl = scan.get("watch") or {}
-    if any(wl.get(n) for n in ("pullback", "flag")):
+    act_wl = [n for n in ("pullback", "flag") if n in active and wl.get(n)]       # 大盤適用的策略才叫「追價名單」
+    obs_wl = [n for n in ("pullback", "flag") if n not in active and wl.get(n)]   # 不適用的改放進觀察名單
+    if act_wl:
         st.markdown(L("**🎯 明日追價名單**", "盤整條件已成立，明天盤中觀察要不要追"))
-        for name in ("pullback", "flag"):
-            items = wl.get(name) or []
-            if not items:
-                continue
-            note = "" if name in active else "（大盤目前不適用）"
-            foldable(f"wlfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔{note}",
-                     lambda name=name, items=items: watch_buttons(name, items), default=name in active)
+        for name in act_wl:
+            items = wl[name]
+            foldable(f"wlfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔",
+                     lambda name=name, items=items: watch_buttons(name, items), default=True)
     watch = [(n, hits.get(n, [])) for n in ORDER if n not in active and hits.get(n)]
     n_active = sum(len(hits.get(a_, [])) for a_ in active)
     if active and n_active == 0:
         st.info(L(f"✅ 已讀取 {scan['data_date']} 夜間掃描", "今日無推薦：啟用的策略都沒有符合的股票"))
-    if not watch:
+    if not watch and not obs_wl:
         st.caption("👀 觀察名單：無。" if not active else "")
-    if watch:
-        st.markdown(L("**👀 觀察名單**", "型態符合，但大盤目前不適用，僅供追蹤"))
+    if watch or obs_wl:
+        st.markdown(L("**👀 觀察名單**", "型態符合，但大盤目前不適用，僅供追蹤，不建議進場"))
         for name, items in watch:
             foldable(f"obsfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔",
                      lambda name=name, items=items: rec_buttons("obs", name, items))
+        for name in obs_wl:                                        # 盤整條件成立、但大盤不適用的「明天可能的追價點」
+            items = wl[name]
+            foldable(f"obswl_{name}", f"{cfg.STRATEGY_NAMES[name]}・明天可能的追價點｜{len(items)} 檔",
+                     lambda name=name, items=items: watch_buttons(name, items))
 
 # ==================== 資金比例 ====================
 st.divider()
@@ -916,8 +919,12 @@ if target:
         else:
             level, text = S.verdict(ev)
             {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](brk(text))
-            st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
-                            config={"displayModeBar": False, "staticPlot": True})
+            try:                                       # 跟大盤同一種風格的圖（chart_png.py）
+                import chart_png
+                st.image(chart_png.stock_chart(df, title=f"{code} {name}"), use_container_width=True)
+            except Exception:                          # 萬一畫圖失敗，退回原本的互動圖
+                st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
+                                config={"displayModeBar": False, "staticPlot": True})
 
             vi = vol_low_info(df)
             if vi:
