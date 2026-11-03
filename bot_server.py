@@ -92,6 +92,24 @@ def backup_step(now, state, job):
     return f"請 GitHub 補跑 {job['name']} 失敗 {r.status_code} {r.text[:120]}"
 
 
+SHOW = {"night": "夜間掃描", "morning": "早報", "intraday": "盤中監控"}
+
+
+def _notify_owner(job, msg):
+    """只有真的補跑、或補跑失敗時，才私訊管理者一行（平常沒事就不吵）"""
+    if "已請 GitHub 補跑" in msg:
+        text = f"🔁 備援補跑：{SHOW[job['name']]}\nGitHub 排程沒準時"
+    elif "補跑" in msg and "失敗" in msg:
+        text = f"⚠️ {SHOW[job['name']]}補跑失敗\n請到 Actions 手動執行"
+    else:
+        return
+    try:
+        if I.OWNER:
+            I.send_to(I.OWNER, text)
+    except Exception as e:
+        print("通知管理者失敗：", repr(e), flush=True)
+
+
 def backup_loop():
     states = {j["name"]: {} for j in JOBS}
     while True:
@@ -100,6 +118,7 @@ def backup_loop():
                 msg = backup_step(dt.datetime.now(TPE), states[j["name"]], j)
                 if msg:
                     print("排程備援：", msg, flush=True)
+                    _notify_owner(j, msg)
             except Exception as e:
                 print("排程備援錯誤：", repr(e), flush=True)
         time.sleep(60)
