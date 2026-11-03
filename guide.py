@@ -101,7 +101,7 @@ def build():
 
 📈 *創高拉回*
 ① 前高是近 {cfg.PB_LOOKBACK} 日的新高
-　EMA20 > EMA60
+　月線 > 季線
 ② 前高之後盤整至少 {cfg.ATTACK_MIN_CONSOL} 天
 　盤整期量縮
 ③ 出現攻擊日就進場（見下方）
