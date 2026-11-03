@@ -37,6 +37,13 @@ st.markdown("""<style>
   table.ht th { white-space: normal !important; }
   table.ht td:first-child, table.ht th:first-child { white-space: normal !important; }
 }
+.cf { margin: 0.7rem 0 0.4rem 0; }
+.cf .cd { opacity: 0.65; font-size: 0.875rem; line-height: 1.6; margin-top: 0.2rem; }
+.p { display: block; }
+@media (min-width: 1000px) {     /* 電腦：一個句子不換行，句子之間用 ｜ 隔開，排在同一行 */
+  .cf .p, table.ht .p { display: inline; white-space: nowrap; }
+  .cf .p:not(:last-child)::after, table.ht .p:not(:last-child)::after { content: "｜"; margin: 0 0.7em; opacity: 0.4; }
+}
 @media (min-width: 1000px) { .block-container { max-width: 1500px; padding-left: 3rem; padding-right: 3rem; } }
 </style>""", unsafe_allow_html=True)
 # 檢查其他檔案是不是也更新了（只換了 app.py、沒換 config.py／strategies.py 時，給清楚的提示）
@@ -458,12 +465,16 @@ def html_table(head, rows, wrap=(), left=(), bold_first=False):
     border = "1px solid rgba(128,128,128,0.28)"
 
     def cell(tag, i, text, top):
+        if i in wrap and "\n" in str(text):                 # 一個句子一個 span：手機一句一行，電腦排在同一行
+            inner = "".join(f'<span class="p">{esc(x)}</span>' for x in str(text).split("\n"))
+        else:
+            inner = esc(text).replace(chr(10), "<br>")
         align = "left" if i == 0 or i in wrap or i in left else "right"
         ws = "normal" if i in wrap else "nowrap"
         bg = "background:rgba(128,128,128,0.14);font-weight:600;" if tag == "th" else ""
         bt = f"border-top:{border};" if top else ""
         return (f'<{tag} style="padding:6px 7px;text-align:{align};white-space:{ws};{bg}{bt}'
-                f'font-size:0.84rem;line-height:1.35;">{esc(text).replace(chr(10), "<br>")}</{tag}>')
+                f'font-size:0.84rem;line-height:1.35;">{inner}</{tag}>')
 
     out = ['<div style="overflow-x:auto;margin:4px 0 10px 0;"><table class="ht" style="width:100%;'
            f'border-collapse:separate;border-spacing:0;border:{border};border-radius:8px;overflow:hidden;">']
@@ -490,9 +501,9 @@ def md_fail(rows):
     import re as _re
     for name, detail in rows:
         parts = [x.strip() for x in _re.split(r"[；，、]", str(detail)) if x.strip()]
-        st.markdown(f"❌ **{name}**")
-        if parts:
-            st.caption(L(*parts))
+        inner = "".join(f'<span class="p">{html.escape(x)}</span>' for x in parts)
+        st.markdown(f'<div class="cf"><div class="cn">❌ <b>{html.escape(str(name))}</b></div>'
+                    f'<div class="cd">{inner}</div></div>', unsafe_allow_html=True)
 
 
 def plan_view(p, capital, close):
