@@ -67,8 +67,8 @@ def _place_label(ax, d, y, txt, color, taken, fontsize=9, badge=False, ma=(), hl
             continue
         x0 = -0.5
         while x0 + w <= n - 0.3:
-            a_, b_ = max(int(x0), 0), int(min(n, x0 + w + 1))
-            pen = int(((lo[a_:b_] <= y1) & (hi[a_:b_] >= y0)).sum()) * 10            # 壓到 K 棒
+            a_, b_ = max(int(x0) - 1, 0), int(min(n, x0 + w + 2))                     # 左右各多留一根的距離，不貼著 K 棒
+            pen = int(((lo[a_:b_] <= y1 + rng * 0.01) & (hi[a_:b_] >= y0 - rng * 0.01)).sum()) * 40   # 壓到 K 棒
             for m in ma:                                                              # 壓到均線（輕一點）
                 seg = m[a_:b_]
                 pen += int(((seg >= y0) & (seg <= y1)).sum()) * 5
