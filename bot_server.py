@@ -45,6 +45,7 @@ TPE = dt.timezone(dt.timedelta(hours=8))
 JOBS = [
     {"name": "night", "file": "night.yml", "at": (22, 15), "until": (23, 50), "since": (21, 0)},
     {"name": "morning", "file": "morning.yml", "at": (8, 35), "until": (9, 30), "since": (7, 30)},
+    {"name": "intraday", "file": "intraday.yml", "at": (9, 0), "until": (13, 0), "since": (8, 0)},
 ]
 
 
@@ -148,9 +149,9 @@ def main():
     I.start_dir_loader()               # 開機就在背景載入，失敗每分鐘重試
     if GH_TOKEN:
         threading.Thread(target=backup_loop, daemon=True).start()
-        print("夜間掃描備援：已啟動（含早報）", flush=True)
+        print("夜間掃描備援：已啟動（含早報、盤中監控）", flush=True)
     else:
-        print("沒有 GH_TOKEN，夜間掃描備援沒有啟動（含早報）", flush=True)
+        print("沒有 GH_TOKEN，夜間掃描備援沒有啟動（含早報、盤中監控）", flush=True)
     port = int(os.getenv("PORT", "10000"))
     print(f"機器人已啟動，port {port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
