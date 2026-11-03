@@ -631,14 +631,14 @@ def rec_buttons(prefix, strategy, items, limit=15):
 def watch_buttons(name, items, limit=15):
     for it in items[:limit]:
         up = (it["chase"] / it["close"] - 1) * 100 if it["close"] else 0
-        if st.button(f"{it['code']} {it['name']}　追價 {px(it['chase'])}（{up:+.1f}%）｜出場 {px(it['stop1'])}",
+        if st.button(f"{it['code']} {it['name']}　現價 {px(it['close'])}｜追價 {px(it['chase'])}（{up:+.1f}%）｜出場 {px(it['stop1'])}",
                      key=f"watch_{name}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
-    st.caption(L(f"追價＝明天漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點的價格",
-                 f"盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天，盤中看強弱再決定追不追"))
+    st.caption(L(f"現價＝資料日收盤｜追價＝明天要漲到的價格，（%）是比現價高多少",
+                 f"追價點＝漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點｜盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天，盤中看強弱再決定追不追"))
 
 
 st.divider()
