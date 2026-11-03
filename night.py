@@ -56,7 +56,7 @@ def market_block(mk):
     cc = mk["df"]["Close"]
     chg = float(cc.iloc[-1] - cc.iloc[-2]) if len(cc) > 1 else 0.0
     pct = chg / float(cc.iloc[-2]) * 100 if len(cc) > 1 else 0.0
-    arrow = "🔴 ▲" if chg > 0 else "🟢 ▼" if chg < 0 else "⚪ ─"          # 台股習慣：紅漲、綠跌
+    arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"          # 只用箭頭，不用紅綠燈（紅綠燈留給利多／利空，避免搞混）
     out = [head, f"收盤　{mk['close']:,.0f}\n{arrow} {abs(chg):,.0f} 點（{pct:+.2f}%）", code_block(tbl)]
 
     if mk["layer"] in (4, 5):
