@@ -92,9 +92,9 @@ def market_chart(mk, bars=45):
     dd0 = s.get("dump_date")
     dpp = _pos(idx, dd0) if dd0 is not None else None
     if dpp is not None:                                   # 爆量下跌日那根 K 線也用橘色粗框框起來
-        ax.add_patch(plt.Rectangle((dpp - 0.6, float(d["Low"].iloc[dpp]) - rng_v * 0.01), 1.2,
-                                   float(d["High"].iloc[dpp] - d["Low"].iloc[dpp]) + rng_v * 0.02, fill=False,
-                                   edgecolor="#ff8c00", linewidth=2.6, zorder=6))
+        ax.add_patch(plt.Rectangle((dpp - 0.7, float(d["Low"].iloc[dpp]) - rng_v * 0.015), 1.4,
+                                   float(d["High"].iloc[dpp] - d["Low"].iloc[dpp]) + rng_v * 0.03, fill=False,
+                                   edgecolor="#ff8c00", linewidth=1.1, zorder=6))
     ax.set_ylabel("指數")
     ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
     ax.grid(alpha=0.15)
@@ -109,7 +109,8 @@ def market_chart(mk, bars=45):
             dp = _pos(idx, dd)
             axv.axhline(dv / 1e8, color="#ff8c00", linestyle="--", linewidth=1.2)
             if dp is not None:
-                axv.bar([dp], [dv / 1e8], color="none", edgecolor="#ff8c00", linewidth=3.2, width=0.65)
+                axv.add_patch(plt.Rectangle((dp - 0.5, 0), 1.0, dv / 1e8 * 1.03, fill=False,
+                                            edgecolor="#ff8c00", linewidth=1.1, zorder=6, clip_on=False))
                 axv.annotate(f"爆量下跌日（{dd:%m/%d}）", xy=(dp, dv / 1e8),
                              xytext=(dp - 1, dv / 1e8 * 1.03), fontsize=9, color="#e67300", ha="right", fontweight="bold")
         rv = s.get("recent_vol")
@@ -151,21 +152,29 @@ def market_chart(mk, bars=45):
 # =====================================================
 # 個股線圖（跟大盤同一種風格：K 線 + 均線 + 成交量，右邊標價位）
 # =====================================================
-def _big_volume_days(d, close, rank_max=5):
-    """近 65 日成交量排名：第 1 大量；它的最高點在現價之上＝壓力，再往後找最低點在現價之下的＝支撐"""
-    v = d[d["Volume"] > 0]["Volume"]
-    if v.empty:
-        return []
-    order = list(v.sort_values(ascending=False).index)
-    out = []
-    main = order[0]
-    pressure = float(d.loc[main, "High"]) > close
-    out.append((main, 1, "壓力" if pressure else "支撐", float(d.loc[main, "High" if pressure else "Low"])))
-    if pressure:
-        for r, day in enumerate(order[1:rank_max], start=2):
-            if float(d.loc[day, "Low"]) < close:
-                out.append((day, r, "支撐", float(d.loc[day, "Low"])))
-                break
+VOL_MULT = 1.5     # 大量＝當天量至少是當時 20 日均量的 1.5 倍，普通的量不標
+
+
+def vol_levels(df, bars=65):
+    """壓力／支撐（近 bars 日）：收盤在現價之上的天裡，量最大那天的最高點＝壓力；
+    收盤在現價之下的天裡，量最大那天的最低點＝支撐。量要夠大（>= 20 日均量 1.5 倍）才算。
+    回傳 {"press": {...} 或 None, "supp": {...} 或 None}，每項有 day、level、vol（張）、top（是不是整段最大量）"""
+    full = df[df["Volume"] > 0]
+    d = full.iloc[-bars:]
+    if len(d) < 2:
+        return {"press": None, "supp": None}
+    vma = full["Volume"].rolling(20, min_periods=5).mean().reindex(d.index)
+    last = float(d["Close"].iloc[-1])
+    top_day = d["Volume"].idxmax()
+    out = {}
+    for key, mask, col in (("press", d["Close"] > last, "High"), ("supp", d["Close"] < last, "Low")):
+        cand = d[mask & (d["Volume"] >= vma * VOL_MULT)]
+        if cand.empty:
+            out[key] = None
+            continue
+        day = cand["Volume"].idxmax()
+        out[key] = {"day": day, "level": float(d.loc[day, col]), "vol": float(d.loc[day, "Volume"]) / 1000.0,
+                    "top": day == top_day}
     return out
 
 
@@ -198,17 +207,14 @@ def stock_chart(df, title="", bars=65):
     hi_v = float(d["High"].iloc[hi_i])
     marks = [(hi_v, f"前高 {hi_v:,.1f}", "#e64980", ":")]
     vol_marks = []
-    for day, rank, side, level in _big_volume_days(d, last):
-        col = "#ff8c00" if rank == 1 else ("#e04a4a" if side == "壓力" else "#2e9e4f")   # 第1大量固定橘色，跟大盤圖一致
-        pt = "最高" if side == "壓力" else "最低"
-        marks.append((level, f"第{rank}大量{pt} {level:,.1f}", col, "--"))
-        vol_marks.append((_pos(idx, day), rank, col))
-        pi_ = _pos(idx, day)
-        if pi_ is not None:                                     # K 線上也框出那一天
-            from matplotlib.patches import Rectangle
-            ax.add_patch(Rectangle((pi_ - 0.45, float(d["Low"].iloc[pi_])), 0.9,
-                                   float(d["High"].iloc[pi_] - d["Low"].iloc[pi_]), fill=False,
-                                   edgecolor=col, linewidth=1.8, zorder=6))
+    lv = vol_levels(df, bars)
+    for key, nm in (("press", "壓力"), ("supp", "支撐")):
+        it = lv[key]
+        if not it:
+            continue
+        col = "#ff8c00" if it["top"] else ("#e04a4a" if key == "press" else "#2e9e4f")      # 整段最大量固定橘色
+        marks.append((it["level"], f"{nm} {it['level']:,.1f}（{it['day']:%m/%d}）", col, "--"))
+        vol_marks.append((_pos(idx, it["day"]), "第1大量" if it["top"] else nm, col))
     top_v, bot_v = float(d["High"].max()), float(d["Low"].min())
     allv = [m[0] for m in marks] + [top_v, bot_v]
     lo_y, hi_y = min(allv), max(allv)
@@ -239,8 +245,9 @@ def stock_chart(df, title="", bars=65):
     axv.plot(x, vma20.values, color="#e67e22", linewidth=1.1, label="20日均量")
     for p_, rank, col in vol_marks:
         if p_ is not None:
-            axv.bar([p_], [float(v.iloc[p_])], color="none", edgecolor=col, linewidth=3.0, width=0.65)
-            axv.annotate(f"第{rank}大量", xy=(p_, float(v.iloc[p_])), xytext=(p_, float(v.iloc[p_]) * 1.04),
+            axv.add_patch(plt.Rectangle((p_ - 0.5, 0), 1.0, float(v.iloc[p_]) * 1.03, fill=False,
+                                        edgecolor=col, linewidth=1.1, zorder=6, clip_on=False))
+            axv.annotate(rank, xy=(p_, float(v.iloc[p_])), xytext=(p_, float(v.iloc[p_]) * 1.04),
                          fontsize=8, color=col, ha="center", va="bottom")
     axv.set_ylim(0, float(v.max()) * 1.3)
     axv.set_ylabel("成交量（張）")
