@@ -45,7 +45,7 @@ TPE = dt.timezone(dt.timedelta(hours=8))
 JOBS = [
     {"name": "night", "file": "night.yml", "at": (22, 15), "until": (23, 50), "since": (21, 0)},
     {"name": "morning", "file": "morning.yml", "at": (8, 35), "until": (9, 30), "since": (7, 30)},
-    {"name": "intraday", "file": "intraday.yml", "at": (9, 0), "until": (13, 0), "since": (8, 0)},
+    {"name": "intraday", "file": "intraday.yml", "at": (8, 58), "until": (13, 0), "since": (8, 0)},
 ]
 
 
