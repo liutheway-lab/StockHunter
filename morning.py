@@ -2,6 +2,7 @@
 想增減項目，只改下面的 GROUPS（名稱請用 4 個中文字，表格才會對齊）。
 漲跌符號：▲ 上漲、▼ 下跌、─ 持平（只看價格方向，不用紅綠燈）。
 """
+import os
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -227,6 +228,11 @@ def code(lines):
 def run():
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     today = now.date()
+    # GitHub 的排程有時會延遲好幾個小時才跑：過了 10:30 才由「排程」叫起來的，早報已經過期，不要再送
+    # （手動執行不受影響；備援補跑是在 09:30 前，也不受影響）
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and (now.hour, now.minute) >= (10, 30):
+        print(f"排程延遲到 {now:%H:%M}，早報已過期，這次不送")
+        return
     blocks, total, failed = [], 0, 0
     pcts, levels = {}, {}
 
