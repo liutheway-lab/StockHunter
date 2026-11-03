@@ -612,7 +612,8 @@ if mk:
         if _last < _exp:
             st.warning(L(f"大盤資料只到 {_last:%m/%d}，應該要有 {_exp:%m/%d}",
                          "如果那天不是休市，代表資料來源還沒更新",
-                         str(mkt_df.attrs.get("twse_note", "")) or "（沒有證交所補資料的紀錄，data.py 可能還是舊版）"))
+                         *(str(mkt_df.attrs.get("twse_note", "")).split("\n") if mkt_df.attrs.get("twse_note")
+                           else ["（沒有補資料的紀錄，data.py 可能還是舊版）"])))
     except Exception:
         pass
     mL, mR = st.columns([2, 3])          # 電腦：左邊數字和止跌條件、右邊圖；手機會自動變成上下排
@@ -658,7 +659,8 @@ if mk:
         try:                                           # 跟 Telegram 用同一張圖（chart_png.py），兩邊永遠一樣
             import chart_png
             st.image(chart_png.market_chart(mk), use_container_width=True)
-        except Exception:                              # 萬一畫圖失敗，退回互動圖
+        except Exception as e:                         # 萬一畫圖失敗，退回互動圖（並寫出原因，方便排查）
+            st.caption(f"大盤圖產生失敗：{e!r}")
             st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                             use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
 
