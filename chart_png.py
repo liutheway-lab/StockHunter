@@ -23,6 +23,31 @@ def _pos(index, d):
     return index.get_loc(d)
 
 
+BADGE = "#1c7ed6"      # 現價標籤的顏色（藍底白字，跟紅漲綠跌、各種虛線都分得開）
+EXTRA = 8              # 圖右側多留幾根的空白，現價標籤放在這裡，不會壓到 K 線或其他字
+
+
+def _price_header(fig, close, decimals=2, y=0.925):
+    """標題下方一行：現價、漲跌點、幅度（紅漲綠跌）"""
+    if len(close) < 2:
+        return
+    last, prev = float(close.iloc[-1]), float(close.iloc[-2])
+    chg = last - prev
+    pct = chg / prev * 100 if prev else 0.0
+    col = UP if chg > 0 else DOWN if chg < 0 else "#555"
+    arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"
+    fig.text(0.02, y, f"{last:,.{decimals}f}　{arrow} {abs(chg):,.{decimals}f}（{pct:+.2f}%）", fontsize=13, color=col,
+             fontweight="bold", ha="left", va="top")
+
+
+def _price_badge(ax, n, last, decimals=2):
+    """現價：從最後一根 K 線拉一小段線到右側空白區，標籤是藍底白字"""
+    ax.plot([n - 1, n - 0.3], [last, last], color=BADGE, linewidth=1.3, zorder=7, clip_on=False)
+    ax.text(n - 0.1, last, f"現價\n{last:,.{decimals}f}", fontsize=9, color="white", fontweight="bold", ha="left",
+            va="center", zorder=8, clip_on=False, linespacing=1.15,
+            bbox=dict(boxstyle="round,pad=0.25", fc=BADGE, ec="none"))
+
+
 def market_chart(mk, bars=45):
     """回傳 PNG 的 bytes"""
     plt.rcParams["font.sans-serif"] = FONTS
@@ -129,7 +154,8 @@ def market_chart(mk, bars=45):
     ticks = list(range(0, len(d), step))
     last_ax.set_xticks(ticks)
     last_ax.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
-    last_ax.set_xlim(-1, len(d))
+    last_ax.set_xlim(-1, len(d) + EXTRA)
+    _price_badge(ax, len(d), float(d["Close"].iloc[-1]), 0)
 
     if stab_mode:
         verdict = "通過" if mk["stab"].get("ok") else ("無法確認" if mk["stab"].get("vol_missing") else "未通過")
@@ -142,7 +168,8 @@ def market_chart(mk, bars=45):
                                         ("┄ 水藍虛線＝低點日的最低點（上圖）", "#0086ad"),
                                         ("┄ 橘色虛線＝爆量下跌日的成交額（下圖）", "#e67300")][::-1]):
             fig.text(0.02, 0.008 + k * 0.026, txt, fontsize=8.5, color=col, ha="left", va="bottom")
-    fig.tight_layout(rect=(0, 0.09 if stab_mode else 0, 1, 0.96))
+    _price_header(fig, full["Close"])
+    fig.tight_layout(rect=(0, 0.09 if stab_mode else 0, 1, 0.915))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
@@ -232,8 +259,7 @@ def stock_chart(df, title="", bars=65):
     for k, (val, txt, col, ls) in enumerate(marks):
         ax.axhline(val, color=col, linestyle=ls, linewidth=0.9, alpha=0.75)
         ax.text(n - 1.2, ys[k] + rng_v * 0.012, txt, fontsize=9, color=col, va="bottom", ha="right", bbox=bb, zorder=7)
-    ax.text(0.99, 0.02, f"現價 {last:,.1f}", transform=ax.transAxes, fontsize=9, color="#333", ha="right", va="bottom",
-            fontweight="bold", bbox=bb, zorder=7)
+    _price_badge(ax, n, last)
     ax.set_ylabel("價格")
     ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
     ax.grid(alpha=0.15)
@@ -243,13 +269,16 @@ def stock_chart(df, title="", bars=65):
     cols = [UP if cl >= o else DOWN for o, cl in zip(d["Open"], d["Close"])]
     axv.bar(x, v.values, color=cols, width=0.65)
     axv.plot(x, vma20.values, color="#e67e22", linewidth=1.1, label="20日均量")
-    for p_, rank, col in vol_marks:
-        if p_ is not None:
-            axv.add_patch(plt.Rectangle((p_ - 0.5, 0), 1.0, float(v.iloc[p_]) * 1.03, fill=False,
-                                        edgecolor=col, linewidth=1.1, zorder=6, clip_on=False))
-            axv.annotate(rank, xy=(p_, float(v.iloc[p_])), xytext=(p_, float(v.iloc[p_]) * 1.04),
-                         fontsize=8, color=col, ha="center", va="bottom")
-    axv.set_ylim(0, float(v.max()) * 1.3)
+    seen = []
+    vmax = float(v.max())
+    for p_, rank, col in sorted([m for m in vol_marks if m[0] is not None], key=lambda m: m[0]):
+        axv.add_patch(plt.Rectangle((p_ - 0.5, 0), 1.0, float(v.iloc[p_]) * 1.03, fill=False,
+                                    edgecolor=col, linewidth=1.1, zorder=6, clip_on=False))
+        lvl = sum(1 for q in seen if abs(q - p_) <= 8)                 # 兩個標記靠太近，後面的往上疊一層，不會壓在一起
+        seen.append(p_)
+        axv.text(p_ + (0.6 if p_ < 6 else 0), float(v.iloc[p_]) * 1.05 + vmax * 0.14 * lvl, rank, fontsize=8, color=col,
+                 ha="left" if p_ < 6 else "center", va="bottom")
+    axv.set_ylim(0, vmax * (1.5 if len(seen) > 1 else 1.3))
     axv.set_ylabel("成交量（張）")
     axv.legend(loc="upper right", fontsize=8, frameon=False)
     axv.grid(alpha=0.15)
@@ -258,16 +287,9 @@ def stock_chart(df, title="", bars=65):
     ticks = list(range(0, n, step))
     axv.set_xticks(ticks)
     axv.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
-    axv.set_xlim(-1, n)
+    axv.set_xlim(-1, n + EXTRA)
     fig.suptitle(f"{title}　{idx[0]:%m/%d}–{idx[-1]:%m/%d}".strip(), fontsize=11, x=0.02, ha="left")
-    if n >= 2:                                                  # 現價、漲跌點、幅度（紅漲綠跌，跟看盤軟體一致）
-        prev = float(d["Close"].iloc[-2])
-        chg = last - prev
-        pct = chg / prev * 100 if prev else 0.0
-        col = UP if chg > 0 else DOWN if chg < 0 else "#555"
-        arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"
-        fig.text(0.02, 0.925, f"{last:,.2f}　{arrow} {abs(chg):,.2f}（{pct:+.2f}%）", fontsize=13, color=col,
-                 fontweight="bold", ha="left", va="top")
+    _price_header(fig, d["Close"])
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
