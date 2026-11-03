@@ -218,16 +218,16 @@ def stock_chart(df, title="", bars=65):
         hi_y = max(hi_y, min(float(ma60.max()), hi_y + rng_v * 0.35))
         rng_v = max(hi_y - lo_y, 1e-9)
     ax.set_ylim(lo_y - rng_v * 0.06, hi_y + rng_v * 0.08)
-    gap = rng_v * 0.075                                         # 右側文字上下至少隔開一點，才不會疊在一起
+    gap = rng_v * 0.075                                         # 標籤放在圖裡面右上角、線的上方，圖才能撐滿
+    bb = dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8)
     ys = {}
     for k, (val, _, _, _) in sorted(enumerate(marks), key=lambda t: -t[1][0]):
         ys[k] = val if not ys else min(val, min(ys.values()) - gap)
     for k, (val, txt, col, ls) in enumerate(marks):
         ax.axhline(val, color=col, linestyle=ls, linewidth=0.9, alpha=0.75)
-        ax.text(n + 0.6, ys[k], txt, fontsize=9, color=col, va="center", ha="left", clip_on=False)
-    ax.plot([n - 1], [last], marker="<", color="#333", markersize=0)
-    ax.text(n + 0.6, last, f"現價 {last:,.1f}", fontsize=8.5, color="#333", va="center", ha="left", clip_on=False,
-            fontweight="bold") if all(abs(last - ys[k]) > gap * 0.8 for k in ys) else None
+        ax.text(n - 1.2, ys[k] + rng_v * 0.012, txt, fontsize=9, color=col, va="bottom", ha="right", bbox=bb, zorder=7)
+    ax.text(0.99, 0.02, f"現價 {last:,.1f}", transform=ax.transAxes, fontsize=9, color="#333", ha="right", va="bottom",
+            fontweight="bold", bbox=bb, zorder=7)
     ax.set_ylabel("價格")
     ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
     ax.grid(alpha=0.15)
@@ -244,7 +244,7 @@ def stock_chart(df, title="", bars=65):
                          fontsize=8, color=col, ha="center", va="bottom")
     axv.set_ylim(0, float(v.max()) * 1.3)
     axv.set_ylabel("成交量（張）")
-    axv.legend(loc="upper left", fontsize=8, frameon=False)
+    axv.legend(loc="upper right", fontsize=8, frameon=False)
     axv.grid(alpha=0.15)
 
     step = max(1, n // 9)
@@ -261,7 +261,7 @@ def stock_chart(df, title="", bars=65):
         arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"
         fig.text(0.02, 0.925, f"{last:,.2f}　{arrow} {abs(chg):,.2f}（{pct:+.2f}%）", fontsize=13, color=col,
                  fontweight="bold", ha="left", va="top")
-    fig.tight_layout(rect=(0, 0, 0.995, 0.92))
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
