@@ -1027,23 +1027,23 @@ if target:
                     pr = sp = None
                 if pr:
                     if pr.get("fallback"):
-                        st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（前高，{pr['day']:%m/%d}）**",
+                        st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（{pr['day']:%m/%d} 前高）**",
                                       f"高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
                                       "上方沒有帶量的 K 棒，前高就是壓力"))
                     else:
                         st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（{pr['day']:%m/%d} 最高）**",
                                       f"高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
-                                      f"起點：{pr['vday']:%m/%d} 帶量 K（{pr['vol']:,.0f} 張）",
+                                      f"起點：{pr['vday']:%m/%d} 帶量 K",
                                       "上方套牢區，漲上去容易有賣壓"))
                 if sp:
                     if sp.get("fallback"):
-                        st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（前低，{sp['day']:%m/%d}）**",
+                        st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（{sp['day']:%m/%d} 前低）**",
                                       f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
                                       "下方沒有帶量的 K 棒，前低就是支撐"))
                     else:
                         st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（{sp['day']:%m/%d} 最低）**",
                                       f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
-                                      f"起點：{sp['vday']:%m/%d} 帶量 K（{sp['vol']:,.0f} 張）",
+                                      f"起點：{sp['vday']:%m/%d} 帶量 K",
                                       "可作短線支撐，或出場價的參考"))
                 else:
                     st.markdown(L("🐂 **支撐　沒有**", "現價已經是近 65 日最低點", "下方沒有支撐，不建議進場"))
