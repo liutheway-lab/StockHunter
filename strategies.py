@@ -137,21 +137,27 @@ def layer_series(df):
     只用兩條線：月線（20 日平均價）和季線（60 日平均價），再看這兩條線是往上還是往下。
       1 強多頭：價在月線上、月線在季線上，兩條線都往上
       2 多頭　：價在兩條線上，但線的方向還沒全部往上
-      3 盤整　：價夾在兩條線中間，或月線走平（沒有方向）
+      3 盤整　：價夾在兩條線中間
       4 空頭　：價在兩條線下，但線的方向還沒全部往下
       5 強空頭：價在月線下、月線在季線下，兩條線都往下
+    再看 5 日、10 日線（短線）：多頭（1、2 層）但價跌破兩條短線 → 降一層；
+    空頭（4、5 層）但價站上兩條短線 → 升一層。這樣崩盤或反彈時，層級反應比較快
     換層要連續幾天確認才算（LAYER_CONFIRM_DAYS）"""
     c = df["Close"]
+    ma5, ma10 = c.rolling(5).mean(), c.rolling(10).mean()
     ma20, ma60 = c.rolling(20).mean(), c.rolling(60).mean()
     s20 = ma20 / ma20.shift(cfg.SLOPE_DAYS) - 1                  # 月線這幾天的變化
     s60 = ma60 / ma60.shift(cfg.SLOPE_DAYS) - 1
-    flat = s20.abs() < cfg.FLAT_PCT                              # 月線走平
     layer = pd.Series(3, index=df.index)
-    layer[(c > ma20) & (c > ma60) & ~flat] = 2
-    layer[(c < ma20) & (c < ma60) & ~flat] = 4
-    layer[(c > ma20) & (ma20 > ma60) & (s20 > 0) & (s60 > 0) & ~flat] = 1
-    layer[(c < ma20) & (ma20 < ma60) & (s20 < 0) & (s60 < 0) & ~flat] = 5
+    layer[(c > ma20) & (c > ma60)] = 2
+    layer[(c < ma20) & (c < ma60)] = 4
+    layer[(c > ma20) & (ma20 > ma60) & (s20 > 0) & (s60 > 0)] = 1
+    layer[(c < ma20) & (ma20 < ma60) & (s20 < 0) & (s60 < 0)] = 5
     layer[ma60.isna() | s60.isna()] = 0
+    short_dn, short_up = (c < ma5) & (c < ma10), (c > ma5) & (c > ma10)
+    bull, bear = layer.isin([1, 2]), layer.isin([4, 5])
+    layer[bull & short_dn] += 1                                  # 多頭但價在 5、10 日線下：降一層（1→2、2→3）
+    layer[bear & short_up] -= 1                                  # 空頭但價在 5、10 日線上：升一層（5→4、4→3）
     return _confirm_layer(layer)
 
 
@@ -163,9 +169,12 @@ def layer_why(df):
     s60 = float(ma60.iloc[-1] / ma60.iloc[-1 - cfg.SLOPE_DAYS] - 1)
     x = float(c.iloc[-1])
     d = lambda v: "往上" if v > 0 else "往下"
+    m5, m10 = float(c.rolling(5).mean().iloc[-1]), float(c.rolling(10).mean().iloc[-1])
+    st_ = "上" if x > m5 and x > m10 else "下" if x < m5 and x < m10 else "中間"
     return [f"價在月線{'上' if x > ma20.iloc[-1] else '下'}、季線{'上' if x > ma60.iloc[-1] else '下'}",
-            "月線走平" if abs(s20) < cfg.FLAT_PCT else f"月線{d(s20)}",
-            f"季線{d(s60)}"]
+            f"月線{d(s20)}",
+            f"季線{d(s60)}",
+            f"價在 5日、10日線{'之' + st_ if st_ != '中間' else '之間'}"]
 
 
 def short_tag(df, layer):
