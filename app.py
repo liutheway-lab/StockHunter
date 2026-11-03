@@ -631,14 +631,19 @@ def rec_buttons(prefix, strategy, items, limit=15):
 def watch_buttons(name, items, limit=15):
     for it in items[:limit]:
         up = (it["chase"] / it["close"] - 1) * 100 if it["close"] else 0
-        if st.button(f"{it['code']} {it['name']}　現價 {px(it['close'])}｜追價 {px(it['chase'])}（{up:+.1f}%）｜出場 {px(it['stop1'])}",
+        # 按鈕只放名稱和現價，追價、出場放在下面一行小字，手機上每一行都不會被切斷
+        prev = it.get("prev")                          # 前一天收盤（舊的掃描結果沒有，就只顯示現價）
+        chg = f" {'▲' if it['close'] > prev else '▼' if it['close'] < prev else '─'}{abs(it['close'] - prev):.2f}（{(it['close'] / prev - 1) * 100:+.1f}%）" \
+            if prev else ""
+        if st.button(f"{it['code']} {it['name']} {px(it['close'])}{chg}",
                      key=f"watch_{name}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()
+        st.caption(f"追價 {px(it['chase'])}（{up:+.1f}%）｜出場 {px(it['stop1'])}")
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
-    st.caption(L(f"現價＝資料日收盤｜追價＝明天要漲到的價格，（%）是比現價高多少",
-                 f"追價點＝漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點｜盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天，盤中看強弱再決定追不追"))
+    st.caption(L("第一行：資料日收盤、漲跌點、幅度", "追價＝明天要漲到的價格", "（%）＝追價比現價高多少",
+                 f"追價點＝漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點", "盤中看強弱再決定追不追"))
 
 
 st.divider()
@@ -682,7 +687,7 @@ else:
     if not watch and not obs_wl:
         st.caption("👀 觀察名單：無。" if not active else "")
     if watch or obs_wl:
-        st.markdown(L("**👀 觀察名單**", "型態符合，但大盤目前不適用，僅供追蹤，不建議進場"))
+        st.markdown(L("**👀 觀察名單**", "型態符合，但大盤目前不適用", "僅供追蹤，不建議進場"))
         for name, items in watch:
             foldable(f"obsfold_{name}", f"{cfg.STRATEGY_NAMES[name]}｜{len(items)} 檔",
                      lambda name=name, items=items: rec_buttons("obs", name, items))
