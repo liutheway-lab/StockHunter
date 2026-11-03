@@ -121,19 +121,81 @@ def _liq(row):
 # =====================================================
 def layer_series(df):
     """加權指數每天的層級：1 強多頭 / 2 多頭 / 3 盤整轉折 / 4 空頭 / 5 強空頭 / 0 資料不足
-    看收盤價相對 MA20、MA60 的位置（多空對稱，不等均線交叉，避免反應太慢）：
-      收盤在 MA20 與 MA60 之上 = 多頭；再加上 收盤>MA5>MA10>MA20 = 強多頭
-      收盤在 MA20 與 MA60 之下 = 空頭；再加上 收盤<MA5<MA10<MA20 = 強空頭
-      其餘（夾在兩條線中間）= 盤整／轉折"""
+    只用兩條線：月線（20 日平均價）和季線（60 日平均價），再看這兩條線是往上還是往下。
+      1 強多頭：價在月線上、月線在季線上，兩條線都往上
+      2 多頭　：價在兩條線上，但線的方向還沒全部往上
+      3 盤整　：價夾在兩條線中間，或月線走平（沒有方向）
+      4 空頭　：價在兩條線下，但線的方向還沒全部往下
+      5 強空頭：價在月線下、月線在季線下，兩條線都往下
+    換層要連續幾天確認才算（LAYER_CONFIRM_DAYS）"""
     c = df["Close"]
-    ma5, ma10, ma20, ma60 = (c.rolling(n).mean() for n in (5, 10, 20, 60))
+    ma20, ma60 = c.rolling(20).mean(), c.rolling(60).mean()
+    s20 = ma20 / ma20.shift(cfg.SLOPE_DAYS) - 1                  # 月線這幾天的變化
+    s60 = ma60 / ma60.shift(cfg.SLOPE_DAYS) - 1
+    flat = s20.abs() < cfg.FLAT_PCT                              # 月線走平
     layer = pd.Series(3, index=df.index)
-    layer[(c > ma20) & (c > ma60)] = 2
-    layer[(c < ma20) & (c < ma60)] = 4
-    layer[(c > ma5) & (ma5 > ma10) & (ma10 > ma20) & (c > ma60)] = 1
-    layer[(c < ma5) & (ma5 < ma10) & (ma10 < ma20) & (c < ma60)] = 5
-    layer[ma60.isna()] = 0
-    return layer
+    layer[(c > ma20) & (c > ma60) & ~flat] = 2
+    layer[(c < ma20) & (c < ma60) & ~flat] = 4
+    layer[(c > ma20) & (ma20 > ma60) & (s20 > 0) & (s60 > 0) & ~flat] = 1
+    layer[(c < ma20) & (ma20 < ma60) & (s20 < 0) & (s60 < 0) & ~flat] = 5
+    layer[ma60.isna() | s60.isna()] = 0
+    return _confirm_layer(layer)
+
+
+def layer_why(df):
+    """用白話講「為什麼是這一層」（每行都短）"""
+    c = df["Close"]
+    ma20, ma60 = c.rolling(20).mean(), c.rolling(60).mean()
+    s20 = float(ma20.iloc[-1] / ma20.iloc[-1 - cfg.SLOPE_DAYS] - 1)
+    s60 = float(ma60.iloc[-1] / ma60.iloc[-1 - cfg.SLOPE_DAYS] - 1)
+    x = float(c.iloc[-1])
+    d = lambda v: "往上" if v > 0 else "往下"
+    return [f"價在月線{'上' if x > ma20.iloc[-1] else '下'}、季線{'上' if x > ma60.iloc[-1] else '下'}",
+            "月線走平" if abs(s20) < cfg.FLAT_PCT else f"月線{d(s20)}",
+            f"季線{d(s60)}"]
+
+
+def short_tag(df, layer):
+    """第 1、5 層再看 5 日、10 日線：短線全部同方向時加標籤（只提醒，不改層級、不改策略）
+    第 1 層：價 > 5日 > 10日 > 月線，且 5日、10日都往上 → 過熱
+    第 5 層：價 < 5日 < 10日 < 月線，且 5日、10日都往下 → 恐慌"""
+    if layer not in (1, 5) or len(df) < 12:
+        return None
+    c = df["Close"]
+    m5, m10, m20 = (c.rolling(n).mean() for n in (5, 10, 20))
+    x, a, b, m = float(c.iloc[-1]), float(m5.iloc[-1]), float(m10.iloc[-1]), float(m20.iloc[-1])
+    u5, u10 = a > float(m5.iloc[-2]), b > float(m10.iloc[-2])
+    if layer == 1 and x > a > b > m and u5 and u10:
+        return "過熱"
+    if layer == 5 and x < a < b < m and not u5 and not u10:
+        return "恐慌"
+    return None
+
+
+SHORT_TAG_NOTE = {"過熱": "短線全部往上，別追高\n等拉回再找買點",
+                  "恐慌": "短線全部往下，正在急殺\n留意之後的止跌訊號"}
+
+
+def drawdown(df, days=60):
+    """離近 days 日最高收盤跌了幾 %（負數）"""
+    c = df["Close"]
+    return float(c.iloc[-1] / c.iloc[-days:].max() - 1)
+
+
+def _confirm_layer(raw):
+    """防來回跳動：新的層級要連續 LAYER_CONFIRM_DAYS 天都一樣，才正式換層（資料不足的 0 馬上生效）"""
+    need = max(1, int(cfg.LAYER_CONFIRM_DAYS))
+    v = raw.to_numpy()
+    out = v.copy()
+    cur = v[0] if len(v) else 0
+    for i in range(len(v)):
+        x = v[i]
+        if x == 0 or x == cur:
+            cur = x
+        elif i + 1 >= need and all(v[i - j] == x for j in range(need)):
+            cur = x
+        out[i] = cur
+    return pd.Series(out, index=raw.index)
 
 
 def stabilization(df, i):
@@ -207,7 +269,7 @@ def active_strategies(layer, stab_ok):
     if layer in (1, 2):
         return ["pullback", "flag", "breakout"], False       # 盤整後噴出：底部起漲不限空頭，各種行情都可能出現
     if layer == 3:
-        return ["pullback", "flag", "breakout"], True
+        return list(cfg.LAYER3_ACTIVE), True                 # 方向未明：只開最保守的，部位減半
     if layer in (4, 5):
         return (["breakout", "dry"] if stab_ok else []), False
     return [], False
@@ -226,6 +288,8 @@ def market_summary(df):
         "date": df.index[i], "close": float(c.iloc[i]),
         "ma": {n: float(c.rolling(n).mean().iloc[i]) for n in (5, 10, 20, 60)},
         "layer": layer, "layer_name": cfg.LAYER_NAMES[layer],
+        "why": layer_why(df) if len(df) > 60 + cfg.SLOPE_DAYS else [], "dd": drawdown(df),
+        "tag": short_tag(df, layer),
         "stab": stab, "stab_ok": stab_ok, "active": active, "risk": risk, "df": df,
     }
 
@@ -236,9 +300,15 @@ def describe_market(mk):
         return ["🌐 大盤資料取得失敗，無法判斷"]
     ma = mk["ma"]
     lines = [
-        f"🌐 加權 `{mk['close']:,.0f}`｜MA5 `{ma[5]:,.0f}`／MA10 `{ma[10]:,.0f}`／MA20 `{ma[20]:,.0f}`／MA60 `{ma[60]:,.0f}`",
+        f"🌐 加權 `{mk['close']:,.0f}`｜5日 `{ma[5]:,.0f}`／10日 `{ma[10]:,.0f}`／月線 `{ma[20]:,.0f}`／季線 `{ma[60]:,.0f}`",
         f"📊 大盤層級：**第 {mk['layer']} 層・{mk['layer_name']}**",
     ]
+    if mk.get("why"):
+        lines.append("　" + "、".join(mk["why"]))
+    if mk.get("tag"):
+        lines.append(f"{'🔥' if mk['tag'] == '過熱' else '😱'} {mk['tag']}：" + SHORT_TAG_NOTE[mk["tag"]].replace("\n", "，"))
+    if mk.get("dd") is not None and mk["dd"] <= -cfg.DROP_WARN:
+        lines.append(f"⚠️ 離近 60 日高點已跌 {abs(mk['dd']) * 100:.1f}%")
     if mk["layer"] in (4, 5):
         s = mk["stab"]
         if s is None:
@@ -260,7 +330,8 @@ def describe_market(mk):
                 lines.append("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
     if mk["active"]:
         names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
-        lines.append(f"✅ 目前啟用的策略：{names}" + ("\n⚠️ 第 3 層方向未明，請標示風險、縮小部位" if mk["risk"] else ""))
+        lines.append(f"✅ 目前啟用的策略：{names}" + ("\n⚠️ 第 3 層方向未明，只開最保守的策略，部位減半" if mk["risk"] else ""))
+        lines.append(f"💰 部位：{('過熱，維持正常部位，不加碼' if mk.get('tag') == '過熱' else cfg.LAYER_SIZE.get(mk['layer'], ''))}")
     else:
         lines.append("🔴 尚未止跌，不建議建立多頭部位")
     return lines
@@ -672,7 +743,7 @@ def verdict(ev):
     go = [n for n in ok_names if ev["results"][n]["active"]]
     if go:
         names = "、".join(cfg.STRATEGY_NAMES[n] for n in go)
-        risk = "（大盤第 3 層，請縮小部位）" if mk and mk["risk"] else ""
+        risk = "（大盤第 3 層，部位減半）" if mk and mk["risk"] else ""
         return "go", f"✅ 符合【{names}】，且大盤目前適用{risk}"
     if ok_names:
         names = "、".join(cfg.STRATEGY_NAMES[n] for n in ok_names)
