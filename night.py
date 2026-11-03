@@ -132,10 +132,11 @@ def dedupe_similar(lists, active):
 
 
 def scan(prices, mk, ratios):
-    """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數)"""
+    """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數, 明日追價名單, 恐慌承接名單)"""
     hits = {k: [] for k in ORDER}
     watch = {"pullback": [], "flag": []}       # 明日追價名單
     funnel = {k: {"checks": {}, "ok": 0} for k in ORDER}
+    absorb = []                                # 恐慌承接觀察名單（今天長下影／長紅且帶量）
     liquid = stale = 0
     last_date = mk["date"]
     for sym, raw in prices.items():
@@ -156,6 +157,9 @@ def scan(prices, mk, ratios):
                 "breakout": st.check_breakout(df, i),
                 "dry": st.check_dry(df, i, mk["df"]),
             }
+            ab = st.check_absorb(df, i)
+            if ab:
+                absorb.append({"sym": sym, "r": ab, "turnover": ab["turnover"]})
             for name, r in results.items():
                 if r is None:
                     continue
@@ -179,9 +183,10 @@ def scan(prices, mk, ratios):
         hits[k].sort(key=lambda x: -x["turnover"])
     for k in watch:
         watch[k].sort(key=lambda x: -x["turnover"])
+    absorb.sort(key=lambda x: -x["turnover"])
     dedupe_similar(hits, mk["active"])
     dedupe_similar(watch, mk["active"])
-    return hits, liquid, stale, funnel, watch
+    return hits, liquid, stale, funnel, watch, absorb
 
 
 def funnel_lines(funnel, liquid):
@@ -295,7 +300,28 @@ def watch_block(name, items, names, note=""):
 RESULT_FILE = "scan_results.json"
 
 
-def save_results(mk, hits, names, directory, now, watch=None):
+def absorb_block(items, names, note=""):
+    """恐慌承接觀察名單：今天殺低後被買回來、而且有量。只列股票，沒有追價點"""
+    title = f"*👀 {cfg.ABSORB_NAME}・今日長下影／長紅帶量*　{len(items)} 檔" + note
+    shown = items[:MAX_LIST]
+    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" for h in shown]
+    W = max([_w("代號 名稱")] + [_w(x) for x in labels])
+    lines = [_padr("代號 名稱", W) + " 現價 今日最低 量"]
+    for h, lab in zip(shown, labels):
+        r = h["r"]
+        lines.append(_padr(lab, W) + f" {fp(r['close']):>5} {fp(r['low']):>5} {r['vol_mult']:.1f}倍")
+    more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
+    legend = (f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
+              f"\n長紅＝收紅且實體占 {cfg.STAB_RED_BODY * 100:.0f}% 以上"
+              f"\n量＝今天量 ÷ 20 日均量（要 {cfg.ABSORB_VOL_MULT} 倍以上）"
+              f"\n當天振幅要 {cfg.ABSORB_MIN_RANGE * 100:.0f}% 以上"
+              f"\n只供追蹤，沒有追價點"
+              f"\n隔天不破今天最低，才比較可信")
+    links = "　".join(tv_link(h["sym"]) for h in shown)
+    return title + "\n" + code_block(lines, header=True) + legend + more + "\n📊 TradingView 線圖：" + links
+
+
+def save_results(mk, hits, names, directory, now, watch=None, absorb=None):
     """把今晚的掃描結果存成 JSON，網頁 app 的『今日推薦』直接讀它"""
     info = {r.sym: (r.industry, r.market) for r in directory.itertuples()}
     out = {
@@ -334,6 +360,16 @@ def save_results(mk, hits, names, directory, now, watch=None):
                          "key": h["plan"]["key"], "days": int(h["r"].get("n_cons", 0)), "turnover": round(h["turnover"]),
                          **({"prev": round(h["prev"], 2)} if h.get("prev") else {})})
         out["watch"][name] = rows
+    out["absorb"] = []
+    for h in (absorb or []):
+        code = h["sym"].split(".")[0]
+        ind, mkt = info.get(h["sym"], ("", ""))
+        r = h["r"]
+        out["absorb"].append({"code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
+                              "industry": ind or "", "market": mkt or "", "close": round(r["close"], 2),
+                              "low": round(r["low"], 2), "high": round(r["high"], 2), "kind": r["kind"],
+                              "vol_mult": round(r["vol_mult"], 1), "chg": round(r["chg"] * 100, 2),
+                              "turnover": round(h["turnover"])})
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
 
@@ -360,11 +396,11 @@ def run():
     directory = directory.assign(sym=directory["code"] + directory["suffix"])
     names = dict(zip(directory["sym"], directory["name"]))
     prices, failed = fetch_prices(list(directory["sym"]))
-    hits, liquid, stale, funnel, watch = scan(prices, mk, ratios)
+    hits, liquid, stale, funnel, watch, absorb = scan(prices, mk, ratios)
 
     print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
     try:
-        save_results(mk, hits, names, directory, now, watch)
+        save_results(mk, hits, names, directory, now, watch, absorb)
     except Exception as e:
         print("掃描結果存檔失敗：", repr(e))
 
@@ -395,6 +431,8 @@ def run():
     for name in ("pullback", "flag"):              # 明日追價名單（大盤啟用這套策略時才推播）
         if watch[name] and (name in active or DIAG):
             parts.append(watch_block(name, watch[name], names, "" if name in active else inactive_note(mk)))
+    if absorb:                                     # 恐慌承接觀察名單：不管大盤層級，只供追蹤
+        parts.append(absorb_block(absorb, names, "" if active else inactive_note(mk)))
     # 只有出問題時才顯示提醒
     warn = []
     if directory.attrs.get("fallback"):
