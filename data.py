@@ -116,6 +116,8 @@ def patch_with_twse(df):
         t = fetch_twse_ohlc()
     except Exception as e:
         print("證交所加權指數補資料失敗：", repr(e))
+        df = df.copy()
+        df.attrs["twse_note"] = f"證交所官方指數抓不到（{e}）"
         return df
     df = df.copy()
     t = t[t.index >= df.index[0]]
@@ -127,6 +129,7 @@ def patch_with_twse(df):
             df.loc[d, ["Open", "High", "Low", "Close", "Volume"]] = list(t.loc[d, ["Open", "High", "Low", "Close"]]) + [0.0]
     df = df.sort_index()
     df.attrs["patched_days"] = n_new
+    df.attrs["twse_note"] = f"證交所官方指數最新到 {t.index[-1]:%m/%d}，補上 {n_new} 天"
     return df
 
 
