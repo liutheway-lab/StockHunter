@@ -39,33 +39,63 @@ def _price_header(fig, close, decimals=2, y=0.925):
              fontweight="bold", ha="left", va="top")
 
 
-def _price_line(ax, d, last, decimals=2, avoid=()):
-    """現價：整張圖畫一條藍色虛線，字標在線上方，位置挑「沒有 K 線、沒有其他標籤」的地方，不會壓到字。
-    avoid＝其他已經在圖上的文字（y 值），d＝畫出來的那些日線"""
+def _place_label(ax, d, y, txt, color, taken, fontsize=9, badge=False, ma=()):
+    """在線的上方或下方，找一塊「沒有 K 棒、沒有其他字、沒有圖例」的空白處放字。
+    要在 tight_layout 之後呼叫，量出來的字寬才準。
+    taken：已經放好的字的範圍（x0, x1, y0, y1，資料座標），放好後會把自己加進去，後面的字就會避開"""
     n = len(d)
+    fig = ax.figure
+    rend = fig.canvas.get_renderer()
+    style = dict(boxstyle="round,pad=0.2", fc=BADGE, ec="none", alpha=0.95) if badge else \
+        dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85)
+    t = ax.text(0, y, txt, fontsize=fontsize, color="white" if badge else color, fontweight="bold" if badge else None,
+                ha="left", va="bottom", zorder=8, bbox=style)
+    bb = t.get_window_extent(rend).transformed(ax.transData.inverted())        # 實際量字的大小（資料座標）
+    w, h = bb.width + 0.4, bb.height * 1.05
     ylo, yhi = ax.get_ylim()
     rng = yhi - ylo
-    ax.axhline(last, color=BADGE, linestyle=(0, (5, 3)), linewidth=1.3, zorder=4)
-    h, w = rng * 0.07, 13                       # 字大約佔的高度（價格）和寬度（根數）
-    y0, y1 = last + rng * 0.008, last + rng * 0.008 + h
-    if y1 > yhi - rng * 0.02:                    # 太靠上緣就改標在線下方
-        y1 = last - rng * 0.008
-        y0 = y1 - h
     hi, lo = d["High"].to_numpy(float), d["Low"].to_numpy(float)
     best = None
-    for x0 in sorted(set([1, 8, 18, 28, 38, 48, max(n - w - 1, 1)])):
-        if x0 + w > n:
+    for above in (True, False):
+        y0 = y + rng * 0.008 if above else y - rng * 0.008 - h
+        y1 = y0 + h
+        if y1 > yhi - rng * 0.005 or y0 < ylo + rng * 0.005:
             continue
-        pen = int(((lo[x0:x0 + w] <= y1) & (hi[x0:x0 + w] >= y0)).sum())
-        pen += sum(6 for ay in avoid if y0 - rng * 0.03 <= ay <= y1 and x0 + w >= n - 17)   # 右側的壓力、支撐字
-        if y1 > yhi - rng * 0.10 and x0 < 24:                                              # 左上角圖例
-            pen += 6
-        if best is None or pen < best[0]:
-            best = (pen, x0)
-    x0 = best[1] if best else 1
-    ax.text(x0, y0 if y0 > last else y0, f"現價 {last:,.{decimals}f}", fontsize=9, color="white", fontweight="bold",
-            ha="left", va="bottom" if y0 > last else "bottom", zorder=8,
-            bbox=dict(boxstyle="round,pad=0.2", fc=BADGE, ec="none", alpha=0.95))
+        x0 = -0.5
+        while x0 + w <= n - 0.3:
+            a_, b_ = max(int(x0), 0), int(min(n, x0 + w + 1))
+            pen = int(((lo[a_:b_] <= y1) & (hi[a_:b_] >= y0)).sum()) * 10            # 壓到 K 棒
+            for m in ma:                                                              # 壓到均線（輕一點）
+                seg = m[a_:b_]
+                pen += int(((seg >= y0) & (seg <= y1)).sum())
+            for tx0, tx1, ty0, ty1 in taken:                                         # 壓到其他字或圖例
+                if x0 < tx1 and x0 + w > tx0 and y0 < ty1 and y1 > ty0:
+                    pen += 1000
+            pen += (n - (x0 + w)) * 0.02 + (0 if above else 0.5)                     # 一樣好時，靠右、放線上方
+            if best is None or pen < best[0]:
+                best = (pen, x0, y0, y1)
+            x0 += 0.5
+    if best is None:
+        best = (0, max(n - w - 0.3, 0), y, y + h)
+    _, x0, y0, y1 = best
+    taken.append((x0, x0 + w, y0, y1))
+    t.set_position((x0 + 0.2, y0))
+
+
+def _legend_box(ax):
+    """圖例佔的範圍（資料座標），放字時要避開"""
+    leg = ax.get_legend()
+    if leg is None:
+        return []
+    bb = leg.get_window_extent(ax.figure.canvas.get_renderer()).transformed(ax.transData.inverted())
+    return [(bb.x0, bb.x1, bb.y0, bb.y1)]
+
+
+def _price_line(ax, d, last, decimals=2, taken=None, ma=()):
+    """現價：整張圖畫一條藍色虛線，字放在空白處（要在 tight_layout 之後呼叫）"""
+    ax.axhline(last, color=BADGE, linestyle=(0, (5, 3)), linewidth=1.3, zorder=4)
+    _place_label(ax, d, last, f"現價 {last:,.{decimals}f}", BADGE, taken if taken is not None else _legend_box(ax),
+                 badge=True, ma=ma)
 
 
 def market_chart(mk, bars=45):
@@ -175,7 +205,6 @@ def market_chart(mk, bars=45):
     last_ax.set_xticks(ticks)
     last_ax.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
     last_ax.set_xlim(-1, len(d))
-    _price_line(ax, d, float(d["Close"].iloc[-1]), 0)
 
     if stab_mode:
         verdict = "通過" if mk["stab"].get("ok") else ("無法確認" if mk["stab"].get("vol_missing") else "未通過")
@@ -190,6 +219,7 @@ def market_chart(mk, bars=45):
             fig.text(0.02, 0.008 + k * 0.026, txt, fontsize=8.5, color=col, ha="left", va="bottom")
     _price_header(fig, full["Close"])
     fig.tight_layout(rect=(0, 0.09 if stab_mode else 0, 1, 0.915))
+    _price_line(ax, d, float(d["Close"].iloc[-1]), 0, ma=[m.to_numpy(float) for m in (ma5, ma10, ma20, ma60)])
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
@@ -203,9 +233,12 @@ VOL_MULT = 1.5     # 大量＝當天量至少是當時 20 日均量的 1.5 倍�
 
 
 def vol_levels(df, bars=65):
-    """壓力／支撐（近 bars 日）：收盤在現價之上的天裡，量最大那天的最高點＝壓力；
-    收盤在現價之下的天裡，量最大那天的最低點＝支撐。量要夠大（>= 20 日均量 1.5 倍）才算。
-    回傳 {"press": {...} 或 None, "supp": {...} 或 None}，每項有 day、level、vol（張）、top（是不是整段最大量）"""
+    """壓力／支撐（近 bars 日內找）
+    支撐：最近一根「帶量紅 K」（量 >= 20 日均量 1.5 倍、收紅、收盤在現價之下），
+          從那天到今天的最低價。＝這一波放量起漲以來，回測過的最低點。
+    壓力：反過來，最近一根「帶量黑 K」（收黑、收盤在現價之上），從那天到今天的最高價。
+    回傳 {"press": {...} 或 None, "supp": {...} 或 None}
+    每項：day＝最高／最低價那天、level＝價位、vday＝帶量 K 棒那天、vol＝那天的量（張）、top＝是不是整段最大量"""
     full = df[df["Volume"] > 0]
     d = full.iloc[-bars:]
     if len(d) < 2:
@@ -213,15 +246,19 @@ def vol_levels(df, bars=65):
     vma = full["Volume"].rolling(20, min_periods=5).mean().reindex(d.index)
     last = float(d["Close"].iloc[-1])
     top_day = d["Volume"].idxmax()
+    big = d["Volume"] >= vma * VOL_MULT
     out = {}
-    for key, mask, col in (("press", d["Close"] > last, "High"), ("supp", d["Close"] < last, "Low")):
-        cand = d[mask & (d["Volume"] >= vma * VOL_MULT)]
+    for key, mask, col in (("supp", big & (d["Close"] > d["Open"]) & (d["Close"] < last), "Low"),
+                           ("press", big & (d["Close"] < d["Open"]) & (d["Close"] > last), "High")):
+        cand = d[mask]
         if cand.empty:
             out[key] = None
             continue
-        day = cand["Volume"].idxmax()
-        out[key] = {"day": day, "level": float(d.loc[day, col]), "vol": float(d.loc[day, "Volume"]) / 1000.0,
-                    "top": day == top_day}
+        vday = cand.index[-1]                                   # 最近的那一根
+        seg = d.loc[vday:, col]
+        day = seg.idxmin() if col == "Low" else seg.idxmax()
+        out[key] = {"day": day, "level": float(seg.loc[day]), "vday": vday,
+                    "vol": float(d.loc[vday, "Volume"]) / 1000.0, "top": vday == top_day}
     return out
 
 
@@ -261,7 +298,7 @@ def stock_chart(df, title="", bars=65):
             continue
         col = "#ff8c00" if it["top"] else ("#e04a4a" if key == "press" else "#2e9e4f")      # 整段最大量固定橘色
         marks.append((it["level"], f"{nm} {it['level']:,.1f}（{it['day']:%m/%d}）", col, "--"))
-        vol_marks.append((_pos(idx, it["day"]), "第1大量" if it["top"] else nm, col))
+        vol_marks.append((_pos(idx, it["vday"]), "第1大量" if it["top"] else nm, col))      # 框起來的是帶量的那根
     top_v, bot_v = float(d["High"].max()), float(d["Low"].min())
     allv = [m[0] for m in marks] + [top_v, bot_v]
     lo_y, hi_y = min(allv), max(allv)
@@ -271,16 +308,19 @@ def stock_chart(df, title="", bars=65):
         hi_y = max(hi_y, min(float(ma60.max()), hi_y + rng_v * 0.35))
         rng_v = max(hi_y - lo_y, 1e-9)
     ax.set_ylim(lo_y - rng_v * 0.06, hi_y + rng_v * 0.08)
-    gap = rng_v * 0.075                                         # 標籤放在圖裡面右上角、線的上方，圖才能撐滿
-    bb = dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8)
-    ys = {}
-    for k, (val, _, _, _) in sorted(enumerate(marks), key=lambda t: -t[1][0]):
-        ys[k] = val if not ys else min(val, min(ys.values()) - gap)
-    for k, (val, txt, col, ls) in enumerate(marks):
-        ax.axhline(val, color=col, linestyle=ls, linewidth=0.9, alpha=0.75)
-        ax.text(n - 1.2, ys[k] + rng_v * 0.012, txt, fontsize=9, color=col, va="bottom", ha="right", bbox=bb, zorder=7)
     ax.set_xlim(-1, n)
-    _price_line(ax, d, last, 2, avoid=[m[0] for m in marks])
+    mas = [m.to_numpy(float) for m in (ma5, ma10, ma20, ma60)]
+    merged = []                                                 # 前高和壓力同一個價位時合併成一個標籤
+    for val, txt, col, ls in sorted(marks, key=lambda m: -m[0]):
+        if merged and abs(merged[-1][0] - val) <= max(abs(val) * 0.002, 1e-9):
+            pv, ptxt, pcol, pls = merged[-1]
+            keep = (val, txt, col, ls) if "前高" in ptxt else (pv, ptxt, pcol, pls)
+            other = ptxt if keep[1] != ptxt else txt
+            merged[-1] = (keep[0], "前高／" + keep[1] if "前高" in other else keep[1], keep[2], keep[3])
+            continue
+        merged.append((val, txt, col, ls))
+    for val, txt, col, ls in merged:
+        ax.axhline(val, color=col, linestyle=ls, linewidth=0.9, alpha=0.75)
     ax.set_ylabel("價格")
     ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=4)
     ax.grid(alpha=0.15)
@@ -307,6 +347,10 @@ def stock_chart(df, title="", bars=65):
     fig.suptitle(f"{title}　{idx[0]:%m/%d}–{idx[-1]:%m/%d}".strip(), fontsize=11, x=0.02, ha="left")
     _price_header(fig, d["Close"])
     fig.tight_layout(rect=(0, 0, 1, 0.92))
+    taken = _legend_box(ax)                                     # 價位標籤：排版完成後才放，都放在空白處
+    for val, txt, col, ls in merged:
+        _place_label(ax, d, val, txt, col, taken, ma=mas)
+    _price_line(ax, d, last, 2, taken=taken, ma=mas)
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
