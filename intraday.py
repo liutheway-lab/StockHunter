@@ -233,7 +233,7 @@ def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
             money = (p - x["avg"]) * x["shares"]
             lamp = "▲" if pct > 0 else "▼" if pct < 0 else "－"
             sg = lambda v: "+" if v >= 0 else "−"
-            now_l = f"成交價 {_n(p)}　{sg(pct)}{abs(pct):,.1f}%"
+            now_l = f"成交價 {_n(p)}　{sg(pct)}{abs(pct):,.1f}%" + ("　延遲" if (q.get(code) or {}).get("delayed") else "　未成交" if (q.get(code) or {}).get("notrade") else "")
             avg_l += f"　損益 {sg(money)}{abs(money):,.0f} 元"
             if x["stop"]:
                 d = (x["stop"] / p - 1) * 100
@@ -1068,17 +1068,33 @@ def process_commands():
 
 
 # ================= 即時報價 =================
-def get_quotes(items, tries=3, gap=2):
-    """查報價，沒查到的最多再試到 tries 次（每次隔 gap 秒），不要連續猛打"""
+# ================= 報價來源（依序：證交所 → 富果 → Yahoo 延遲報價） =================
+# 證交所即時報價免費又快，但常擋國外雲端主機（GitHub、Render 都在國外）。
+# 連不上時改用富果行情 API（免費會員每分鐘 60 次，要在 Secrets／Render 設 FUGLE_API_KEY）；
+# 兩個都不行才用 Yahoo（約延遲 20 分，會標示「延遲」）。
+FUGLE_KEY = os.environ.get("FUGLE_API_KEY", "").strip()
+FUGLE_PER_MIN = 40             # 每個程式每分鐘最多問富果幾次（免費 60 次，GitHub 和 Render 共用同一把金鑰，留餘裕）
+TWSE_PAUSE = 300               # 證交所連不上時，先暫停 5 分鐘不去問（不然每次都要等它逾時）
+SRC = {"twse_off_until": 0.0, "twse_err": "", "fugle_calls": [], "fugle_err": "", "fugle_off_until": 0.0}
+
+
+def get_quotes(items, tries=2, gap=2):
+    """items：[(code, suffix)]。回傳 {code: {"last", "high", "low", "prev", "date", "name", "suffix", "src"}}。
+    另外可能有："notrade"＝今天還沒成交（last 是昨收）、"delayed"＝延遲報價"""
+    items = list(dict.fromkeys(items))
     out, todo = {}, list(items)
-    for k in range(tries):
-        out.update(_get_quotes_once(todo))
-        todo = [(c, sfx) for c, sfx in items if c not in out]
-        if not todo:
+    for k in range(tries):                                  # ① 證交所
+        if not todo or time.time() < SRC["twse_off_until"]:
             break
-        if k < tries - 1:
-            print(f"報價 {len(todo)} 檔沒查到，{gap} 秒後重試（{k + 1}/{tries}）")
+        out.update(_twse_quotes(todo))
+        todo = [(c, s) for c, s in items if c not in out]
+        if todo and k < tries - 1 and time.time() >= SRC["twse_off_until"]:
             time.sleep(gap)
+    if todo and FUGLE_KEY:                                  # ② 富果
+        out.update(_fugle_quotes(todo))
+        todo = [(c, s) for c, s in items if c not in out]
+    if todo:                                                # ③ Yahoo（延遲）
+        out.update(_yahoo_quotes(todo))
     return out
 
 
@@ -1086,11 +1102,10 @@ _TWSE_HEAD = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebK
               "Referer": "https://mis.twse.com.tw/stock/index.jsp", "Accept": "application/json, text/javascript, */*; q=0.01",
               "Accept-Language": "zh-TW,zh;q=0.9"}
 _TWSE_SESS = {}
-TWSE_STATE = {"fail": 0}       # 連續幾次證交所沒回資料（給盤中監控通知管理者用）
 
 
 def _twse_session(fresh=False):
-    """證交所要先打開首頁拿到 cookie（JSESSIONID），不然常常只回空資料；沒有 cookie 的連續請求還會被擋"""
+    """證交所要先打開首頁拿到 cookie，不然常常只回空資料"""
     if fresh:
         _TWSE_SESS.clear()
     if "s" not in _TWSE_SESS:
@@ -1100,31 +1115,25 @@ def _twse_session(fresh=False):
             _TWSE_SESS["s"] = requests
             return requests
         try:
-            ss.get("https://mis.twse.com.tw/stock/index.jsp", headers=_TWSE_HEAD, timeout=8)
-        except Exception as e:
-            print("證交所首頁連線失敗：", repr(e))
+            ss.get("https://mis.twse.com.tw/stock/index.jsp", headers=_TWSE_HEAD, timeout=4)
+        except Exception:
+            pass
         _TWSE_SESS["s"] = ss
     return _TWSE_SESS["s"]
 
 
 def _twse_raw(ex, fresh=False):
-    ss = _twse_session(fresh)
-    r = ss.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
-               params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
-               headers=_TWSE_HEAD, timeout=8)
+    r = _twse_session(fresh).get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+                                 params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
+                                 headers=_TWSE_HEAD, timeout=4)
     return r.json()
 
 
 def _twse_fetch(ex):
-    try:
-        j = _twse_raw(ex)
-        if not j.get("msgArray"):                    # 空的：換一個新的連線再問一次
-            j = _twse_raw(ex, fresh=True)
-    except Exception:
-        _twse_session(fresh=True)
-        j = _twse_raw(ex)
+    """問一次證交所；連不上（逾時、被擋）直接丟出錯誤，回空資料就換新連線再問一次"""
+    j = _twse_raw(ex)
     if not j.get("msgArray"):
-        print("證交所沒回資料：", str(j.get("rtmessage") or j.get("rtcode") or "")[:80])
+        j = _twse_raw(ex, fresh=True)
     res = {}
     for q in j.get("msgArray", []):
         def f(k):
@@ -1132,73 +1141,139 @@ def _twse_fetch(ex):
                 return float(str(q.get(k, "")).split("_")[0])
             except ValueError:
                 return None
-        z = f("z")                     # 只用最後一筆成交價，不拿買賣報價
+        z, notrade = f("z"), False                 # 只用最後一筆成交價，不拿買賣報價
         if z:
             _LAST_Z[q["c"]] = (q.get("d", ""), z)
             last = z
-        elif f("o"):                   # 今天已經有成交，只是這一瞬間沒有新成交（z 是「-」）：
+        elif f("o"):                               # 今天有成交，只是這一瞬間沒有新成交（z 是「-」）
             d0, zc = _LAST_Z.get(q["c"], ("", None))
             if d0 != q.get("d", "") or not zc:
-                continue               # 沒有先前記下的成交價 → 當作沒查到，交給重試／Yahoo，絕不拿昨收冒充
+                continue                           # 沒記到先前的成交價 → 當作沒查到，交給下一個來源，絕不拿昨收冒充
             last = zc
         else:
-            last = f("y")              # 還沒開盤、今天沒有任何成交 → 用昨收
+            last, notrade = f("y"), True           # 今天還沒有任何成交 → 先放昨收（不會拿來觸發提醒）
         if last:
             res[q["c"]] = {"last": last, "high": f("h") or last, "low": f("l") or last, "prev": f("y"), "date": q.get("d", ""),
-                           "name": (q.get("n") or "").strip() or None,
+                           "name": (q.get("n") or "").strip() or None, "notrade": notrade, "src": "證交所",
                            "suffix": {"otc": ".TWO", "emg": ".EMG"}.get(q.get("ex"), ".TW")}
     return res
 
 
-def _get_quotes_once(items):
-    """items：[(code, suffix)]。回傳 {code: {"last", "high", "prev", "date", "name", "suffix"}}。
-    證交所即時報價（上市、上櫃；不知道是哪邊就兩邊都問），沒查到的興櫃股另外問一次，最後才用 Yahoo"""
-    out = {}
-    if not items:
-        return out
-    parts = []
+def _twse_quotes(items):
+    """證交所即時報價（上市、上櫃不知道是哪邊就兩邊都問；興櫃另外問）。連不上就暫停 5 分鐘"""
+    out, parts = {}, []
     for code, sfx in items:
-        if sfx == ".EMG":
-            continue
-        if sfx != ".TWO":
-            parts.append(f"tse_{code}.tw")
-        if sfx != ".TW":
-            parts.append(f"otc_{code}.tw")
+        if sfx != ".EMG":
+            if sfx != ".TWO":
+                parts.append(f"tse_{code}.tw")
+            if sfx != ".TW":
+                parts.append(f"otc_{code}.tw")
     try:
         if parts:
             out.update(_twse_fetch("|".join(parts)))
-    except Exception as e:
-        print("證交所即時報價失敗：", repr(e))
-    emg = [c for c, sfx in items if c not in out and sfx in (None, ".EMG")]
-    if emg:                                          # 興櫃：另外一次要求，失敗不影響上面查到的
-        try:
+        emg = [c for c, sfx in items if c not in out and sfx in (None, ".EMG")]
+        if emg:
             out.update(_twse_fetch("|".join(f"emg_{c}.tw" for c in emg)))
-        except Exception as e:
-            print("興櫃報價查詢失敗：", repr(e))
-    missing = [(c, s) for c, s in items if c not in out]
-    if items and not out:
-        TWSE_STATE["fail"] += 1
-    elif out:
-        TWSE_STATE["fail"] = 0
-    if missing:
-        try:
-            import yfinance as yf
-            for code, sfx in missing:
-                if sfx == ".EMG":
-                    continue
-                for sf in ([sfx] if sfx else [".TW", ".TWO"]):
-                    try:
-                        fi = yf.Ticker(code + sf).fast_info
-                        last = float(fi["last_price"])
-                    except Exception:
-                        continue
-                    out[code] = {"last": last, "high": float(fi.get("day_high") or last), "low": float(fi.get("day_low") or last),
-                                 "prev": float(fi.get("previous_close") or 0) or None,
-                                 "date": datetime.now(TZ).strftime("%Y%m%d"), "name": None, "suffix": sf, "delayed": True}
-                    break
-        except Exception as e:
-            print("Yahoo 報價失敗：", repr(e))
+    except Exception as e:
+        SRC["twse_err"] = repr(e)[:80]
+        SRC["twse_off_until"] = time.time() + TWSE_PAUSE
+        _TWSE_SESS.clear()
+        print("證交所報價連不上，5 分鐘內改用其他來源：", SRC["twse_err"])
+        return out
+    if parts and not out:                          # 一檔都沒回：多半是被擋，也先暫停
+        SRC["twse_err"] = "沒有回資料"
+        SRC["twse_off_until"] = time.time() + TWSE_PAUSE
+        print("證交所沒回任何資料，5 分鐘內改用其他來源")
     return out
+
+
+def _fugle_budget():
+    now = time.time()
+    SRC["fugle_calls"] = [t for t in SRC["fugle_calls"] if now - t < 60]
+    return len(SRC["fugle_calls"]) < FUGLE_PER_MIN and now >= SRC["fugle_off_until"]
+
+
+def _fugle_one(code):
+    SRC["fugle_calls"].append(time.time())
+    r = requests.get(f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{code}",
+                     headers={"X-API-KEY": FUGLE_KEY}, timeout=5)
+    if r.status_code == 429:                                   # 超過次數：先停 1 分鐘
+        SRC["fugle_off_until"] = time.time() + 60
+        raise RuntimeError("富果：超過每分鐘次數")
+    if r.status_code in (401, 403):
+        SRC["fugle_off_until"] = time.time() + 600
+        raise RuntimeError("富果：金鑰錯誤或沒有權限")
+    if r.status_code == 404:
+        return None                                            # 沒這檔（例如興櫃）
+    r.raise_for_status()
+    j = r.json()
+    lt = j.get("lastTrade") or {}
+    last = j.get("closePrice") or lt.get("price") or j.get("lastPrice")
+    prev = j.get("previousClose") or j.get("referencePrice")
+    notrade = not last
+    last = last or prev
+    if not last:
+        return None
+    mk = f"{j.get('exchange', '')} {j.get('market', '')}".upper()
+    return {"last": float(last), "high": float(j.get("highPrice") or last), "low": float(j.get("lowPrice") or last),
+            "prev": float(prev) if prev else None, "date": str(j.get("date") or "").replace("-", ""),
+            "name": j.get("name") or None, "notrade": notrade, "src": "富果",
+            "suffix": ".TWO" if ("TPEX" in mk or "OTC" in mk) else ".TW"}
+
+
+def _fugle_quotes(items):
+    """富果行情 API：一次問一檔，照順序問（盤中監控把持股排前面），超過每分鐘額度就先停"""
+    out = {}
+    for code, sfx in items:
+        if sfx == ".EMG":
+            continue
+        if not _fugle_budget():
+            print("富果這一分鐘的額度用完，其餘改用延遲報價")
+            break
+        try:
+            v = _fugle_one(code)
+            if v:
+                out[code] = v
+            SRC["fugle_err"] = ""
+        except Exception as e:
+            SRC["fugle_err"] = str(e)[:80]
+            print("富果報價失敗：", SRC["fugle_err"])
+            if time.time() < SRC["fugle_off_until"]:
+                break
+    return out
+
+
+def _yahoo_quotes(items):
+    """最後手段：Yahoo（台股約延遲 20 分，標示 delayed）"""
+    out = {}
+    try:
+        import yfinance as yf
+    except Exception:
+        return out
+    for code, sfx in items:
+        if sfx == ".EMG":
+            continue
+        for sf in ([sfx] if sfx else [".TW", ".TWO"]):
+            try:
+                fi = yf.Ticker(code + sf).fast_info
+                last = float(fi["last_price"])
+            except Exception:
+                continue
+            out[code] = {"last": last, "high": float(fi.get("day_high") or last), "low": float(fi.get("day_low") or last),
+                         "prev": float(fi.get("previous_close") or 0) or None, "src": "Yahoo",
+                         "date": datetime.now(TZ).strftime("%Y%m%d"), "name": None, "suffix": sf, "delayed": True}
+            break
+    return out
+
+
+def source_problem():
+    """盤中監控用：目前報價有沒有問題（回傳要告訴管理者的話，沒問題回空字串）"""
+    if time.time() < SRC["twse_off_until"]:
+        if not FUGLE_KEY:
+            return "證交所報價連不上\n也還沒設定富果金鑰\n目前用延遲約 20 分的報價"
+        if SRC["fugle_err"]:
+            return f"證交所報價連不上\n富果也失敗：{SRC['fugle_err']}\n目前用延遲約 20 分的報價"
+    return ""
 
 
 def guess_suffix(code):
@@ -1228,6 +1303,19 @@ def quotes_for(h):
     return get_quotes([(c, x.get("suffix") or guess_suffix(c)) for c, x in h.items()])
 
 
+def _dir_name(code):
+    """只從股票清單找名稱（不另外查報價）"""
+    try:
+        d = _DIR
+        if d is not None:
+            row = d[d["code"] == code]
+            if len(row):
+                return str(row.iloc[0]["name"])
+    except Exception:
+        pass
+    return None
+
+
 def quote_report(codes):
     """查價：任意股票的最新成交價、昨收、今日高低（最多 10 檔）"""
     q = quotes_quick({c: {"suffix": None} for c in codes}, 10)
@@ -1243,10 +1331,13 @@ def quote_report(codes):
             pct = (last / prev - 1) * 100
             lamp = "▲" if pct > 0 else "▼" if pct < 0 else "－"
             now_l += f"　{'+' if pct >= 0 else '−'}{abs(pct):,.1f}%"
-        lines += ["", f"{lamp} {c} {x.get('name') or c}", now_l]
-        if prev:
+        if x.get("notrade"):
+            lamp, now_l = "－", f"今天還沒成交（昨收 {_n(last)}）"
+        lines += ["", f"{lamp} {c} {x.get('name') or _dir_name(c) or c}", now_l]
+        if prev and not x.get("notrade"):
             lines.append(f"昨收 {_n(prev)}")
-        lines.append(f"今日高 {_n(x.get('high'))}　低 {_n(x.get('low'))}")
+        if not x.get("notrade"):
+            lines.append(f"今日高 {_n(x.get('high'))}　低 {_n(x.get('low'))}")
         if x.get("delayed"):
             lines.append("⚠️ 備用來源，約延遲 20 分")
     return "\n".join(lines)
@@ -1312,12 +1403,13 @@ def check_once(watch, books, sent, today, last=None, now=None):
     """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)"""
     last = {} if last is None else last
     now = now or datetime.now(TZ)
-    items = [(w["code"], w["suffix"]) for w in watch]
+    items = []                                              # 持股排前面：報價額度不夠時，先顧持股
     for h in books.values():
         for code, x in h.items():
             items.append((code, x.get("suffix") or guess_suffix(code)))
+    items += [(w["code"], w["suffix"]) for w in watch]
     q = get_quotes(list(dict.fromkeys(items)))
-    traded = [v for v in q.values() if v.get("date") == today]
+    traded = [v for v in q.values() if v.get("date") == today and not v.get("notrade")]
     for w in watch:                                         # 🎯 追價提醒（群組）
         v = q.get(w["code"])
         if not v or v.get("date") != today or ("chase", "group", w["code"]) in sent:
@@ -1334,14 +1426,15 @@ def check_once(watch, books, sent, today, last=None, now=None):
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
             v = q.get(code)
-            if not v or v.get("date") != today:
-                continue
+            if not v or v.get("date") != today or v.get("notrade"):
+                continue                                    # 今天還沒成交：last 是昨收，不拿來觸發提醒
             p = v["last"]
+            lag = "\n（備用報價，約延遲 20 分）" if v.get("delayed") else ""
             why = _due(last, ("stop", cid, code), bool(x["stop"] and p <= x["stop"]), now)
             if why:
                 _alert_once(cid, last, ("stop", cid, code), why,
                             f"🛑 *跌破出場價*　{code} {x['name']}\n成交價 {p:g}，出場價 {x['stop']:g}\n"
-                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n要賣請按下方按鈕", code, x["name"], now)
+                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）{lag}\n要賣請按下方按鈕", code, x["name"], now)
             if x["key"] and not x["added"] and p >= x["key"] and ("add", cid, code) not in sent:
                 sent.add(("add", cid, code))
                 send_to(cid, f"⬆️ *站上前波高點*　{code} {x['name']}\n成交價 {p:g}，前高 {x['key']:g}\n"
@@ -1351,7 +1444,7 @@ def check_once(watch, books, sent, today, last=None, now=None):
             if why:
                 _alert_once(cid, last, ("target", cid, code), why,
                             f"🎯 *碰到目標價*　{code} {x['name']}\n成交價 {p:g}，目標 {x['target']:g}\n"
-                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）\n要賣請按下方按鈕", code, x["name"], now)
+                            f"均價 {x['avg']:g}（{(p / x['avg'] - 1) * 100:+.1f}%）{lag}\n要賣請按下方按鈕", code, x["name"], now)
     return len(traded)
 
 
@@ -1409,7 +1502,7 @@ def _run_market():
     sent = set()
     last = {}                                                # 持股提醒最近一次送出的時間
     no_trade_checks = 0
-    warned = [datetime(2000, 1, 1, tzinfo=TZ)]
+    warned, bad = [datetime(2000, 1, 1, tzinfo=TZ)], [0]
     while True:
         now = datetime.now(TZ)
         if (now.hour, now.minute) >= CLOSE_AT:
@@ -1418,9 +1511,11 @@ def _run_market():
         if (now.hour, now.minute) >= OPEN_AT:
             books = all_books()
             n = check_once(watch, books, sent, today, last)
-            if TWSE_STATE["fail"] >= 3 and (now - warned[0]).total_seconds() >= 1800:
-                warned[0] = now                              # 證交所連續沒回資料：只剩延遲報價，通知管理者
-                to_owner(f"⚠️ 證交所報價連不上　{now:%H:%M}\n目前改用備用來源（約延遲 20 分）\n停損提醒可能慢")
+            prob = source_problem()
+            bad[0] = bad[0] + 1 if prob else 0
+            if bad[0] >= 3 and (now - warned[0]).total_seconds() >= 1800:
+                warned[0] = now                              # 連續 3 分鐘只有延遲報價：通知管理者
+                to_owner(f"⚠️ 報價來源有問題　{now:%H:%M}\n{prob}\n停損提醒可能慢")
             if n == 0 and (watch or any(books.values())):
                 no_trade_checks += 1
                 if no_trade_checks >= 15:                    # 開盤 15 分鐘都沒有成交資料 → 今天休市
