@@ -448,7 +448,7 @@ def html_table(head, rows, wrap=(), left=(), bold_first=False):
         bg = "background:rgba(128,128,128,0.14);font-weight:600;" if tag == "th" else ""
         bt = f"border-top:{border};" if top else ""
         return (f'<{tag} style="padding:6px 7px;text-align:{align};white-space:{ws};{bg}{bt}'
-                f'font-size:0.84rem;line-height:1.35;">{esc(text)}</{tag}>')
+                f'font-size:0.84rem;line-height:1.35;">{esc(text).replace(chr(10), "<br>")}</{tag}>')
 
     out = ['<div style="overflow-x:auto;margin:4px 0 10px 0;"><table style="width:100%;'
            f'border-collapse:separate;border-spacing:0;border:{border};border-radius:8px;overflow:hidden;">']
@@ -465,7 +465,19 @@ def show_table(head, rows, **kw):
 
 def md_cond(rows):
     """條件表（結果 | 條件 | 現況）。現況欄可以換行，其他欄不換行"""
+    import re as _re
+    rows = [(a, b, _re.sub(r"[；，、]", "\n", str(c))) for a, b, c in rows]      # 一個句子一行，不會從句子中間斷開
     show_table(["", "條件", "現況"], rows, wrap=(2,), left=(1,))
+
+
+def md_fail(rows):
+    """沒通過的條件：一條一組，名稱一行、現況一個句子一行，用整個畫面寬度，不會從句子中間斷開"""
+    import re as _re
+    for name, detail in rows:
+        parts = [x.strip() for x in _re.split(r"[；，、]", str(detail)) if x.strip()]
+        st.markdown(f"❌ **{name}**")
+        if parts:
+            st.caption(L(*parts))
 
 
 def plan_view(p, capital, close):
@@ -507,7 +519,7 @@ def plan_view(p, capital, close):
     st.caption(L(head_note,
                  "均價、出場價、損益＝買到該階段後的累計狀況",
                  f"合計投入 {sum(costs):,.0f} 元、{sum(shares):,} 股",
-                 f"可用資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元"))
+                 f"投入資金 {capital:,.0f} 元，剩餘 {capital - sum(costs):,.0f} 元"))
     if p.get("stop_after2"):
         st.caption(L(f"突破日買進後，出場價上移到前波高點下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%",
                      "若跳空跌破出場價，實際虧損會比表上多"))
@@ -544,12 +556,10 @@ LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
 
 if mk:
     c1, c2 = st.columns(2)
-    c1.metric("加權指數", f"{mk['close']:,.1f}")
+    _pv = float(mk["df"]["Close"].iloc[-2]) if len(mk["df"]) >= 2 else None
+    _chg = f"{mk['close'] - _pv:+,.2f}（{(mk['close'] / _pv - 1) * 100:+.2f}%）" if _pv else None
+    c1.metric("加權指數", f"{mk['close']:,.1f}", delta=_chg, delta_color="inverse")      # inverse＝紅漲綠跌
     c2.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
-    ma = mk["ma"]
-    st.markdown(f"收盤 `{mk['close']:,.0f}`　MA5 `{ma[5]:,.0f}`  \n"
-                f"MA10 `{ma[10]:,.0f}`　MA20 `{ma[20]:,.0f}`  \n"
-                f"MA60 `{ma[60]:,.0f}`")
 
     show_stab = mk["stab"] if mk["layer"] in (4, 5) else None
     if show_stab is not None or mk["layer"] in (4, 5):
@@ -563,7 +573,7 @@ if mk:
             ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
             da, nd = s_["days_after"], s_["need_days"]
             state = "✅ 通過" if s_["ok"] else ("⏳ 觀察中" if s_.get("watching") else "🔴 尚未止跌")
-            st.markdown(f"🧱 **止跌確認**　{state}（量能、K 棒、不破低 都要過）")
+            st.markdown(L(f"🧱 **止跌確認**　{state}", "量能、K 棒、不破低　都要通過"))
             low_txt = ("低點日就是今天，還要再觀察" if da == 0 else
                        f"低點日（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
                        f"之後 {da} 天最低 {s_['recent_low']:,.0f}，要保持不破")
@@ -634,11 +644,10 @@ def watch_buttons(name, items, limit=15):
         if st.button(f"{it['code']} {it['name']}", key=f"watch_{name}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()
-        st.caption(f"現價 {px(it['close'])}　追價點 {px(it['chase'])}（{up:+.1f}%）　出場價 {px(it['stop1'])}")
+        st.caption(f"現價 {px(it['close'])}｜追價點 {px(it['chase'])}（{up:+.1f}%）｜出場價 {px(it['stop1'])}")
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
-    st.caption(L("現價＝資料日收盤", "追價點＝明天要漲到的價格", "（%）＝追價點比現價高多少",
-                 f"追價點是漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點", "盤中看強弱再決定追不追"))
+    st.caption("追價點（%）＝明天要追買的價格（漲幅）")
 
 
 st.divider()
@@ -701,26 +710,34 @@ st.caption(L("可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）"
 if "w1" not in st.session_state:
     st.session_state.w1 = int(round(cfg.TRANCHES[0] * 100))
     st.session_state.w2 = int(round(cfg.TRANCHES[1] * 100))
+    st.session_state.w3 = 100 - st.session_state.w1 - st.session_state.w2
 
 
-def set_w(a, b):
-    st.session_state.w1, st.session_state.w2 = a, b
+def set_w(a, b, c):
+    st.session_state.w1, st.session_state.w2, st.session_state.w3 = a, b, c
 
 
 b1, b2, b3 = st.columns(3)
-b1.button("平衡策略 30/40/30", use_container_width=True, on_click=set_w, args=(30, 40))
-b2.button("突破策略 30/50/20", use_container_width=True, on_click=set_w, args=(30, 50))
-b3.button("順勢策略 20/50/30", use_container_width=True, on_click=set_w, args=(20, 50))
+b1.button("平衡策略 30/40/30", use_container_width=True, on_click=set_w, args=(30, 40, 30))
+b2.button("突破策略 30/50/20", use_container_width=True, on_click=set_w, args=(30, 50, 20))
+b3.button("順勢策略 20/50/30", use_container_width=True, on_click=set_w, args=(20, 50, 30))
+_w1 = min(max(int(st.session_state.w1), 5), 90)                    # 前面改了，後面的上限跟著收緊，不會超過 100%
+_w2 = min(int(st.session_state.w2), 100 - _w1)
+_w3 = min(int(st.session_state.w3), 100 - _w1 - _w2)
+st.session_state.w1, st.session_state.w2, st.session_state.w3 = _w1, _w2, _w3
 cw1, cw2, cw3 = st.columns(3)
 w1 = cw1.number_input("第 1 筆 (%)", 5, 90, step=5, key="w1")
 w2 = cw2.number_input("第 2 筆 (%)", 0, max(0, 100 - w1), step=5, key="w2")
-w3 = max(0, 100 - w1 - w2)
-cw3.metric("第 3 筆 (%)", f"{w3}%")
+w3 = cw3.number_input("第 3 筆 (%)", 0, max(0, 100 - w1 - w2), step=5, key="w3")
+tot = w1 + w2 + w3                                                  # 合計可以小於 100%，沒用到的留現金
+capital_all = capital
+capital = capital_all * tot / 100                                   # 後面所有試算都用「實際要投入的資金」
 ratios = S.norm_ratios((w1, w2, w3))
 st.markdown(f"**各階段可投入**  \n"
             f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）  \n"
             f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）  \n"
-            f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）")
+            f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）  \n"
+            f"合計投入 {capital:,.0f} 元（{tot}%），留現金 {capital_all - capital:,.0f} 元")
 st.caption(L("這個比例用在「盤整後噴出」「量縮抗跌」",
              f"「創高拉回」「噴後整理」固定攻擊日 {cfg.ATTACK_SPLIT[0] * 100:.0f}%、突破日 {cfg.ATTACK_SPLIT[1] * 100:.0f}%",
              "資金用來試算每一筆可以買幾股"))
@@ -789,7 +806,7 @@ def stock_bt_body(code, suffix, capital):
         rows.append(_stat_row("合計", BT.trade_stats(T)))
         show_table(["策略", "筆數", "勝率", "期望值", "平均賺／賠", "最差"], rows)
         pnl = T["ret_plan"] * capital
-        st.markdown(L(f"**每次都投入可用資金 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
+        st.markdown(L(f"**每次都投入 {capital:,.0f} 元**", f"累計損益約 {pnl.sum():+,.0f} 元（共 {len(T)} 筆）"))
 
     # 追價 vs 收盤確認（只比較創高拉回、噴後整理）
     T_close = stock_backtest(code, suffix, tuple(ratios), mode, only_active, "close")
@@ -948,7 +965,7 @@ if target:
             if not pr and not sp:
                 st.caption("近 65 交易日沒有明顯的大量（需達 20 日均量 1.5 倍），上下都沒有標壓力或支撐")
             st.caption("取近 65 交易日；日期標在圖上，太久以前的大量參考價值較低")
-            st.caption(L(f"以下依可用資金 {capital:,.0f} 元", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
+            st.caption(L(f"以下依投入資金 {capital:,.0f} 元（可用資金的 {tot}%）", f"比例 {w1}/{w2}/{w3} 換算股數與出場損益"))
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
                 label = cfg.STRATEGY_NAMES[sname]
@@ -959,7 +976,13 @@ if target:
 
                 def body(r=r, sname=sname):
                     st.markdown(f"**現價 {px(close)}**")
-                    md_cond([("✅" if cok else "❌", cname, detail) for cname, cok, detail in r["checks"]])
+                    fails = [(cname, detail) for cname, cok, detail in r["checks"] if not cok]     # 只列沒過的，過的不重複列
+                    total = len(r["checks"])
+                    if fails:
+                        st.markdown(L(f"**符合 {total - len(fails)} / {total} 條**", f"卡住的 {len(fails)} 條："))
+                        md_fail(fails)
+                    else:
+                        st.markdown(f"✅ **{total} 條全部符合**")
                     if sname in ("pullback", "flag") and "cons_hi" in r:
                         st.markdown(L(f"**盤整區　{px(r['cons_lo'])} ～ {px(r['cons_hi'])}**",
                                       f"前波高點 {px(r['key'])}（{r['peak_date']:%m/%d}）"))
