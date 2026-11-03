@@ -199,10 +199,16 @@ def stock_chart(df, title="", bars=65):
     marks = [(hi_v, f"前高 {hi_v:,.1f}", "#e64980", ":")]
     vol_marks = []
     for day, rank, side, level in _big_volume_days(d, last):
-        col = "#e04a4a" if side == "壓力" else "#2e9e4f"
+        col = "#ff8c00" if rank == 1 else ("#e04a4a" if side == "壓力" else "#2e9e4f")   # 第1大量固定橘色，跟大盤圖一致
         pt = "最高" if side == "壓力" else "最低"
         marks.append((level, f"第{rank}大量{pt} {level:,.1f}", col, "--"))
         vol_marks.append((_pos(idx, day), rank, col))
+        pi_ = _pos(idx, day)
+        if pi_ is not None:                                     # K 線上也框出那一天
+            from matplotlib.patches import Rectangle
+            ax.add_patch(Rectangle((pi_ - 0.45, float(d["Low"].iloc[pi_])), 0.9,
+                                   float(d["High"].iloc[pi_] - d["Low"].iloc[pi_]), fill=False,
+                                   edgecolor=col, linewidth=1.8, zorder=6))
     top_v, bot_v = float(d["High"].max()), float(d["Low"].min())
     allv = [m[0] for m in marks] + [top_v, bot_v]
     lo_y, hi_y = min(allv), max(allv)
@@ -218,7 +224,7 @@ def stock_chart(df, title="", bars=65):
         ys[k] = val if not ys else min(val, min(ys.values()) - gap)
     for k, (val, txt, col, ls) in enumerate(marks):
         ax.axhline(val, color=col, linestyle=ls, linewidth=0.9, alpha=0.75)
-        ax.text(n + 0.6, ys[k], txt, fontsize=8.5, color=col, va="center", ha="left", clip_on=False)
+        ax.text(n + 0.6, ys[k], txt, fontsize=9, color=col, va="center", ha="left", clip_on=False)
     ax.plot([n - 1], [last], marker="<", color="#333", markersize=0)
     ax.text(n + 0.6, last, f"現價 {last:,.1f}", fontsize=8.5, color="#333", va="center", ha="left", clip_on=False,
             fontweight="bold") if all(abs(last - ys[k]) > gap * 0.8 for k in ys) else None
@@ -233,7 +239,7 @@ def stock_chart(df, title="", bars=65):
     axv.plot(x, vma20.values, color="#e67e22", linewidth=1.1, label="20日均量")
     for p_, rank, col in vol_marks:
         if p_ is not None:
-            axv.bar([p_], [float(v.iloc[p_])], color="none", edgecolor=col, linewidth=2.2, width=0.65)
+            axv.bar([p_], [float(v.iloc[p_])], color="none", edgecolor=col, linewidth=3.0, width=0.65)
             axv.annotate(f"第{rank}大量", xy=(p_, float(v.iloc[p_])), xytext=(p_, float(v.iloc[p_]) * 1.04),
                          fontsize=8, color=col, ha="center", va="bottom")
     axv.set_ylim(0, float(v.max()) * 1.3)
@@ -255,7 +261,7 @@ def stock_chart(df, title="", bars=65):
         arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"
         fig.text(0.02, 0.925, f"{last:,.2f}　{arrow} {abs(chg):,.2f}（{pct:+.2f}%）", fontsize=13, color=col,
                  fontweight="bold", ha="left", va="top")
-    fig.tight_layout(rect=(0, 0, 0.86, 0.92))
+    fig.tight_layout(rect=(0, 0, 0.995, 0.92))
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
