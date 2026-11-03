@@ -570,6 +570,11 @@ except Exception as e:
 LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
 
 if mk:
+    if mk["active"]:                                   # 大盤結論放在標題正下方，一進來就先看到
+        (st.warning if mk["risk"] else st.success)(
+            "大盤目前允許：" + cfg.names_join(mk["active"]))
+    else:
+        st.error("🔴 尚未止跌，不建議建立多頭部位")
     mL, mR = st.columns([2, 3])          # 電腦：左邊數字和止跌條件、右邊圖；手機會自動變成上下排
     with mL:
         _pv = float(mk["df"]["Close"].iloc[-2]) if len(mk["df"]) >= 2 else None
@@ -616,11 +621,6 @@ if mk:
         except Exception:                              # 萬一畫圖失敗，退回互動圖
             st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                             use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
-        if mk["active"]:
-            (st.warning if mk["risk"] else st.success)(
-                "大盤目前允許：" + cfg.names_join(mk["active"]))
-        else:
-            st.error("🔴 尚未止跌，不建議建立多頭部位")
 
 # ==================== 今日推薦 ====================
 RESULT_PATH = Path(__file__).parent / "scan_results.json"
