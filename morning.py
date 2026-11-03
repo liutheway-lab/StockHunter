@@ -1,9 +1,9 @@
 """morning.py — 晨間國際行情速報（台灣時間 08:30）
 想增減項目，只改下面的 GROUPS（名稱請用 4 個中文字，表格才會對齊）。
-顏色規則：🟢 = 利多、🔴 = 利空（一般上漲是利多；VIX 上漲是利空，已自動處理）。
+漲跌符號：▲ 上漲、▼ 下跌、─ 持平（只看價格方向，不用紅綠燈）。
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -14,12 +14,9 @@ from notify import send_telegram
 # 分組顯示：(組名, {顯示名稱(4字): Yahoo 代號})
 GROUPS = [
     ("🇺🇸 美股期貨", {"那斯達克": "NQ=F", "標普五百": "ES=F", "道瓊工業": "YM=F"}),
-    ("🌏 亞洲股市", {"日經指數": "^N225", "韓國綜合": "^KS11"}),
+    ("🌏 亞洲股市", {"日經期貨": "NIY=F", "韓國綜合": "^KS11"}),   # 日經用期貨：休市日也有資料
     ("😨 恐慌指數", {"恐慌指數": "^VIX"}),
 ]
-
-# 「上漲代表壞事」的項目：上漲顯示 🔴、下跌顯示 🟢
-INVERSE_SYMBOLS = {"^VIX"}
 
 # 台指期夜盤：期交所即時行情（MarketType=1 代表盤後／夜盤，TXF = 臺股期貨）
 MIS_URL = "https://mis.taifex.com.tw/futures/api/getQuoteList"
@@ -27,7 +24,7 @@ TX_NAME = "台指夜盤"
 
 # ── 今日結論的判斷規則（想調鬆緊就改這裡）──
 US_SYMS = {"NQ=F", "ES=F", "YM=F"}   # 美股期貨（取平均）
-ASIA_SYMS = {"^N225", "^KS11"}       # 亞洲股市（取平均）
+ASIA_SYMS = {"NIY=F", "^KS11"}       # 亞洲股市（取平均）
 FLAT = 0.3          # 漲跌幅絕對值小於這個 % 視為持平，不加不減分
 VIX_WARN = 25       # VIX 高於這個值：扣 1 分
 VIX_PANIC = 30      # VIX 高於這個值：直接判「不適合」
@@ -58,6 +55,7 @@ def get_quote(symbol):
     hist = hist.dropna(subset=["Close"])
     if len(hist) < 2:
         raise ValueError("資料不足")
+    print(symbol, "最近日線：", [(f"{i:%m/%d}", round(float(c), 2)) for i, c in zip(hist.index[-3:], hist["Close"].iloc[-3:])])
     curr = float(hist["Close"].iloc[-1])
     prev = float(hist["Close"].iloc[-2])
     if prev <= 0:
@@ -159,17 +157,11 @@ def judge(pcts, levels):
 
 
 def fmt_row(name, symbol, curr, prev, note=""):
-    """一個項目 = 表格一行：色燈、名稱、漲跌幅、價格、漲跌點"""
+    """一個項目 = 表格一行：箭頭、名稱、漲跌幅、價格、漲跌點"""
     diff = curr - prev
     pct = diff / prev * 100
     flat = round(diff, 4) == 0
-    if flat:
-        icon = "⚪"
-    else:
-        good = diff > 0
-        if symbol in INVERSE_SYMBOLS:
-            good = not good
-        icon = "🟢" if good else "🔴"
+    icon = "─" if flat else "▲" if diff > 0 else "▼"
 
     if curr >= 1000:
         price, chg = f"{curr:,.0f}", f"{diff:+,.0f}"
@@ -219,6 +211,15 @@ def run():
                 rows.append((label, sym, None, str(e), None))
 
         gdate = max(dates) if dates else None
+        notes = []
+        if gdate:                                       # 有項目停在比較早的日期：現貨指數當作休市，期貨當作沒有新資料
+            for label, sym, curr, prev, d in rows:
+                lag = timedelta(days=1 if sym.endswith("=F") else 0)      # 期貨日線的日期是交易所（美國）時間，差一天算正常
+                if curr is None or d.date() >= gdate - lag:
+                    continue
+                pcts.pop(sym, None)                     # 舊資料不拿來算今天的結論
+                why = "無新資料" if sym.endswith("=F") else "休市"
+                notes.append(f"※ {label}{why}（停在 {d:%m/%d}）")
         head = f"*{title}*"
         if gdate:
             head += f"　{gdate:%m/%d}"
@@ -230,9 +231,8 @@ def run():
             if curr is None:
                 lines.append(f"⚠️ {pad(label)} 抓不到")
             else:
-                note = f" ⚠️{d:%m/%d}" if d.date() != gdate else ""
-                lines.append(fmt_row(label, sym, curr, prev, note))
-        blocks.append(head + "\n" + code(lines))
+                lines.append(fmt_row(label, sym, curr, prev))
+        blocks.append(head + "\n" + code(lines) + ("\n" + "\n".join(notes) if notes else ""))
 
     top = [
         "☀️ *台股晨間速報*",
@@ -240,7 +240,6 @@ def run():
     ]
     if now.weekday() >= 5:
         top.append("📌 週末｜以下為最後交易日資料\n　　非即時行情")
-    top.append("🟢 利多　🔴 利空")
 
     icon, text, drows, score, max_score, veto = judge(pcts, levels)
     tbl = [f"{pad(n)} {v:>7} {p:>+3d}" for n, v, p in drows]
