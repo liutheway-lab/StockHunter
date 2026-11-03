@@ -141,11 +141,19 @@ def _cells(t):
     return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
 
 
+def pre(lines, pad=4, minw=18):
+    """灰底等寬區塊。每行右邊補空白（至少 18 格、再多 4 格），Telegram 在區塊右上角會顯示一個「</>」小圖示，
+    不補的話短短一行會被它蓋到字"""
+    lines = [str(l) for l in lines]
+    w = max(max((_cells(l) for l in lines), default=0) + pad, minw)
+    return "<pre>" + "\n".join(esc(l) + " " * (w - _cells(l)) for l in lines) + "</pre>"
+
+
 def kv(rows, gap=2):
     """[(名稱, 內容)] → 對齊的等寬區塊。名稱欄補空白到一樣寬，內容空的就略過"""
     rows = [(k, v) for k, v in rows if v not in (None, "")]
     w = max((_cells(k) for k, _ in rows), default=0)
-    return "<pre>" + "\n".join(f"{k}{' ' * (w - _cells(k) + gap)}{v}" for k, v in rows) + "</pre>"
+    return pre([f"{k}{' ' * (w - _cells(k) + gap)}{v}" for k, v in rows])
 
 
 def is_html(t):
@@ -717,7 +725,7 @@ def handle(text, h):
             return "目前沒有持股", False
         names = "\n".join(f"{c} {x['name']}" for c, x in sorted(h.items()))
         h.clear()
-        return f"✅ <b>已全部賣出</b>\n<pre>{esc(names)}</pre>\n持股已清空", True
+        return f"✅ <b>已全部賣出</b>\n{pre(names.split(chr(10)))}\n持股已清空", True
     if cmd == "賣" and len(w) >= 2:
         code = w[1]
         if code not in h:
@@ -1572,7 +1580,7 @@ def quote_report(codes):
         pos = range_pos(last, x.get("high"), x.get("low"))
         if pos is not None:
             body.append(range_bar(pos))
-        out.append("<pre>" + "\n".join(body) + "</pre>")
+        out.append(pre(body))
         if pos is not None:
             vp = volume_profile(c, last) if time.time() < t_end else None
             if vp:
