@@ -1,8 +1,8 @@
 {
- "generated_at": "2026-11-02 23:35",
- "data_date": "2026-11-02",
- "layer": 5,
- "layer_name": "強空頭",
+ "generated_at": "2026-11-03 18:17",
+ "data_date": "2026-11-03",
+ "layer": 4,
+ "layer_name": "空頭",
  "active": [],
  "risk": false,
  "stab_ok": false,
@@ -10,114 +10,23 @@
   "pullback": [],
   "flag": [],
   "breakout": [],
-  "dry": [
-   {
-    "code": "1476",
-    "name": "儒鴻",
-    "suffix": ".TW",
-    "industry": "紡織纖維",
-    "market": "上市",
-    "close": 318.5,
-    "key": 331.0,
-    "stop1": 315.5,
-    "target": 331.0,
-    "turnover": 479763756,
-    "broke": false,
-    "vl_low": 296.0,
-    "vl_date": "10/08",
-    "vl_vol": 4104,
-    "vl_side": "撐"
-   },
-   {
-    "code": "2034",
-    "name": "允強",
-    "suffix": ".TW",
-    "industry": "鋼鐵工業",
-    "market": "上市",
-    "close": 22.9,
-    "key": 25.0,
-    "stop1": 22.6,
-    "target": 25.0,
-    "turnover": 67536987,
-    "broke": false,
-    "vl_low": 25.0,
-    "vl_date": "09/30",
-    "vl_vol": 18889,
-    "vl_side": "壓"
-   }
-  ]
+  "dry": []
  },
  "watch": {
   "pullback": [
-   {
-    "code": "2881",
-    "name": "富邦金",
-    "suffix": ".TW",
-    "industry": "金融保險業",
-    "market": "上市",
-    "close": 159.5,
-    "chase": 166.0,
-    "stop1": 153.5,
-    "target": 187.5,
-    "key": 164.5,
-    "days": 10,
-    "turnover": 2472928556
-   },
-   {
-    "code": "2882",
-    "name": "國泰金",
-    "suffix": ".TW",
-    "industry": "金融保險業",
-    "market": "上市",
-    "close": 116.0,
-    "chase": 121.0,
-    "stop1": 110.0,
-    "target": 128.0,
-    "key": 118.0,
-    "days": 10,
-    "turnover": 2292115978
-   },
-   {
-    "code": "2890",
-    "name": "永豐金",
-    "suffix": ".TW",
-    "industry": "金融保險業",
-    "market": "上市",
-    "close": 45.8,
-    "chase": 47.65,
-    "stop1": 45.5,
-    "target": 52.5,
-    "key": 47.5,
-    "days": 4,
-    "turnover": 1070584722
-   },
-   {
-    "code": "2886",
-    "name": "兆豐金",
-    "suffix": ".TW",
-    "industry": "金融保險業",
-    "market": "上市",
-    "close": 54.1,
-    "chase": 56.3,
-    "stop1": 53.5,
-    "target": 63.7,
-    "key": 56.0,
-    "days": 4,
-    "turnover": 1065125987
-   },
    {
     "code": "1216",
     "name": "統一",
     "suffix": ".TW",
     "industry": "食品工業",
     "market": "上市",
-    "close": 80.6,
-    "chase": 83.9,
+    "close": 81.1,
+    "chase": 84.4,
     "stop1": 77.8,
-    "target": 93.4,
+    "target": 88.2,
     "key": 83.0,
-    "days": 4,
-    "turnover": 1038600834
+    "days": 5,
+    "turnover": 1033161743
    },
    {
     "code": "2880",
@@ -125,41 +34,13 @@
     "suffix": ".TW",
     "industry": "金融保險業",
     "market": "上市",
-    "close": 49.6,
-    "chase": 51.6,
+    "close": 49.05,
+    "chase": 51.1,
     "stop1": 48.75,
-    "target": 58.0,
+    "target": 55.8,
     "key": 51.0,
-    "days": 4,
-    "turnover": 638711291
-   },
-   {
-    "code": "5876",
-    "name": "上海商銀",
-    "suffix": ".TW",
-    "industry": "金融保險業",
-    "market": "上市",
-    "close": 54.3,
-    "chase": 56.5,
-    "stop1": 52.9,
-    "target": 66.1,
-    "key": 56.5,
-    "days": 4,
-    "turnover": 378806300
-   },
-   {
-    "code": "3029",
-    "name": "零壹",
-    "suffix": ".TW",
-    "industry": "資訊服務業",
-    "market": "上市",
-    "close": 123.5,
-    "chase": 128.5,
-    "stop1": 121.5,
-    "target": 149.0,
-    "key": 129.5,
-    "days": 4,
-    "turnover": 238147809
+    "days": 5,
+    "turnover": 654991580
    },
    {
     "code": "2006",
@@ -167,30 +48,15 @@
     "suffix": ".TW",
     "industry": "鋼鐵工業",
     "market": "上市",
-    "close": 91.6,
-    "chase": 95.3,
+    "close": 89.6,
+    "chase": 94.0,
     "stop1": 89.5,
-    "target": 111.5,
+    "target": 105.0,
     "key": 96.0,
-    "days": 4,
-    "turnover": 151812470
+    "days": 5,
+    "turnover": 155307775
    }
   ],
-  "flag": [
-   {
-    "code": "1476",
-    "name": "儒鴻",
-    "suffix": ".TW",
-    "industry": "紡織纖維",
-    "market": "上市",
-    "close": 318.5,
-    "chase": 331.5,
-    "stop1": 315.5,
-    "target": 365.0,
-    "key": 331.0,
-    "days": 10,
-    "turnover": 479763756
-   }
-  ]
+  "flag": []
  }
 }
