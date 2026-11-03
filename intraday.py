@@ -1243,12 +1243,46 @@ def all_books():
     return {cid: load_holdings(cid)[0] for cid in allowed_users()}
 
 
+def notify_users(text):
+    """盤中監控開始／結束，通知每一位持股追蹤的人（靜音，不會響）"""
+    for cid in allowed_users():
+        try:
+            tg("sendMessage", chat_id=str(cid), text=text, disable_notification=True)
+        except Exception as e:
+            print(f"通知監控狀態失敗（{cid}）：", repr(e))
+
+
+NOTICE_AT = (8, 58)             # 「盤中監控開始」通知固定在 08:58 左右送出，讓人放心
+
+
+def _wait_notice_time():
+    """如果比 08:58 早啟動（最多提早 20 分鐘），等到 08:58 再通知；手動在別的時間跑就不用等"""
+    while True:
+        n = datetime.now(TZ)
+        gap = (n.replace(hour=NOTICE_AT[0], minute=NOTICE_AT[1], second=0, microsecond=0) - n).total_seconds()
+        if not 0 < gap <= 20 * 60:
+            return
+        time.sleep(min(gap, 20))
+
+
 def run_market():
-    set_monitor_status(f"{STATUS_TAG}已啟動　{datetime.now(TZ):%H:%M}")
+    _wait_notice_time()
+    t0 = datetime.now(TZ)
+    set_monitor_status(f"{STATUS_TAG}已啟動　{t0:%H:%M}")
+    notify_users(f"▶️ 盤中監控開始\n{t0:%H:%M} 起每分鐘檢查\n到 13:30 收盤")
+    reason = "crash"
     try:
-        _run_market()
+        reason = _run_market() or "close"
     finally:
-        set_monitor_status(f"{STATUS_TAG}已停止　{datetime.now(TZ):%H:%M}")
+        t1 = datetime.now(TZ)
+        set_monitor_status(f"{STATUS_TAG}已停止　{t1:%H:%M}")
+        if reason == "holiday":
+            notify_users(f"⏹ 盤中監控結束\n{t1:%H:%M}\n今天沒有開盤")
+        elif reason == "crash":
+            notify_users(f"⚠️ 盤中監控中斷\n{t1:%H:%M}\n已通知管理者")
+            to_owner(f"⚠️ 盤中監控中斷 {t1:%H:%M}\n請到 Actions 看紀錄")
+        else:
+            notify_users(f"⏹ 盤中監控結束\n{t1:%H:%M} 已收盤")
 
 
 def _run_market():
@@ -1271,7 +1305,7 @@ def _run_market():
                 no_trade_checks += 1
                 if no_trade_checks >= 15:                    # 開盤 15 分鐘都沒有成交資料 → 今天休市
                     print("今天沒有開盤，結束")
-                    return
+                    return "holiday"
         time.sleep(POLL_SEC)
     for cid, h in all_books().items():                      # 收盤後傳一次持股狀況給每個人
         if h:
