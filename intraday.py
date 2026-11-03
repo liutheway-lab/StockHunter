@@ -483,9 +483,23 @@ def auto_key(code, suffix, price):
         return None
 
 
+BUY_STOP_PCT = 0.08            # 買進時系統建議的出場價：成交價下 8%
+_LV_CACHE = {}
+
+
 def levels_for(code, suffix, price):
-    """買進時自動算出場價、目標價、前波高點：
-    有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 10%，目標、前高留空"""
+    """買進時自動算出場價、目標價、前波高點（同一檔同一價 10 分鐘內不重算，買進流程問出場價時已經算過）"""
+    k = (code, suffix, round(float(price), 4))
+    hit = _LV_CACHE.get(k)
+    if hit and time.time() - hit[0] < 600:
+        return dict(hit[1])
+    lv = _levels_for(code, suffix, price)
+    _LV_CACHE[k] = (time.time(), lv)
+    return dict(lv)
+
+
+def _levels_for(code, suffix, price):
+    """有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 8%，目標留空、前高自動抓"""
     raw = None
     try:
         import yfinance as yf
@@ -501,25 +515,27 @@ def levels_for(code, suffix, price):
                     if stop >= price or r["target"] <= price:      # 輸入的成交價跟現在的盤整區對不上（價位差太多），不能套用
                         break
                     return {"stop": stop, "target": r["target"], "key": st.tick(r["key"]),
-                            "why": "依盤整型態",
+                            "why": f"依{cfg.STRATEGY_NAMES[r['name']]}型態", "pattern": True,
+                            "pname": cfg.STRATEGY_NAMES[r['name']],
                             "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、目標、前高\n依攻擊日規則自動算出\n要改請按「價位調整」"}
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
     key = volume_key(raw, price) if raw is not None else None
     kline = (f"前高 {key:g}\n（近 65 日量最大那天的最高價）" if key
              else "前高留空\n（近 65 日沒有更高的價位）")
-    return {"stop": st.tick(price * (1 - cfg.ATTACK_MAX_LOSS), "ceil"), "target": None, "key": key,
-            "why": f"買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%",
-            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n出場價先用買價下 10%\n目標價留空\n" + kline + "\n要改請按「價位調整」"}
+    return {"stop": st.tick(price * (1 - BUY_STOP_PCT), "ceil"), "target": None, "key": key,
+            "why": f"買價下 {BUY_STOP_PCT * 100:.0f}%", "pattern": False,
+            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n目標價留空\n" + kline + "\n要改請按「價位調整」"}
 
 
 # ================= 指令 =================
 # 輸入框按「/」會跳出的選單（Telegram 規定指令只能用英文，中文直接打也可以）
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "buy": "買", "sell": "賣", "set": "設", "quote": "查價", "price": "查價"}
-KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "價位調整"}], [{"text": "查價"}, {"text": "說明"}]],
+KEYBOARD = {"keyboard": [[{"text": "買進"}, {"text": "賣出"}], [{"text": "持股"}, {"text": "價位調整"}], [{"text": "查價"}, {"text": "說明"}],
+                         [{"text": "清畫面"}]],
             "resize_keyboard": True, "is_persistent": True}
-KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"] + [[{"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
+KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
                   "resize_keyboard": True, "is_persistent": True}
 FORMAT = {
     "買": "買進格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 目標 1100\n也可以按下方「買進」按鈕",
@@ -533,6 +549,7 @@ HELP = ("🤖 *持股追蹤*\n"
         "持股　→ 看目前持股與即時損益\n"
         "價位調整　→ 選股票、調整價位\n"
         "查價　→ 輸入代號看最新成交價\n"
+        "清畫面　→ 只留釘選的持股清單\n"
         "\n"
         "數量可以打「2張」或「500股」。\n"
         "價位碰到時，機器人會私訊你。")
@@ -606,7 +623,9 @@ def handle(text, h):
             x = {"name": name, "shares": qty, "avg": price, "stop": lv["stop"], "target": lv["target"],
                  "key": lv["key"], "added": False, "suffix": sfx}
             h[code] = x
-            why = "自己設定" if "stop" in opt else lv["why"]
+            sug = st.tick(price * (1 - BUY_STOP_PCT), "ceil")
+            why = (lv["why"] if "stop" not in opt or abs(opt["stop"] - lv["stop"]) < 1e-9
+                   else f"買價下 {BUY_STOP_PCT * 100:.0f}%" if abs(opt["stop"] - sug) < 1e-9 else "自己設定")
             x.update(opt)
             price_l = (f"目標 {_fmt(x['target'])}　前高 {_fmt(x['key'])}" if x["target"] is not None or x["key"] is not None
                        else "目標、前高　尚未設定")
@@ -710,9 +729,26 @@ def delete_msgs(cid, ids):
                 pass
 
 
-def send_kb(cid, text, kb=None):
-    """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。回傳訊息編號"""
-    j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb or (KEYBOARD_OWNER if cid == OWNER else KEYBOARD))
+def clear_chat(cid, upto, keep):
+    """清畫面：把最近 48 小時內的訊息全刪掉（釘選的持股清單除外）。
+    私訊的訊息編號是連號的，所以從現在這則往回刪 400 則，一次 100 則；刪不到的（太舊、已刪）Telegram 會略過"""
+    keep = {k for k in keep if k}
+    ids = [i for i in range(upto, max(0, upto - 400), -1) if i not in keep]
+    for k in range(0, len(ids), 100):
+        part = ids[k:k + 100]
+        if not tg("deleteMessages", chat_id=cid, message_ids=part).get("ok") and k == 0:
+            delete_msgs(cid, [i for i in CHAT.get(cid, []) if i not in keep] + part[:30])   # 一次刪不行就一則一則刪最近的
+
+
+def send_kb(cid, text, kb=None, html_mode=False):
+    """傳訊息並附上鍵盤按鈕（預設是 買進／賣出／持股／說明）。html_mode：文字是 HTML（查價用）。回傳訊息編號"""
+    kb = kb or (KEYBOARD_OWNER if cid == OWNER else KEYBOARD)
+    if html_mode:
+        j = tg("sendMessage", chat_id=cid, text=text, parse_mode="HTML", reply_markup=kb)
+        if not j.get("ok"):                              # HTML 出錯就去掉標籤再送
+            j = tg("sendMessage", chat_id=cid, text=html.unescape(re.sub(r"</?(b|code)>", "", text)), reply_markup=kb)
+    else:
+        j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb)
     mid = (j.get("result") or {}).get("message_id")
     if mid:
         CHAT.setdefault(cid, []).append(mid)
@@ -871,8 +907,41 @@ def guided(cid, text, h):
         except ValueError:
             send_kb(cid, "請輸入數字，例如 950", _kb([["取消"]]))
             return None
+        if price <= 0:
+            send_kb(cid, "價格要大於 0", _kb([["取消"]]))
+            return None
+        s_["price"] = price
+        if s_["code"] in h:                            # 加碼：出場價沿用原本的（突破前高加碼會自動上移）
+            SESSIONS.pop(cid, None)
+            return f"買 {s_['code']} {s_['qty']}股 {price:g}"
+        s_["step"] = "stop"
+        sug = st.tick(price * (1 - BUY_STOP_PCT), "ceil")
+        lines = [f"出場價要設多少？", "", f"建議 {_n(sug)}", f"（成交價下 {BUY_STOP_PCT * 100:.0f}%）"]
+        rows = [[f"用 {_n(sug)}（−{BUY_STOP_PCT * 100:.0f}%）"]]
+        s_["sug"] = sug
+        sfx = stock_name_suffix(s_["code"])[1]
+        lv = levels_for(s_["code"], sfx, price)
+        if lv.get("pattern") and lv["stop"] != sug:
+            s_["pat"] = lv["stop"]
+            pname = lv.get("pname") or "盤整"
+            lines += [f"型態 {_n(lv['stop'])}", f"（符合「{pname}」，盤整低點）"]
+            rows.append([f"用 {_n(lv['stop'])}（{pname}）"])
+        lines += ["", "按下面的建議", "或直接輸入出場價"]
+        s_["rows"] = rows + [["取消"]]
+        send_kb(cid, "\n".join(lines), _kb(s_["rows"]))
+        return None
+    if s_["step"] == "stop":
+        m_ = re.match(r"^用\s*([\d,.]+)", t)
+        try:
+            stop = float((m_.group(1) if m_ else t).replace(",", ""))
+        except ValueError:
+            send_kb(cid, "請按下面的建議\n或輸入數字", _kb(s_["rows"]))
+            return None
+        if stop <= 0 or stop >= s_["price"]:
+            send_kb(cid, f"出場價要低於成交價 {_n(s_['price'])}\n請重新輸入", _kb(s_["rows"]))
+            return None
         SESSIONS.pop(cid, None)
-        return f"買 {s_['code']} {s_['qty']}股 {price:g}"
+        return f"買 {s_['code']} {s_['qty']}股 {s_['price']:g} 出場 {stop:g}"
     SESSIONS.pop(cid, None)
     return None
 
@@ -957,6 +1026,17 @@ def _handle_message(m, state, asked):
             send_kb(OWNER, reply)
             return
     me = get(cid)
+    if text in ("清畫面", "清除畫面", "清空"):                    # 只留釘選的持股清單
+        SESSIONS.pop(cid, None)
+        MENU_WAIT.pop(cid, None)
+        for d in (TRACK, LAST_HELP, LAST_VIEW):
+            d.pop(cid, None)
+        if me[1] is None:                                          # 還沒有釘選的看板：先建一個，才不會全部刪光
+            me[1] = save_holdings(cid, me[0], None, owner[2] if cid == OWNER else None)
+        clear_chat(cid, m.get("message_id") or 0, {me[1]})
+        CHAT[cid] = []
+        send_kb(cid, "🧹 畫面清好了")
+        return
     if cid in SESSIONS and text in ("持股", "說明"):            # 做到一半按了別的功能：先中止目前這一串
         SESSIONS.pop(cid, None)
     if text in ("買進", "賣出", "價位調整", "查價", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
@@ -985,7 +1065,7 @@ def _handle_message(m, state, asked):
         delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的持股畫面刪掉，只留最新一則
         LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply)]
     elif reply:
-        send_kb(cid, reply)
+        send_kb(cid, reply, html_mode=reply.startswith("🔎"))
 
 
 def handle_message(m, state, asked):
@@ -1316,31 +1396,85 @@ def _dir_name(code):
     return None
 
 
+def range_pos(last, high, low):
+    """成交價在今天高低區間的位置：0＝最低、100＝最高"""
+    if not (high and low) or high <= low:
+        return None
+    return max(0.0, min(100.0, (last - low) / (high - low) * 100))
+
+
+def range_bar(pos, n=10):
+    """低 ━━━●━━━━━━ 高（等寬字，● 是現在的位置）"""
+    k = min(n - 1, int(round(pos / 100 * (n - 1))))
+    return "低 " + "━" * k + "●" + "━" * (n - 1 - k) + " 高"
+
+
+def volume_profile(code, last):
+    """富果分價量表 → (今天買的人幾 % 賺錢, POC)。POC＝今天成交量最多的價位。沒有金鑰或查不到回 None"""
+    if not FUGLE_KEY or not _fugle_budget():
+        return None
+    try:
+        SRC["fugle_calls"].append(time.time())
+        r = requests.get(f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/volumes/{code}",
+                         headers={"X-API-KEY": FUGLE_KEY}, timeout=4)
+        if r.status_code != 200:
+            return None
+        rows = [(float(d.get("price") or 0), float(d.get("volume") or 0)) for d in r.json().get("data") or []]
+        rows = [(pr, v) for pr, v in rows if pr > 0 and v > 0]
+        tot = sum(v for _, v in rows)
+        if tot <= 0:
+            return None
+        win = sum(v for pr, v in rows if pr < last)
+        poc = max(rows, key=lambda t: (t[1], -abs(t[0] - last)))[0]      # 量一樣多時取離現價近的
+        return win / tot * 100, poc
+    except Exception as e:
+        print(f"{code} 分價量表失敗：{e!r}")
+        return None
+
+
 def quote_report(codes):
-    """查價：任意股票的最新成交價、昨收、今日高低（最多 10 檔）"""
+    """查價（HTML 格式）：成交價、漲跌、昨收、今日高低、位置條、今天買的人幾 % 賺錢（最多 10 檔）"""
     q = quotes_quick({c: {"suffix": None} for c in codes}, 10)
-    lines = [f"🔎 查價　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
+    esc = lambda v: html.escape(str(v), quote=False)
+    out = [f"🔎 <b>查價</b>　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
+    t_end = time.time() + 8                                   # 分價量表最多花 8 秒，超過就不查
     for c in codes:
         x = q.get(c)
         if not x:
-            lines += ["", f"－ {c}　查不到"]
+            out += ["", f"－ {c}　查不到"]
             continue
         last, prev = x["last"], x.get("prev")
-        lamp, now_l = "－", f"成交價 {_n(last)}"
-        if prev:
-            pct = (last / prev - 1) * 100
-            lamp = "▲" if pct > 0 else "▼" if pct < 0 else "－"
-            now_l += f"　{'+' if pct >= 0 else '−'}{abs(pct):,.1f}%"
+        name = esc(x.get("name") or _dir_name(c) or c)
         if x.get("notrade"):
-            lamp, now_l = "－", f"今天還沒成交（昨收 {_n(last)}）"
-        lines += ["", f"{lamp} {c} {x.get('name') or _dir_name(c) or c}", now_l]
-        if prev and not x.get("notrade"):
-            lines.append(f"昨收 {_n(prev)}")
-        if not x.get("notrade"):
-            lines.append(f"今日高 {_n(x.get('high'))}　低 {_n(x.get('low'))}")
+            out += ["", f"－ <b>{name}</b>　{c}", f"今天還沒成交（昨收 {_n(last)}）"]
+            continue
+        lamp, chg = "－", ""
+        if prev:
+            diff = last - prev
+            sg = "+" if diff > 0 else "−"
+            lamp = "▲" if diff > 0 else "▼" if diff < 0 else "－"
+            chg = f"　{sg}{_n(round(abs(diff), 2))}　{sg}{abs(diff / prev * 100):,.2f}%" if diff else "　平盤"
+        out += ["", f"{lamp} <b>{name}</b>　{c}", f"<b>{_n(last)}</b>{chg}"]
+        rows = ([("昨收", prev)] if prev else []) + [("最高", x.get("high")), ("最低", x.get("low"))]
+        w = max(len(_n(v)) for _, v in rows)
+        out.append("<code>" + "\n".join(f"{k} {_n(v):>{w}}" for k, v in rows) + "</code>")
+        pos = range_pos(last, x.get("high"), x.get("low"))
+        if pos is not None:
+            out.append(f"<code>{range_bar(pos)}</code>")
+            vp = volume_profile(c, last) if time.time() < t_end else None
+            if vp:
+                ps, poc = vp
+                where = "之上" if last > poc else "之下" if last < poc else "剛好在"
+                out.append(f"今天買的人 <b>{ps:.0f}%</b> 賺錢")
+                out.append(f"POC <b>{_n(poc)}</b>（成交最集中）")
+                out.append(f"現價在 POC {where}" if where != "剛好在" else "現價剛好在 POC")
+            else:
+                tag = ("高檔" if pos >= 80 else "偏高" if pos >= 60 else "中間" if pos > 40 else "偏低" if pos > 20 else "低檔")
+                out.append(f"區間位置 <b>{pos:.0f}%</b>・{tag}")
+                out.append("（今日最低＝0%，最高＝100%）")
         if x.get("delayed"):
-            lines.append("⚠️ 備用來源，約延遲 20 分")
-    return "\n".join(lines)
+            out.append("⚠️ 備用來源，約延遲 20 分")
+    return "\n".join(out)
 
 
 def holdings_report(h, q, title="📋 持股"):
