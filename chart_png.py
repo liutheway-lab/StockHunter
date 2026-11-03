@@ -290,16 +290,11 @@ def stock_chart(df, title="", bars=65):
     cols = [UP if cl >= o else DOWN for o, cl in zip(d["Open"], d["Close"])]
     axv.bar(x, v.values, color=cols, width=0.65)
     axv.plot(x, vma20.values, color="#e67e22", linewidth=1.1, label="20日均量")
-    seen = []
     vmax = float(v.max())
     for p_, rank, col in sorted([m for m in vol_marks if m[0] is not None], key=lambda m: m[0]):
         axv.add_patch(plt.Rectangle((p_ - 0.5, 0), 1.0, float(v.iloc[p_]) * 1.03, fill=False,
                                     edgecolor=col, linewidth=1.1, zorder=6, clip_on=False))
-        lvl = sum(1 for q in seen if abs(q - p_) <= 8)                 # 兩個標記靠太近，後面的往上疊一層，不會壓在一起
-        seen.append(p_)
-        axv.text(p_ + (0.6 if p_ < 6 else 0), float(v.iloc[p_]) * 1.05 + vmax * 0.14 * lvl, rank, fontsize=8, color=col,
-                 ha="left" if p_ < 6 else "center", va="bottom")
-    axv.set_ylim(0, vmax * (1.5 if len(seen) > 1 else 1.3))
+    axv.set_ylim(0, vmax * 1.12)
     axv.set_ylabel("成交量（張）")
     axv.legend(loc="upper right", fontsize=8, frameon=False)
     axv.grid(alpha=0.15)
