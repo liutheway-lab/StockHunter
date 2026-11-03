@@ -735,7 +735,7 @@ def _opts(words):
     return out
 
 
-def handle(text, h):
+def handle(text, h, cid=None):
     """處理一則持股指令（每個人自己的持股），回傳 (回覆文字, 持股是否有變)"""
     m_ = re.match(r"^設\s*(\d{4,6})\s*(出場|目標|壓力|支撐|前高)\s*價?格?\s*[:：]?\s*([\d.,]+)\s*$", text.strip())
     if m_:                                           # 「設6620出場價格123」這種寫法也看得懂
@@ -761,6 +761,9 @@ def handle(text, h):
         return holdings_report(h, q), False
     if cmd == "買" and len(w) >= 4:
         code = w[1]
+        lim = over_limit(cid, h, code) if cid else None
+        if lim:
+            return limit_msg(lim), False
         qty = parse_qty(w[2])
         try:
             price = float(w[3])
@@ -860,6 +863,42 @@ ADMIN_HELP = ("\n\n👑 *管理者說明*\n"
               "使用者　看目前有誰可以用")
 
 
+# ---------- 每人追蹤檔數的額度（存在名單的名字後面：「小明#3」＝可追蹤 3 檔；沒寫＝1 檔；管理者不限） ----------
+_USERS_NOW = {}         # 最近一次讀到的使用者名單（給判斷額度用）
+
+
+def user_name(v):
+    return re.sub(r"#\d+$", "", str(v))
+
+
+def user_limit(users, uid):
+    """可以同時追蹤幾檔；管理者回 None（不限）"""
+    if str(uid) == str(OWNER):
+        return None
+    m = re.search(r"#(\d+)$", str((users or {}).get(str(uid)) or ""))
+    return int(m.group(1)) if m else 1
+
+
+def set_user_limit(users, uid, n):
+    nm = user_name(users[uid])
+    users[uid] = nm if n == 1 else f"{nm}#{n}"
+
+
+def limit_msg(n):
+    return f"因為免費的資源使用量有限\n一人以追蹤{'一' if n == 1 else n}檔持股為限\nsorry～🙏"
+
+
+def over_limit(cid, h, code):
+    """要新增一檔不在持股裡的股票，是不是已經滿額度了；回傳額度（滿了）或 None（可以買）"""
+    if code in h:
+        return None
+    n = user_limit(_USERS_NOW, cid)
+    return n if (n is not None and len(h) >= n) else None
+
+
+ADMIN = {}              # 管理者正在設定額度：{管理者 ID: {"uid", "name", "mode": approve/adjust, "step": pick/type}}
+
+
 def admin(text, users):
     """管理者指令。回傳 (回覆, 名單是否有變)；不是管理者指令回傳 (None, False)"""
     w = text.replace("/", " ").split()
@@ -867,7 +906,7 @@ def admin(text, users):
         return None, False
     if w[0] == "允許" and len(w) >= 2 and w[1].isdigit():
         users[w[1]] = " ".join(w[2:]) or "朋友"
-        send_kb(w[1], "✅ 管理者已開通你\n請按下方按鈕開始\n\n" + HELP)
+        send_kb(w[1], "✅ 管理者已開通你\n目前可追蹤 1 檔持股\n請按下方按鈕開始\n\n" + HELP)
         return f"✅ 已允許 {w[1]} {users[w[1]]}", True
     if w[0] == "移除" and len(w) >= 2:
         if users.pop(w[1], None) is None:
@@ -876,7 +915,7 @@ def admin(text, users):
     if w[0] == "使用者":
         if not users:
             return "目前只有你自己在用。\n朋友私訊機器人後\n你會收到通知\n回覆「允許 他的ID」開通", False
-        return "👥 可以使用持股追蹤的人：\n" + "\n".join(f"{u} {n}" for u, n in users.items()), False
+        return "👥 可以使用持股追蹤的人：\n" + "\n".join(f"{u} {user_name(n)}　{user_limit(users, u)} 檔" for u, n in users.items()), False
     return None, False
 
 
@@ -1066,6 +1105,11 @@ def guided(cid, text, h):
             send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入張數、股數\n例：1張、500股",
                     _kb([["全部賣出"], ["取消"]]))
             return None
+        lim = over_limit(cid, h, s_["code"])
+        if lim:
+            SESSIONS.pop(cid, None)
+            send_kb(cid, limit_msg(lim))
+            return None
         name, _ = stock_name_suffix(s_["code"])
         s_["step"] = "qty"
         send_kb(cid, f"{s_['code']} {name}\n買了多少？\n請輸入張數或股數\n例：2張、500股", _kb([["取消"]]))
@@ -1186,6 +1230,8 @@ def _handle_message(m, state, asked):
         return
     owner = get(OWNER)                               # 管理者的置頂訊息裡存著朋友名單
     users = owner[2]
+    _USERS_NOW.clear()
+    _USERS_NOW.update(users)
     if cid != OWNER and cid not in users:            # 還沒開通的人：通知管理者
         frm = m.get("from") or {}
         name = (frm.get("first_name") or "") + (f"（@{frm['username']}）" if frm.get("username") else "")
@@ -1205,9 +1251,60 @@ def _handle_message(m, state, asked):
         def tidy(*extra):                             # 把這一次管理者操作的中間訊息全部清掉
             delete_msgs(cid, TRACK.pop(cid, []) + [mid0] + list(extra))
 
+        adm = ADMIN.get(cid)
+        if adm:                                       # 正在設定某位朋友的額度（引導：按鈕或自己輸入）
+            u = adm["uid"]
+            if u not in users:
+                ADMIN.pop(cid, None)
+            elif text == "取消":
+                ADMIN.pop(cid, None)
+                tidy()
+                MENU_WAIT.pop(cid, None)
+                send_kb(cid, f"額度維持 {user_limit(users, u)} 檔　{user_name(users[u])}")
+                return
+            else:
+                n = None
+                if adm["step"] == "pick" and text == "自己輸入":
+                    adm["step"] = "type"
+                    TRACK.setdefault(cid, []).extend([mid0, send_kb(cid, "請輸入可以追蹤幾檔\n（數字，例：5）", _kb([["取消"]]))])
+                    return
+                mm = re.fullmatch(r"(\d{1,3})\s*檔?", text)
+                if mm and 1 <= int(mm.group(1)) <= 100:
+                    n = int(mm.group(1))
+                if n is None:
+                    TRACK.setdefault(cid, []).extend([mid0, send_kb(cid, "請按下面的按鈕\n或輸入 1～100 的數字",
+                                                                    _kb([["1檔", "2檔", "3檔"], ["自己輸入"], ["取消"]]) if adm["step"] == "pick" else _kb([["取消"]]))])
+                    return
+                old = user_limit(users, u)
+                set_user_limit(users, u, n)
+                ADMIN.pop(cid, None)
+                owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
+                tidy()
+                MENU_WAIT.pop(cid, None)
+                send_kb(cid, f"✅ {user_name(users[u])} 可以追蹤 {n} 檔")
+                if n != old and (adm["mode"] == "adjust" or n != 1):
+                    send_kb(u, f"管理者已設定\n你現在可以追蹤 {n} 檔持股")
+                return
         if text == "管理者":                          # 管理者功能：全部用按鈕操作
             MENU_WAIT[cid] = True
-            TRACK[cid] = [mid0, send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "移除使用者"], ["使用者名單"], ["取消"]]))]
+            TRACK[cid] = [mid0, send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "調整額度"], ["移除使用者", "使用者名單"], ["取消"]]))]
+            return
+        if text == "調整額度":
+            MENU_WAIT[cid] = bool(users)
+            if not users:
+                tidy()
+                send_kb(cid, "目前沒有朋友")
+            else:
+                TRACK.setdefault(cid, []).extend([mid0, send_kb(cid, "要調整誰的額度？",
+                                                                _kb([[f"額度 {c} {user_name(n)}（{user_limit(users, c)}檔）"] for c, n in users.items()] + [["取消"]]))])
+            return
+        mq = re.match(r"^額度\s+(\d+)", text)
+        if mq and mq.group(1) in users:
+            u = mq.group(1)
+            ADMIN[cid] = {"uid": u, "mode": "adjust", "step": "pick"}
+            TRACK.setdefault(cid, []).extend([mid0, send_kb(cid, f"{user_name(users[u])} 目前可追蹤 {user_limit(users, u)} 檔\n要改成幾檔？",
+                                                            _kb([["1檔", "2檔", "3檔"], ["自己輸入"], ["取消"]]))])
+            MENU_WAIT[cid] = True
             return
         if text in ("待開通名單", "移除使用者"):
             items = ({c: n for c, n in PENDING.items() if c not in users} if text == "待開通名單" else dict(users))
@@ -1218,7 +1315,7 @@ def _handle_message(m, state, asked):
                 send_kb(cid, "目前沒有人在等開通" if verb == "允許" else "目前沒有朋友可以移除")
             else:
                 TRACK.setdefault(cid, []).extend([mid0, send_kb(cid, "按名字就" + ("開通" if verb == "允許" else "移除"),
-                                                                _kb([[f"{verb} {c} {n}"] for c, n in items.items()] + [["取消"]]))])
+                                                                _kb([[f"{verb} {c} {user_name(n)}"] for c, n in items.items()] + [["取消"]]))])
             return
         if text == "使用者名單":
             tidy()
@@ -1231,6 +1328,11 @@ def _handle_message(m, state, asked):
                 owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
                 PENDING.pop(text.split()[1], None)
             send_kb(OWNER, reply)
+            w_ = text.split()
+            if changed and w_[0] == "允許" and len(w_) >= 2 and w_[1] in users:
+                ADMIN[cid] = {"uid": w_[1], "mode": "approve", "step": "pick"}
+                MENU_WAIT[cid] = True
+                send_kb(cid, f"{user_name(users[w_[1]])} 要開放幾檔？\n（不選的話維持 1 檔）", _kb([["1檔", "2檔", "3檔"], ["自己輸入"], ["取消"]]))
             return
     me = get(cid)
     if text in ("清畫面", "清除畫面", "清空"):                    # 畫面只剩一則看板（釘選），不再多送任何提示
@@ -1257,7 +1359,7 @@ def _handle_message(m, state, asked):
         delete_msgs(cid, TRACK.pop(cid, []))            # 做完了：中間的問答清掉，只留最後的結果
         text = line
     _LASTQ.pop("q", None)
-    reply, changed = handle(text, me[0])
+    reply, changed = handle(text, me[0], cid)
     if changed:
         me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, rotate=True)
     elif text == "持股" and me[0] and "q" in _LASTQ:                 # 按「持股」順便把置頂看板的現價更新
