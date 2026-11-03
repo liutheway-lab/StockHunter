@@ -334,6 +334,8 @@ def _post_board(method, cid, mid, text, users, hidden):
           "link_preview_options": {"is_disabled": True}}
     if mid:
         kw["message_id"] = mid
+    else:                                            # 新送的看板同時帶著下方按鈕：畫面只剩看板時，按鈕也還在
+        kw["reply_markup"] = KEYBOARD_OWNER if str(cid) == str(OWNER) else KEYBOARD
     j = tg(method, **kw)
     if hidden and users and not (j.get("ok") or "not modified" in str(j)):
         return _post_board(method, cid, mid, text, users, False)           # 藏名單的寫法被拒絕：退回「點一下才顯示」
@@ -1137,16 +1139,14 @@ def _handle_message(m, state, asked):
             send_kb(OWNER, reply)
             return
     me = get(cid)
-    if text in ("清畫面", "清除畫面", "清空"):                    # 只留釘選的持股清單
+    if text in ("清畫面", "清除畫面", "清空"):                    # 畫面只剩一則看板（釘選），不再多送任何提示
         SESSIONS.pop(cid, None)
         MENU_WAIT.pop(cid, None)
         for d in (TRACK, LAST_HELP, LAST_VIEW):
             d.pop(cid, None)
-        if me[1] is None:                                          # 還沒有釘選的看板：先建一個，才不會全部刪光
-            me[1] = save_holdings(cid, me[0], None, owner[2] if cid == OWNER else None)
-        clear_chat(cid, m.get("message_id") or 0, {me[1]})
+        clear_chat(cid, m.get("message_id") or 0, set())            # 連舊看板也刪，下面重送一則新的（帶按鈕）
+        me[1] = save_holdings(cid, me[0], None, owner[2] if cid == OWNER else None, rotate=True)
         CHAT[cid] = []
-        send_kb(cid, "🧹 畫面清好了")
         return
     if cid in SESSIONS and text in ("持股", "說明"):            # 做到一半按了別的功能：先中止目前這一串
         SESSIONS.pop(cid, None)
@@ -1724,7 +1724,8 @@ def notify_users(text):
     """盤中監控開始／結束，通知每一位持股追蹤的人（靜音，不會響）"""
     for cid in allowed_users():
         try:
-            tg("sendMessage", chat_id=str(cid), text=text, disable_notification=True)
+            tg("sendMessage", chat_id=str(cid), text=text, disable_notification=True,
+               reply_markup=KEYBOARD_OWNER if str(cid) == str(OWNER) else KEYBOARD)     # 順便把下方按鈕補回來（對話被刪光時用）
         except Exception as e:
             print(f"通知監控狀態失敗（{cid}）：", repr(e))
 
