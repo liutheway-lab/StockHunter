@@ -32,6 +32,11 @@ for _m in (cfg, lookup, data, S, backtest, guide, chart_png):
 
 st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="wide")
 st.markdown("""<style>
+@media (max-width: 640px) {       /* 手機：表格字小一點、間距縮小，第一欄可以換行，不要被切掉 */
+  table.ht th, table.ht td { padding: 5px 3px !important; font-size: 0.72rem !important; }
+  table.ht th { white-space: normal !important; }
+  table.ht td:first-child, table.ht th:first-child { white-space: normal !important; }
+}
 @media (min-width: 1000px) { .block-container { max-width: 1500px; padding-left: 3rem; padding-right: 3rem; } }
 </style>""", unsafe_allow_html=True)
 # 檢查其他檔案是不是也更新了（只換了 app.py、沒換 config.py／strategies.py 時，給清楚的提示）
@@ -435,7 +440,8 @@ def px(x):
     """依台股跳動單位決定小數位數：1000 元以上不顯示小數、500～1000 元整數、100～500 元一位…"""
     t = S._tick_size(x)
     d = 0 if t >= 1 else (1 if t in (0.5, 0.1) else 2)
-    return f"{x:,.{d}f}"
+    t_ = f"{x:,.{d}f}"
+    return t_.rstrip("0").rstrip(".") if "." in t_ else t_      # 119.0 → 119、114.50 → 114.5
 
 
 def sdiff(x, ref):
@@ -459,7 +465,7 @@ def html_table(head, rows, wrap=(), left=(), bold_first=False):
         return (f'<{tag} style="padding:6px 7px;text-align:{align};white-space:{ws};{bg}{bt}'
                 f'font-size:0.84rem;line-height:1.35;">{esc(text).replace(chr(10), "<br>")}</{tag}>')
 
-    out = ['<div style="overflow-x:auto;margin:4px 0 10px 0;"><table style="width:100%;'
+    out = ['<div style="overflow-x:auto;margin:4px 0 10px 0;"><table class="ht" style="width:100%;'
            f'border-collapse:separate;border-spacing:0;border:{border};border-radius:8px;overflow:hidden;">']
     out.append("<tr>" + "".join(cell("th", i, h, False) for i, h in enumerate(head)) + "</tr>")
     for r in rows:
@@ -1071,48 +1077,50 @@ if target:
                              "帶量＝當天量 ≥ 20 日均量 1.5 倍，不分紅黑",
                              "下方沒有帶量 K 時，前低就是支撐", "上方沒有帶量 K 時，前高就是壓力",
                              "起點太近時，至少回看 3 個交易日"))
-                st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
-                for sname in ("pullback", "flag", "breakout", "dry"):
-                    r = ev["results"][sname]
-                    label = cfg.STRATEGY_NAMES[sname]
-                    if r is None:
-                        st.caption(f"{label}：資料不足，無法判斷")
-                        continue
-                    applicable = "大盤適用" if r["active"] else "大盤不適用"
+            st.divider()                         # 策略診斷、回測放在兩欄下面，整行寬度各自一區
+            st.markdown("**策略診斷**")
+            st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
+            for sname in ("pullback", "flag", "breakout", "dry"):
+                r = ev["results"][sname]
+                label = cfg.STRATEGY_NAMES[sname]
+                if r is None:
+                    st.caption(f"{label}：資料不足，無法判斷")
+                    continue
+                applicable = "大盤適用" if r["active"] else "大盤不適用"
 
-                    def body(r=r, sname=sname):
-                        st.markdown(f"**現價 {px(close)}**")
-                        fails = [(cname, detail) for cname, cok, detail in r["checks"] if not cok]     # 只列沒過的，過的不重複列
-                        total = len(r["checks"])
-                        if fails:
-                            st.markdown(L(f"**符合 {total - len(fails)} / {total} 條**", f"卡住的 {len(fails)} 條："))
-                            md_fail(fails)
+                def body(r=r, sname=sname):
+                    st.markdown(f"**現價 {px(close)}**")
+                    fails = [(cname, detail) for cname, cok, detail in r["checks"] if not cok]     # 只列沒過的，過的不重複列
+                    total = len(r["checks"])
+                    if fails:
+                        st.markdown(L(f"**符合 {total - len(fails)} / {total} 條**", f"卡住的 {len(fails)} 條："))
+                        md_fail(fails)
+                    else:
+                        st.markdown(f"✅ **{total} 條全部符合**")
+                    if sname in ("pullback", "flag") and "cons_hi" in r:
+                        st.markdown(L(f"**盤整區　{px(r['cons_lo'])} ～ {px(r['cons_hi'])}**",
+                                      f"前波高點 {px(r['key'])}（{r['peak_date']:%m/%d}）"))
+                        if not r.get("attack"):
+                            st.caption(L("今天還不是攻擊日",
+                                         f"明天漲到 {px(r['entry'])}（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）就是追價點",
+                                         "以下用這個價格試算"))
+                    if r["ok"] and not r["active"]:
+                        st.warning(L("型態符合", "但目前大盤層級不適用這套策略"))
+                    if "key" not in r or "stop1" not in r:
+                        st.info("目前沒有符合的型態，無法試算。")
+                    else:
+                        plan = S.plan_for(sname, r, ratios, split=atk_split)
+                        if plan["stop1"] >= plan["e"]:
+                            st.info("現價已低於出場價，無法試算。")
                         else:
-                            st.markdown(f"✅ **{total} 條全部符合**")
-                        if sname in ("pullback", "flag") and "cons_hi" in r:
-                            st.markdown(L(f"**盤整區　{px(r['cons_lo'])} ～ {px(r['cons_hi'])}**",
-                                          f"前波高點 {px(r['key'])}（{r['peak_date']:%m/%d}）"))
-                            if not r.get("attack"):
-                                st.caption(L("今天還不是攻擊日",
-                                             f"明天漲到 {px(r['entry'])}（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）就是追價點",
-                                             "以下用這個價格試算"))
-                        if r["ok"] and not r["active"]:
-                            st.warning(L("型態符合", "但目前大盤層級不適用這套策略"))
-                        if "key" not in r or "stop1" not in r:
-                            st.info("目前沒有符合的型態，無法試算。")
-                        else:
-                            plan = S.plan_for(sname, r, ratios, split=atk_split)
-                            if plan["stop1"] >= plan["e"]:
-                                st.info("現價已低於出場價，無法試算。")
-                            else:
-                                if not r["ok"]:
-                                    st.warning(L("尚未符合條件", "以下試算僅供參考"))
-                                show_plan(plan, capital_atk if sname in ("pullback", "flag") else capital, close)
+                            if not r["ok"]:
+                                st.warning(L("尚未符合條件", "以下試算僅供參考"))
+                            show_plan(plan, capital_atk if sname in ("pullback", "flag") else capital, close)
 
-                    foldable(f"{code}_{sname}", label, body, default=r["ok"],
-                             status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
+                foldable(f"{code}_{sname}", label, body, default=r["ok"],
+                         status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
 
-            st.divider()                         # 回測放在兩欄下面，整行寬度另外一區
+            st.divider()
             sfx_bt = sfx                         # 上面實際抓到資料的市場別（.TW 或 .TWO）
             foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
                      lambda: stock_bt_body(code, sfx_bt, capital), default=False,
