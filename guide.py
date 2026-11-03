@@ -128,7 +128,9 @@ def build():
 攻擊日：
 ① 收盤第一次站上盤整高點
 ② 漲幅 ≥ {pct(cfg.ATTACK_MIN_GAIN)}，收紅 K
-③ 收在當天區間的上 1/3
+③ 收盤位置夠高
+　當天最低＝0%、最高＝100%
+　收盤要在 {pct(cfg.ATTACK_CLOSE_POS)} 以上
 ④ 量 ≥ 前高那天的 {pct(cfg.ATTACK_VOL_VS_PEAK)}
 買法：
 　盤中漲 {pct(cfg.CHASE_GAIN)}
