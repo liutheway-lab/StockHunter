@@ -26,6 +26,12 @@ def _pos(index, d):
 BADGE = "#1c7ed6"      # 現價標籤的顏色（藍底白字，跟紅漲綠跌、各種虛線都分得開）
 
 
+def _fmt(v, decimals=None):
+    """價位寫法：decimals=None 時去掉多餘的 0（119.0 → 119、114.50 → 114.5、2,295.00 → 2,295）；指定位數就照位數"""
+    t = f"{v:,.{2 if decimals is None else decimals}f}"
+    return t.rstrip("0").rstrip(".") if decimals is None and "." in t else t
+
+
 def _price_header(fig, close, decimals=2, y=0.925):
     """標題下方一行：現價、漲跌點、幅度（紅漲綠跌）"""
     if len(close) < 2:
@@ -35,7 +41,7 @@ def _price_header(fig, close, decimals=2, y=0.925):
     pct = chg / prev * 100 if prev else 0.0
     col = UP if chg > 0 else DOWN if chg < 0 else "#555"
     arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"
-    fig.text(0.02, y, f"{last:,.{decimals}f}　{arrow} {abs(chg):,.{decimals}f}（{pct:+.2f}%）", fontsize=13, color=col,
+    fig.text(0.02, y, f"{_fmt(last, decimals)}　{arrow} {_fmt(abs(chg), decimals)}（{pct:+.2f}%）", fontsize=13, color=col,
              fontweight="bold", ha="left", va="top")
 
 
@@ -114,7 +120,7 @@ def _text_boxes(ax):
 def _price_line(ax, d, last, decimals=2, taken=None, ma=(), hl=()):
     """現價：整張圖畫一條藍色虛線，字放在空白處（要在 tight_layout 之後呼叫）"""
     ax.axhline(last, color=BADGE, linestyle=(0, (5, 3)), linewidth=1.3, zorder=4)
-    _place_label(ax, d, last, f"現價 {last:,.{decimals}f}", BADGE,
+    _place_label(ax, d, last, f"現價 {_fmt(last, decimals)}", BADGE,
                  taken if taken is not None else _legend_box(ax) + _text_boxes(ax), badge=True, ma=ma, hl=hl)
 
 
@@ -320,7 +326,7 @@ def stock_chart(df, title="", bars=65):
     # --- 右側標價位：前高、大量日的最高／最低點 ---
     hi_i = int(d["High"].to_numpy().argmax())
     hi_v = float(d["High"].iloc[hi_i])
-    marks = [(hi_v, f"前高 {hi_v:,.1f}", "#e64980", ":")]
+    marks = [(hi_v, f"前高 {_fmt(hi_v)}", "#e64980", ":")]
     vol_marks = []
     lv = vol_levels(df, bars)
     for key, nm in (("press", "壓力"), ("supp", "支撐")):
@@ -329,7 +335,7 @@ def stock_chart(df, title="", bars=65):
             continue
         col = "#ff8c00" if it["top"] else ("#e04a4a" if key == "press" else "#2e9e4f")      # 整段最大量固定橘色
         nm2 = "前低／支撐" if (it["fallback"] and key == "supp") else nm
-        marks.append((it["level"], f"{nm2} {it['level']:,.1f}（{it['day']:%m/%d}）", col, "--"))
+        marks.append((it["level"], f"{nm2} {_fmt(it['level'])}（{it['day']:%m/%d}）", col, "--"))
         if it["vday"] is not None:                                                         # 框起來的是帶量的那根
             vol_marks.append((_pos(idx, it["vday"]), "第1大量" if it["top"] else nm, col))
     top_v, bot_v = float(d["High"].max()), float(d["Low"].min())
@@ -375,13 +381,13 @@ def stock_chart(df, title="", bars=65):
     axv.set_xticklabels([idx[t].strftime("%m/%d") for t in ticks], fontsize=8)
     axv.set_xlim(-1, n)
     fig.suptitle(f"{title}　{idx[0]:%m/%d}–{idx[-1]:%m/%d}".strip(), fontsize=11, x=0.02, ha="left")
-    _price_header(fig, d["Close"])
+    _price_header(fig, d["Close"], None)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     taken = _legend_box(ax)                                     # 價位標籤：排版完成後才放，都放在空白處
     hl = [m[0] for m in merged] + [last]
     for val, txt, col, ls in merged:
         _place_label(ax, d, val, txt, col, taken, ma=mas, hl=hl)
-    _price_line(ax, d, last, 2, taken=taken, ma=mas, hl=hl)
+    _price_line(ax, d, last, None, taken=taken, ma=mas, hl=hl)
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)
