@@ -2,16 +2,11 @@ name: intraday
 
 on:
   schedule:
-    # 台灣時間 週一到週五。GitHub 的排程常常延遲、甚至整次跳過，所以多排幾個備援時間：
-    # 只要有一個啟動就好，後面的會自動排隊或發現已收盤就直接結束，不會重複提醒。
-    - cron: "50 0 * * 1-5"   # 08:50
-    - cron: "20 1 * * 1-5"   # 09:20（備援）
-    - cron: "0 2 * * 1-5"    # 10:00（備援）
-    - cron: "30 2 * * 1-5"   # 10:30（備援）
+    - cron: "50 0 * * 1-5"   # 台灣時間 週一到週五 08:50 啟動，一路監控到 13:30
   workflow_dispatch:          # 也可以手動執行：Actions → intraday → Run workflow
 
 concurrency:
-  group: intraday            # 同一時間只跑一個盤中監控（不要跟別的流程共用，免得互相卡住）
+  group: tg-bot              # 跟 commands 輪流，不會同時讀 Telegram 訊息
   cancel-in-progress: false
 
 jobs:
@@ -30,4 +25,5 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
+          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}   # 富果行情金鑰（證交所連不上時用）
         run: python intraday.py
