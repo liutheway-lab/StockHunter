@@ -1212,6 +1212,8 @@ def _handle_message(m, state, asked):
     chat = m.get("chat") or {}
     text = (m.get("text") or "").strip()
     if chat.get("type") in ("group", "supergroup") and text.split("@")[0] in ("/id", "/start"):
+        if not OWNER or str((m.get("from") or {}).get("id", "")) != str(OWNER):
+            return                                          # 群組裡只有管理者能用 /id，其他人打了不回應
         send_to(str(chat["id"]), f"這個群組的 ID 是 `{chat['id']}`\n"
                                  "請到 GitHub 的 Settings\n"
                                  "→ Secrets → Actions\n"
@@ -1940,6 +1942,10 @@ def _wait_notice_time():
 
 
 def run_market():
+    t = datetime.now(TZ)
+    if (t.hour, t.minute) >= CLOSE_AT:                       # GitHub 排程有時延遲到收盤後才叫起來：什麼都不做、不打擾任何人
+        print(f"{t:%H:%M} 已經收盤，不啟動盤中監控（排程延遲）")
+        return
     _wait_notice_time()
     t0 = datetime.now(TZ)
     set_monitor_status(f"{STATUS_TAG}已啟動　{t0:%H:%M}")
