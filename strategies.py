@@ -349,7 +349,8 @@ ATTACK_DAY_CHECKS = ("攻擊日：收盤突破盤整高點", "收紅 K", "攻擊
 
 def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **extra):
     """創高拉回、噴後整理共用的「攻擊日」判斷。
-    pk：前波高點那一天；S：前一波起漲價（算目標價用）。
+    pk：前波高點那一天；S：策略自己的起漲價（噴後整理用來判斷回檔，不再拿來算目標）。
+    目標價＝盤整最低點 ＋ 整段漲幅（前波高點 − 前高之前 30 日內的最低點），兩套共用同一種算法。
     盤整區＝前波高點之後到昨天（4～10 天、離前高 ≤ 10%）；
     今天收盤第一次站上盤整高點、收紅 K、漲 ≥ 5%、收在當天上 1/3、量能 ≥ 前高那天的 9 成 → 攻擊日。
     回傳的 pre_ok＝「昨天為止的盤整條件都成立」，chase_px＝盤中追價點（漲 4% 且突破盤整高點）"""
@@ -395,11 +396,12 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
         entry = E
     else:                                                    # 還不是攻擊日：明天的追價點（漲 4% 且突破盤整高點）
         entry = tick(max(E * (1 + cfg.CHASE_GAIN), upper, float(h[i])), "ceil")
-    target = tick(H + (H - S))
+    leg_lo = float(l[max(0, pk - cfg.PB_LEG_LOOKBACK):pk + 1].min())       # 整段漲幅的起點：前高之前 30 日內最低點
+    target = tick(lower + (H - leg_lo))
     if target <= entry:
         checks.append(("目標價高於進場價", False, f"目標 {target}、進場 {entry}"))
     status = f"已突破 +{(E / H - 1) * 100:.1f}%" if E >= H else f"還差 {(1 - E / H) * 100:.1f}%"
-    r = _result(name, checks, close=E, entry=entry, key=H, peak_date=df.index[pk], leg_start=S,
+    r = _result(name, checks, close=E, entry=entry, key=H, peak_date=df.index[pk], leg_start=leg_lo,
                 cons_hi=upper, cons_lo=lower, attack=bool(broke), pre_ok=pre_ok, chase_px=chase_px, n_cons=n_cons,
                 target=target, stop_after2=tick(H * (1 - cfg.ATTACK_STOP2_PCT)), status=status,
                 date=df.index[i], turnover=float(row["TURN20"]), **extra)
