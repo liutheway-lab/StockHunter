@@ -412,8 +412,11 @@ def get_dir():
     return _DIR
 
 
+_NAME_CACHE = {}
+
+
 def stock_name_suffix(code):
-    """(名稱, .TW/.TWO)。官方清單抓不到（或還沒載好）時名稱用代號"""
+    """(名稱, .TW/.TWO)。先查官方清單；清單還沒載好時，改用即時報價帶出名稱（最多等 5 秒）"""
     d = get_dir()
     try:
         if d is not None:
@@ -422,6 +425,15 @@ def stock_name_suffix(code):
                 return str(row.iloc[0]["name"]), str(row.iloc[0]["suffix"])
     except Exception as e:
         print("股票清單查詢失敗：", repr(e))
+    if code in _NAME_CACHE:
+        return _NAME_CACHE[code]
+    try:
+        q = quotes_quick({code: {"suffix": None}}, 5).get(code) or {}
+        if q.get("name"):
+            _NAME_CACHE[code] = (str(q["name"]), q.get("suffix") or ".TW")
+            return _NAME_CACHE[code]
+    except Exception as e:
+        print("用報價查名稱失敗：", repr(e))
     return code, ".TW"
 
 
@@ -792,12 +804,12 @@ def guided(cid, text, h):
                 return None
             s_["step"] = "qty"
             x = h[s_["code"]]
-            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入數字，例：1",
+            send_kb(cid, f"{s_['code']} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入張數、股數\n例：1張、500股",
                     _kb([["全部賣出"], ["取消"]]))
             return None
         name, _ = stock_name_suffix(s_["code"])
         s_["step"] = "qty"
-        send_kb(cid, f"{s_['code']} {name}\n買了多少？請輸入數字，例：2", _kb([["取消"]]))
+        send_kb(cid, f"{s_['code']} {name}\n買了多少？\n請輸入張數或股數\n例：2張、500股", _kb([["取消"]]))
         return None
     if s_["step"] == "qty" or s_["step"] == "unit":
         if s_["flow"] == "sell" and t in ("全部", "全部賣出"):
@@ -816,7 +828,7 @@ def guided(cid, text, h):
                 send_kb(cid, f"{t} 是幾張還是幾股？", _kb([["張", "股"], ["取消"]]))
                 return None
         if q is None:
-            send_kb(cid, "請輸入數字，例：2\n再按「張」或「股」", _kb([["取消"]]))
+            send_kb(cid, "請輸入張數或股數\n例：2張、500股", _kb([["取消"]]))
             return None
         if q <= 0:
             send_kb(cid, "數量要大於 0", _kb([["取消"]]))
@@ -990,7 +1002,7 @@ def handle_callback(cq, state, asked):
     SESSIONS[cid] = {"flow": "sell", "step": "qty", "code": code}
     TRACK[cid] = []
     x = h[code]
-    send_kb(cid, f"{code} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入數字，例：1",
+    send_kb(cid, f"{code} {x['name']} 目前 {fmt_qty(x['shares'])}\n要賣多少？\n按「全部賣出」\n或輸入張數、股數\n例：1張、500股",
             _kb([["全部賣出"], ["取消"]]))
 
 
