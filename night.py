@@ -21,8 +21,8 @@ WEEKDAY = "一二三四五六日"
 LINE = "━━━━━━━━━━━━━━"
 LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
 ORDER = ["pullback", "flag", "breakout", "dry"]
-TITLES = {"pullback": "📈 創高拉回", "flag": "🚀 噴出後整理再攻",
-          "breakout": "🌱 盤整後噴出", "dry": "🛡 量縮抗跌"}
+TITLES = {"pullback": "📈 強勢續攻（創高拉回）", "flag": "🚀 強勢續攻（噴出後整理）",
+          "breakout": "🌱 低位階起漲", "dry": "🛡 量縮抗跌"}
 DIAG = os.getenv("DIAG", "").strip().lower() in ("1", "true", "yes")
 
 
@@ -105,7 +105,7 @@ def market_block(mk):
             if s["ok"]:
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
-        names = "、".join(cfg.STRATEGY_NAMES[a] for a in mk["active"])
+        names = cfg.names_join(mk["active"])
         out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明\n只開最保守的策略，部位減半" if mk["risk"] else ""))
         out.append(f"💰 部位：{('過熱，維持正常部位，不加碼' if mk.get('tag') == '過熱' else cfg.LAYER_SIZE.get(mk['layer'], ''))}")
     else:
@@ -115,9 +115,9 @@ def market_block(mk):
 
 # ---------- 掃描 ----------
 def dedupe_similar(lists, active):
-    """創高拉回和噴出後整理再攻的攻擊日進場規則一樣，同一檔常常兩邊都符合。
-    兩邊都有的股票只留一份：預設留在「噴出後整理再攻」，並標上也符合創高拉回；
-    如果只有「創高拉回」是啟用的策略（例如大盤第 3 層），就留在創高拉回。"""
+    """強勢續攻的兩種型態（創高拉回、噴出後整理）攻擊日進場規則一樣，同一檔常常兩邊都符合。
+    兩邊都有的股票只留一份：預設留在「噴出後整理」，並標上也符合創高拉回；
+    如果只有「創高拉回」是啟用的型態（例如大盤第 3 層），就留在創高拉回。"""
     a, b = lists.get("pullback"), lists.get("flag")
     if a is None or b is None:
         return
@@ -126,7 +126,7 @@ def dedupe_similar(lists, active):
     dsyms = {h["sym"] for h in drop}
     for h in keep:
         if h["sym"] in dsyms:
-            h["also"] = cfg.STRATEGY_NAMES[dname]
+            h["also"] = cfg.SUB_NAMES[dname]
     ksyms = {h["sym"] for h in keep}
     lists[dname][:] = [h for h in drop if h["sym"] not in ksyms]
 
