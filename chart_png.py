@@ -175,6 +175,14 @@ def market_chart(mk, bars=45):
     lowest = min([v for v in (bot_v, pl, rl) if v is not None])
     ax.set_ylim(lowest - rng_v * (0.10 if stab_mode else 0.04), top_v + rng_v * 0.04)    # 空頭時下方留白放標註
     low_marks = []                                        # 虛線＋字（字等排版完才放到空白處，不用箭頭）
+    hi_i, lo_i = int(d["High"].to_numpy().argmax()), int(d["Low"].to_numpy().argmin())
+    hi_v, lo_v = float(d["High"].iloc[hi_i]), float(d["Low"].iloc[lo_i])
+    ax.axhline(hi_v, color="#e64980", linestyle=":", linewidth=1, alpha=0.8)          # 前高：這段期間的最高點
+    low_marks.append((hi_v, f"前高 {hi_v:,.0f}（{idx[hi_i]:%m/%d}）", "#e64980"))
+    same_low = any(v is not None and abs(v - lo_v) <= lo_v * 0.0005 for v in (pl, rl))    # 已經有「最低點」標示就不重複
+    if not same_low:
+        ax.axhline(lo_v, color="#2e9e4f", linestyle="--", linewidth=1, alpha=0.75)    # 前低：這段期間的最低點
+        low_marks.append((lo_v, f"前低 {lo_v:,.0f}（{idx[lo_i]:%m/%d}）", "#2e9e4f"))
     if pl is not None:
         ax.axhline(pl, color="#00a8d6", linestyle="--", linewidth=1)
         low_marks.append((pl, f"最低點 {pl:,.0f}" + (f"（{pld:%m/%d}）" if pld is not None else ""), "#0086ad"))
