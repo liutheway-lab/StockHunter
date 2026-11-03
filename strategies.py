@@ -101,9 +101,8 @@ def _naive(df):
 def add_indicators(df):
     df = _naive(df).copy()
     c, v = df["Close"], df["Volume"]
-    df["EMA20"] = c.ewm(span=20, adjust=False).mean()
-    df["EMA60"] = c.ewm(span=60, adjust=False).mean()
-    df["MA20"] = c.rolling(20).mean()
+    df["MA20"] = c.rolling(20).mean()                        # 月線
+    df["MA60"] = c.rolling(60).mean()                        # 季線
     df["MAV5"] = v.rolling(5).mean()
     df["MAV20"] = v.rolling(20).mean()
     df["TURN20"] = (c * v).rolling(20).mean()
@@ -434,12 +433,12 @@ def check_pullback(df, i, ratios=None, max_consol=None):
     S = float(leg.min())
     v = df["Volume"].to_numpy(float)
     cons_vol = float(v[pk + 1:i].mean()) if i - 1 - pk >= 1 else float("nan")
-    ema20, ema60 = float(row["EMA20"]), float(row["EMA60"])
+    ema20, ema60 = float(row["MA20"]), float(row["MA60"])
     base = [
         _liq(row),
         ("前高是近期新高", bool(pd.isna(prior_high) or H >= prior_high * 0.98),
          f"前高 {H:.2f}（{df.index[pk]:%m/%d}），更早的高點 {prior_high:.2f}"),
-        ("趨勢向上", bool(ema20 > ema60), f"EMA20 {ema20:.2f}、EMA60 {ema60:.2f}"),
+        ("趨勢向上", bool(ema20 > ema60), f"月線 {ema20:.2f}、季線 {ema60:.2f}"),
     ]
     quality = [
         ("盤整量縮", bool(cons_vol == cons_vol and v[pk] > 0 and cons_vol <= cfg.PB_CONS_VOL_RATIO * v[pk]),
@@ -456,8 +455,8 @@ def check_breakout(df, i):
     row = df.iloc[i]
     close, vol = float(row["Close"]), float(row["Volume"])
     mav20 = float(row["MAV20"])
-    ema20, ema60 = float(row["EMA20"]), float(row["EMA60"])
-    ema20_prev = float(df["EMA20"].iloc[i - 1])
+    ema20, ema60 = float(row["MA20"]), float(row["MA60"])
+    ema20_prev = float(df["MA20"].iloc[i - 1])
     low60 = float(df["Low"].iloc[i - 59:i + 1].min())
     neck = float(df["High"].iloc[i - cfg.BO_PLATFORM:i].max())
     rise = (close - low60) / low60 if low60 > 0 else float("nan")
@@ -474,7 +473,7 @@ def check_breakout(df, i):
         (f"突破 {cfg.BO_PLATFORM} 日頸線", close > neck, f"頸線 {neck:.2f}、收盤 {close:.2f}"),
         (f"爆量 ≥ {cfg.BO_VOL_MULT:.1f} 倍", bool(volx >= cfg.BO_VOL_MULT), f"今日 {volx:.1f} 倍 20 日均量"),
         ("站上季線且月線翻揚", bool(close >= ema60 and ema20 > ema20_prev),
-         f"EMA20 {ema20:.2f}（昨 {ema20_prev:.2f}）、EMA60 {ema60:.2f}"),
+         f"月線 {ema20:.2f}（昨 {ema20_prev:.2f}）、季線 {ema60:.2f}"),
     ]
     E = tick(close)
     stop1 = tick(min(neck * 0.98, E * (1 - cfg.BO_STOP_PCT)))
