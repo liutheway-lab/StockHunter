@@ -221,7 +221,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
                       line=dict(color="rgba(0,168,214,0.8)", width=1, dash="dot"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"低點日最低 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
+             f"最低點 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
                  f"低點日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#b388ff", -4, 108)
@@ -563,8 +563,13 @@ LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
 if mk:
     c1, c2 = st.columns(2)
     _pv = float(mk["df"]["Close"].iloc[-2]) if len(mk["df"]) >= 2 else None
-    _chg = f"{mk['close'] - _pv:+,.2f}（{(mk['close'] / _pv - 1) * 100:+.2f}%）" if _pv else None
-    c1.metric("加權指數", f"{mk['close']:,.1f}", delta=_chg, delta_color="inverse")      # inverse＝紅漲綠跌
+    _d = mk["close"] - _pv if _pv else 0.0                    # 跟圖左上角同一種寫法：現價　▼ 漲跌點（幅度），紅漲綠跌
+    _col = "#e04a4a" if _d > 0 else "#2e9e4f" if _d < 0 else "#555"
+    _ar = "▲" if _d > 0 else "▼" if _d < 0 else "─"
+    _tail = f"　{_ar} {abs(_d):,.2f}（{_d / _pv * 100:+.2f}%）" if _pv else ""
+    c1.markdown(f"<div style='font-size:0.875rem;margin-bottom:0.2rem'>加權指數</div>"
+                f"<div style='color:{_col};font-weight:700;font-size:1.45rem;white-space:nowrap'>"
+                f"{mk['close']:,.2f}{_tail}</div>", unsafe_allow_html=True)
     c2.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
 
     show_stab = mk["stab"] if mk["layer"] in (4, 5) else None
@@ -596,7 +601,10 @@ if mk:
 
     try:                                           # 跟 Telegram 用同一張圖（chart_png.py），兩邊永遠一樣
         import chart_png
-        st.image(chart_png.market_chart(mk), use_container_width=True)
+        _png = chart_png.market_chart(mk)
+        st.image(_png, use_container_width=True)                       # 圖右上角有放大鈕，點開可全螢幕看
+        st.download_button("下載圖片", _png, file_name=f"大盤_{mk['df'].index[-1]:%Y%m%d}.png",
+                           mime="image/png", key="dl_mkt")
     except Exception:                              # 萬一畫圖失敗，退回互動圖
         st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                         use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
@@ -903,7 +911,7 @@ def stock_bt_body(code, suffix, capital):
 st.divider()
 st.subheader("🔍 個股診斷")
 if st.session_state.get("target"):
-    if st.button("⬆ 回到名單", key="back_to_list", use_container_width=True):
+    if st.button("回到今日推薦", key="back_to_list", use_container_width=True):
         st.session_state["_scroll_back"] = st.session_state["target"].get("code", "")
         st.rerun()
 _back = st.session_state.pop("_scroll_back", None)
@@ -998,7 +1006,10 @@ if target:
             {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](brk(text))
             try:                                       # 跟大盤同一種風格的圖（chart_png.py）
                 import chart_png
-                st.image(chart_png.stock_chart(df, title=f"{code} {name}"), use_container_width=True)
+                _png = chart_png.stock_chart(df, title=f"{code} {name}")
+                st.image(_png, use_container_width=True)                   # 圖右上角有放大鈕，點開可全螢幕看
+                st.download_button("下載圖片", _png, file_name=f"{code}_{df.index[-1]:%Y%m%d}.png",
+                                   mime="image/png", key=f"dl_{code}")
             except Exception:                          # 萬一畫圖失敗，退回原本的互動圖
                 st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
                                 config={"displayModeBar": False, "staticPlot": True})
