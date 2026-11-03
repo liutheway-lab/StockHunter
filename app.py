@@ -30,7 +30,10 @@ import importlib
 for _m in (cfg, lookup, data, S, backtest, guide, chart_png):
     importlib.reload(_m)
 
-st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="centered")
+st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="wide")
+st.markdown("""<style>
+@media (min-width: 1000px) { .block-container { max-width: 1500px; padding-left: 3rem; padding-right: 3rem; } }
+</style>""", unsafe_allow_html=True)
 # 檢查其他檔案是不是也更新了（只換了 app.py、沒換 config.py／strategies.py 時，給清楚的提示）
 _missing = [f for f, ok in (("config.py", hasattr(cfg, "names_join")),
                             ("strategies.py", "split" in S.attack_plan.__code__.co_varnames),
@@ -561,55 +564,58 @@ except Exception as e:
 LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
 
 if mk:
-    c1, c2 = st.columns(2)
-    _pv = float(mk["df"]["Close"].iloc[-2]) if len(mk["df"]) >= 2 else None
-    _d = mk["close"] - _pv if _pv else 0.0                    # 跟圖左上角同一種寫法：現價　▼ 漲跌點（幅度），紅漲綠跌
-    _col = "#e04a4a" if _d > 0 else "#2e9e4f" if _d < 0 else "#555"
-    _ar = "▲" if _d > 0 else "▼" if _d < 0 else "─"
-    _tail = f"　{_ar} {abs(_d):,.2f}（{_d / _pv * 100:+.2f}%）" if _pv else ""
-    c1.markdown(f"<div style='font-size:0.875rem;margin-bottom:0.2rem'>加權指數</div>"
-                f"<div style='color:{_col};font-weight:700;font-size:1.45rem;white-space:nowrap'>"
-                f"{mk['close']:,.2f}{_tail}</div>", unsafe_allow_html=True)
-    c2.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
+    mL, mR = st.columns([2, 3])          # 電腦：左邊數字和止跌條件、右邊圖；手機會自動變成上下排
+    with mL:
+        c1, c2 = st.columns(2)
+        _pv = float(mk["df"]["Close"].iloc[-2]) if len(mk["df"]) >= 2 else None
+        _d = mk["close"] - _pv if _pv else 0.0                    # 跟圖左上角同一種寫法：現價　▼ 漲跌點（幅度），紅漲綠跌
+        _col = "#e04a4a" if _d > 0 else "#2e9e4f" if _d < 0 else "#555"
+        _ar = "▲" if _d > 0 else "▼" if _d < 0 else "─"
+        _tail = f"　{_ar} {abs(_d):,.2f}（{_d / _pv * 100:+.2f}%）" if _pv else ""
+        c1.markdown(f"<div style='font-size:0.875rem;margin-bottom:0.2rem'>加權指數</div>"
+                    f"<div style='color:{_col};font-weight:700;font-size:1.45rem;white-space:nowrap'>"
+                    f"{mk['close']:,.2f}{_tail}</div>", unsafe_allow_html=True)
+        c2.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
 
-    show_stab = mk["stab"] if mk["layer"] in (4, 5) else None
-    if show_stab is not None or mk["layer"] in (4, 5):
-        s_ = mk["stab"]
-        if s_ is None:
-            st.markdown("🧱 **止跌確認**：資料不足")
-        elif s_["vol_missing"]:
-            st.markdown("🧱 **止跌確認**：❌ 無法確認（大盤成交金額抓不到）")
+        show_stab = mk["stab"] if mk["layer"] in (4, 5) else None
+        if show_stab is not None or mk["layer"] in (4, 5):
+            s_ = mk["stab"]
+            if s_ is None:
+                st.markdown("🧱 **止跌確認**：資料不足")
+            elif s_["vol_missing"]:
+                st.markdown("🧱 **止跌確認**：❌ 無法確認（大盤成交金額抓不到）")
+            else:
+                ok = lambda b: "✅" if b else "❌"
+                ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
+                da, nd = s_["days_after"], s_["need_days"]
+                state = "✅ 通過" if s_["ok"] else ("⏳ 觀察中" if s_.get("watching") else "🔴 尚未止跌")
+                st.markdown(L(f"🧱 **止跌確認**　{state}", "量能、K 棒、不破低　都要通過"))
+                low_txt = ("低點日就是今天，還要再觀察" if da == 0 else
+                           f"低點日（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
+                           f"之後 {da} 天最低 {s_['recent_low']:,.0f}，要保持不破")
+                md_cond([
+                    (ok(s_["vol_ok"]), "量能",
+                     f"爆量下跌日 {s_['dump_date']:%m/%d}；低點日成交額約為它的 {ratio:.0f}%，需 100% 以上"),
+                    (ok(s_["shape_ok"]), "K 棒",
+                     f"下影線占當天區間 {s_['shadow'] * 100:.0f}%（需 {cfg.STAB_SHADOW * 100:.0f}% 以上），"
+                     f"或收紅且實體占 {s_['body'] * 100:.0f}%（需 {cfg.STAB_RED_BODY * 100:.0f}% 以上）"),
+                    ("⏳" if (da == 0) else ok(s_["no_break"]), "不破低", low_txt),
+                ])
+                if s_["ok"]:
+                    st.success("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
+
+    with mR:
+        try:                                           # 跟 Telegram 用同一張圖（chart_png.py），兩邊永遠一樣
+            import chart_png
+            st.image(chart_png.market_chart(mk), use_container_width=True)
+        except Exception:                              # 萬一畫圖失敗，退回互動圖
+            st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
+                            use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
+        if mk["active"]:
+            (st.warning if mk["risk"] else st.success)(
+                "大盤目前允許：" + cfg.names_join(mk["active"]))
         else:
-            ok = lambda b: "✅" if b else "❌"
-            ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
-            da, nd = s_["days_after"], s_["need_days"]
-            state = "✅ 通過" if s_["ok"] else ("⏳ 觀察中" if s_.get("watching") else "🔴 尚未止跌")
-            st.markdown(L(f"🧱 **止跌確認**　{state}", "量能、K 棒、不破低　都要通過"))
-            low_txt = ("低點日就是今天，還要再觀察" if da == 0 else
-                       f"低點日（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
-                       f"之後 {da} 天最低 {s_['recent_low']:,.0f}，要保持不破")
-            md_cond([
-                (ok(s_["vol_ok"]), "量能",
-                 f"爆量下跌日 {s_['dump_date']:%m/%d}；低點日成交額約為它的 {ratio:.0f}%，需 100% 以上"),
-                (ok(s_["shape_ok"]), "K 棒",
-                 f"下影線占當天區間 {s_['shadow'] * 100:.0f}%（需 {cfg.STAB_SHADOW * 100:.0f}% 以上），"
-                 f"或收紅且實體占 {s_['body'] * 100:.0f}%（需 {cfg.STAB_RED_BODY * 100:.0f}% 以上）"),
-                ("⏳" if (da == 0) else ok(s_["no_break"]), "不破低", low_txt),
-            ])
-            if s_["ok"]:
-                st.success("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
-
-    try:                                           # 跟 Telegram 用同一張圖（chart_png.py），兩邊永遠一樣
-        import chart_png
-        st.image(chart_png.market_chart(mk), use_container_width=True)
-    except Exception:                              # 萬一畫圖失敗，退回互動圖
-        st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
-                        use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
-    if mk["active"]:
-        (st.warning if mk["risk"] else st.success)(
-            "大盤目前允許：" + cfg.names_join(mk["active"]))
-    else:
-        st.error("🔴 尚未止跌，不建議建立多頭部位")
+            st.error("🔴 尚未止跌，不建議建立多頭部位")
 
 # ==================== 今日推薦 ====================
 RESULT_PATH = Path(__file__).parent / "scan_results.json"
@@ -1001,94 +1007,95 @@ if target:
         else:
             level, text = S.verdict(ev)
             {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](brk(text))
-            try:                                       # 跟大盤同一種風格的圖（chart_png.py）
-                import chart_png
-                st.image(chart_png.stock_chart(df, title=f"{code} {name}"), use_container_width=True)
-            except Exception:                          # 萬一畫圖失敗，退回原本的互動圖
-                st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
-                                config={"displayModeBar": False, "staticPlot": True})
+            cl, cr = st.columns([3, 2])          # 電腦：左邊大圖、右邊文字；手機會自動變成上下排
+            with cl:
+                try:                                       # 跟大盤同一種風格的圖（chart_png.py）
+                    import chart_png
+                    st.image(chart_png.stock_chart(df, title=f"{code} {name}"), use_container_width=True)
+                except Exception:                          # 萬一畫圖失敗，退回原本的互動圖
+                    st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
+                                    config={"displayModeBar": False, "staticPlot": True})
 
-            try:                                       # 壓力／支撐：跟圖上畫的虛線同一套規則（chart_png.vol_levels）
-                lv = chart_png.vol_levels(df)
-            except Exception:
-                lv = {"press": None, "supp": None}
-            pr, sp = lv["press"], lv["supp"]
-            if any(x and "vday" not in x for x in (pr, sp)):          # chart_png.py 還是舊版（沒有起點那根 K 棒的資料）
-                st.warning(L("chart_png.py 是舊版", "請把最新的 chart_png.py 上傳到 GitHub"))
-                pr = sp = None
-            if pr:
-                if pr.get("fallback"):
-                    st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（前高，{pr['day']:%m/%d}）**",
-                                  f"高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
-                                  "上方沒有帶量的 K 棒，前高就是壓力"))
+            with cr:
+                try:                                       # 壓力／支撐：跟圖上畫的虛線同一套規則（chart_png.vol_levels）
+                    lv = chart_png.vol_levels(df)
+                except Exception:
+                    lv = {"press": None, "supp": None}
+                pr, sp = lv["press"], lv["supp"]
+                if any(x and "vday" not in x for x in (pr, sp)):          # chart_png.py 還是舊版（沒有起點那根 K 棒的資料）
+                    st.warning(L("chart_png.py 是舊版", "請把最新的 chart_png.py 上傳到 GitHub"))
+                    pr = sp = None
+                if pr:
+                    if pr.get("fallback"):
+                        st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（前高，{pr['day']:%m/%d}）**",
+                                      f"高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
+                                      "上方沒有帶量的 K 棒，前高就是壓力"))
+                    else:
+                        st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（{pr['day']:%m/%d} 最高）**",
+                                      f"高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
+                                      f"起點：{pr['vday']:%m/%d} 帶量 K（{pr['vol']:,.0f} 張）",
+                                      "上方套牢區，漲上去容易有賣壓"))
+                if sp:
+                    if sp.get("fallback"):
+                        st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（前低，{sp['day']:%m/%d}）**",
+                                      f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
+                                      "下方沒有帶量的 K 棒，前低就是支撐"))
+                    else:
+                        st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（{sp['day']:%m/%d} 最低）**",
+                                      f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
+                                      f"起點：{sp['vday']:%m/%d} 帶量 K（{sp['vol']:,.0f} 張）",
+                                      "可作短線支撐，或出場價的參考"))
                 else:
-                    st.markdown(L(f"🐻 **壓力　{px(pr['level'])}（{pr['day']:%m/%d} 最高）**",
-                                  f"高於現價 {px(close)}（{(pr['level'] / close - 1) * 100:+.1f}%）",
-                                  f"起點：{pr['vday']:%m/%d} 帶量 K（{pr['vol']:,.0f} 張）",
-                                  "上方套牢區，漲上去容易有賣壓"))
-            if sp:
-                if sp.get("fallback"):
-                    st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（前低，{sp['day']:%m/%d}）**",
-                                  f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
-                                  "下方沒有帶量的 K 棒，前低就是支撐"))
-                else:
-                    st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（{sp['day']:%m/%d} 最低）**",
-                                  f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
-                                  f"起點：{sp['vday']:%m/%d} 帶量 K（{sp['vol']:,.0f} 張）",
-                                  "可作短線支撐，或出場價的參考"))
-            else:
-                st.markdown(L("🐂 **支撐　沒有**", "現價已經是近 65 日最低點", "下方沒有支撐，不建議進場"))
-            if not pr:
-                st.caption("現價已經是近 65 日最高點，上方沒有壓力")
-            st.caption(L("支撐＝最近一根帶量 K 到今天的最低價", "壓力＝最近一根帶量 K 到今天的最高價",
-                         "帶量＝當天量 ≥ 20 日均量 1.5 倍，不分紅黑",
-                         "下方沒有帶量 K 時，前低就是支撐", "上方沒有帶量 K 時，前高就是壓力",
-                         "起點太近時，至少回看 3 個交易日"))
-            st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
-            for sname in ("pullback", "flag", "breakout", "dry"):
-                r = ev["results"][sname]
-                label = cfg.STRATEGY_NAMES[sname]
-                if r is None:
-                    st.caption(f"{label}：資料不足，無法判斷")
-                    continue
-                applicable = "大盤適用" if r["active"] else "大盤不適用"
+                    st.markdown(L("🐂 **支撐　沒有**", "現價已經是近 65 日最低點", "下方沒有支撐，不建議進場"))
+                if not pr:
+                    st.caption("現價已經是近 65 日最高點，上方沒有壓力")
+                st.caption(L("支撐＝最近一根帶量 K 到今天的最低價", "壓力＝最近一根帶量 K 到今天的最高價",
+                             "帶量＝當天量 ≥ 20 日均量 1.5 倍，不分紅黑",
+                             "下方沒有帶量 K 時，前低就是支撐", "上方沒有帶量 K 時，前高就是壓力",
+                             "起點太近時，至少回看 3 個交易日"))
+                st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
+                for sname in ("pullback", "flag", "breakout", "dry"):
+                    r = ev["results"][sname]
+                    label = cfg.STRATEGY_NAMES[sname]
+                    if r is None:
+                        st.caption(f"{label}：資料不足，無法判斷")
+                        continue
+                    applicable = "大盤適用" if r["active"] else "大盤不適用"
 
-                def body(r=r, sname=sname):
-                    st.markdown(f"**現價 {px(close)}**")
-                    fails = [(cname, detail) for cname, cok, detail in r["checks"] if not cok]     # 只列沒過的，過的不重複列
-                    total = len(r["checks"])
-                    if fails:
-                        st.markdown(L(f"**符合 {total - len(fails)} / {total} 條**", f"卡住的 {len(fails)} 條："))
-                        md_fail(fails)
-                    else:
-                        st.markdown(f"✅ **{total} 條全部符合**")
-                    if sname in ("pullback", "flag") and "cons_hi" in r:
-                        st.markdown(L(f"**盤整區　{px(r['cons_lo'])} ～ {px(r['cons_hi'])}**",
-                                      f"前波高點 {px(r['key'])}（{r['peak_date']:%m/%d}）"))
-                        if not r.get("attack"):
-                            st.caption(L("今天還不是攻擊日",
-                                         f"明天漲到 {px(r['entry'])}（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）就是追價點",
-                                         "以下用這個價格試算"))
-                    if r["ok"] and not r["active"]:
-                        st.warning(L("型態符合", "但目前大盤層級不適用這套策略"))
-                    if "key" not in r or "stop1" not in r:
-                        st.info("目前沒有符合的型態，無法試算。")
-                    else:
-                        plan = S.plan_for(sname, r, ratios, split=atk_split)
-                        if plan["stop1"] >= plan["e"]:
-                            st.info("現價已低於出場價，無法試算。")
+                    def body(r=r, sname=sname):
+                        st.markdown(f"**現價 {px(close)}**")
+                        fails = [(cname, detail) for cname, cok, detail in r["checks"] if not cok]     # 只列沒過的，過的不重複列
+                        total = len(r["checks"])
+                        if fails:
+                            st.markdown(L(f"**符合 {total - len(fails)} / {total} 條**", f"卡住的 {len(fails)} 條："))
+                            md_fail(fails)
                         else:
-                            if not r["ok"]:
-                                st.warning(L("尚未符合條件", "以下試算僅供參考"))
-                            show_plan(plan, capital_atk if sname in ("pullback", "flag") else capital, close)
+                            st.markdown(f"✅ **{total} 條全部符合**")
+                        if sname in ("pullback", "flag") and "cons_hi" in r:
+                            st.markdown(L(f"**盤整區　{px(r['cons_lo'])} ～ {px(r['cons_hi'])}**",
+                                          f"前波高點 {px(r['key'])}（{r['peak_date']:%m/%d}）"))
+                            if not r.get("attack"):
+                                st.caption(L("今天還不是攻擊日",
+                                             f"明天漲到 {px(r['entry'])}（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）就是追價點",
+                                             "以下用這個價格試算"))
+                        if r["ok"] and not r["active"]:
+                            st.warning(L("型態符合", "但目前大盤層級不適用這套策略"))
+                        if "key" not in r or "stop1" not in r:
+                            st.info("目前沒有符合的型態，無法試算。")
+                        else:
+                            plan = S.plan_for(sname, r, ratios, split=atk_split)
+                            if plan["stop1"] >= plan["e"]:
+                                st.info("現價已低於出場價，無法試算。")
+                            else:
+                                if not r["ok"]:
+                                    st.warning(L("尚未符合條件", "以下試算僅供參考"))
+                                show_plan(plan, capital_atk if sname in ("pullback", "flag") else capital, close)
 
-                foldable(f"{code}_{sname}", label, body, default=r["ok"],
-                         status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
+                    foldable(f"{code}_{sname}", label, body, default=r["ok"],
+                             status=f"{'✅ 符合' if r['ok'] else '❌ 尚未符合'}｜{applicable}")
 
-            sfx_bt = sfx                     # 上面實際抓到資料的市場別（.TW 或 .TWO）
-            foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
-                     lambda: stock_bt_body(code, sfx_bt, capital), default=False,
-                     status="用你的資金比例，模擬這檔過去每一次訊號")
+                sfx_bt = sfx                     # 上面實際抓到資料的市場別（.TW 或 .TWO）
+                foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
+                         lambda: stock_bt_body(code, sfx_bt, capital), default=False,
+                         status="用你的資金比例，模擬這檔過去每一次訊號")
 
-
-st.caption("最後更新：2026 年 10 月 31 日")
