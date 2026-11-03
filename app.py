@@ -601,10 +601,7 @@ if mk:
 
     try:                                           # 跟 Telegram 用同一張圖（chart_png.py），兩邊永遠一樣
         import chart_png
-        _png = chart_png.market_chart(mk)
-        st.image(_png, use_container_width=True)                       # 圖右上角有放大鈕，點開可全螢幕看
-        st.download_button("下載圖片", _png, file_name=f"大盤_{mk['df'].index[-1]:%Y%m%d}.png",
-                           mime="image/png", key="dl_mkt")
+        st.image(chart_png.market_chart(mk), use_container_width=True)
     except Exception:                              # 萬一畫圖失敗，退回互動圖
         st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
                         use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
@@ -1006,10 +1003,7 @@ if target:
             {"go": st.success, "watch": st.warning, "stop": st.error, "wait": st.info}[level](brk(text))
             try:                                       # 跟大盤同一種風格的圖（chart_png.py）
                 import chart_png
-                _png = chart_png.stock_chart(df, title=f"{code} {name}")
-                st.image(_png, use_container_width=True)                   # 圖右上角有放大鈕，點開可全螢幕看
-                st.download_button("下載圖片", _png, file_name=f"{code}_{df.index[-1]:%Y%m%d}.png",
-                                   mime="image/png", key=f"dl_{code}")
+                st.image(chart_png.stock_chart(df, title=f"{code} {name}"), use_container_width=True)
             except Exception:                          # 萬一畫圖失敗，退回原本的互動圖
                 st.plotly_chart(plot_k_vol(df, is_market=False), use_container_width=True,
                                 config={"displayModeBar": False, "staticPlot": True})
