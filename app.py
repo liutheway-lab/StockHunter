@@ -1022,14 +1022,23 @@ if target:
                                   f"起點：{pr['vday']:%m/%d} 帶量 K（{pr['vol']:,.0f} 張）",
                                   "上方套牢區，漲上去容易有賣壓"))
             if sp:
-                st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（{sp['day']:%m/%d} 最低）**",
-                              f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
-                              f"起點：{sp['vday']:%m/%d} 帶量 K（{sp['vol']:,.0f} 張）",
-                              "可作短線支撐，或出場價的參考"))
-            if not pr and not sp:
-                st.caption("近 65 交易日沒有帶量的 K 棒，上下都沒有標壓力或支撐")
+                if sp.get("fallback"):
+                    st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（前低，{sp['day']:%m/%d}）**",
+                                  f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
+                                  "下方沒有帶量的 K 棒，前低就是支撐"))
+                else:
+                    st.markdown(L(f"🐂 **支撐　{px(sp['level'])}（{sp['day']:%m/%d} 最低）**",
+                                  f"低於現價 {px(close)}（{(sp['level'] / close - 1) * 100:+.1f}%）",
+                                  f"起點：{sp['vday']:%m/%d} 帶量 K（{sp['vol']:,.0f} 張）",
+                                  "可作短線支撐，或出場價的參考"))
+            else:
+                st.markdown(L("🐂 **支撐　沒有**", "現價已經是近 65 日最低點", "下方沒有支撐，不建議進場"))
+            if not pr:
+                st.caption("現價已經是近 65 日最高點，上方沒有壓力")
             st.caption(L("支撐＝最近一根帶量 K 到今天的最低價", "壓力＝最近一根帶量 K 到今天的最高價",
-                         "帶量＝當天量 ≥ 20 日均量 1.5 倍，不分紅黑", "上方沒有帶量 K 時，前高就是壓力"))
+                         "帶量＝當天量 ≥ 20 日均量 1.5 倍，不分紅黑",
+                         "下方沒有帶量 K 時，前低就是支撐", "上方沒有帶量 K 時，前高就是壓力",
+                         "起點太近時，至少回看 3 個交易日"))
             st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
