@@ -1287,9 +1287,9 @@ def _handle_message(m, state, asked):
                 return
         if text == "管理者":                          # 管理者功能：全部用按鈕操作
             MENU_WAIT[cid] = True
-            TRACK[cid] = [mid0, send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "調整額度"], ["移除使用者", "使用者名單"], ["取消"]]))]
+            TRACK[cid] = [mid0, send_kb(cid, "👑 管理者功能", _kb([["待開通名單", "移除使用者"], ["使用者名單", "調整追蹤檔數"], ["取消"]]))]
             return
-        if text == "調整額度":
+        if text in ("調整追蹤檔數", "調整額度"):
             MENU_WAIT[cid] = bool(users)
             if not users:
                 tidy()
