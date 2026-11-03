@@ -1,0 +1,21 @@
+name: fugle_test
+
+on:
+  workflow_dispatch:        # 只能手動執行：Actions → fugle_test → Run workflow
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 測試
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
+          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
+        run: python fugle_test.py
