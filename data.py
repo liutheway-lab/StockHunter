@@ -79,6 +79,57 @@ def fetch_twse_turnover(months=4):
     return pd.Series(out).sort_index()
 
 
+def fetch_twse_ohlc(months=3):
+    """證交所官方：加權指數每日開高低收（跟看盤軟體同一份數字）。回傳 DataFrame（索引是日期）。
+    Yahoo 偶爾少最後一天，或某一天的高低點有落差，用這份補上、校正。"""
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    y, m = now.year, now.month
+    rows = {}
+    for _ in range(months):
+        url = f"https://www.twse.com.tw/exchangeReport/MI_5MINS_HIST?response=json&date={y}{m:02d}01"
+        for k in range(3):
+            try:
+                r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                j = r.json()
+                if j.get("stat") == "OK" and j.get("data"):
+                    for row in j["data"]:
+                        yy, mm, dd = (int(x) for x in str(row[0]).strip().split("/"))
+                        o, h, l, c = (_numf(v) for v in row[1:5])
+                        if None not in (o, h, l, c):
+                            rows[pd.Timestamp(yy + 1911, mm, dd)] = {"Open": o, "High": h, "Low": l, "Close": c}
+                break
+            except Exception as e:
+                print(f"證交所加權指數 {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
+                time.sleep(2)
+        time.sleep(0.5)
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    if not rows:
+        raise RuntimeError("證交所加權指數抓不到")
+    return pd.DataFrame.from_dict(rows, orient="index").sort_index()
+
+
+def patch_with_twse(df):
+    """用證交所官方的開高低收，補上 Yahoo 缺的日子、校正有落差的日子。失敗就原樣回傳"""
+    try:
+        t = fetch_twse_ohlc()
+    except Exception as e:
+        print("證交所加權指數補資料失敗：", repr(e))
+        return df
+    df = df.copy()
+    t = t[t.index >= df.index[0]]
+    n_new = int((~t.index.isin(df.index)).sum())
+    for d in t.index:
+        if d in df.index:
+            df.loc[d, ["Open", "High", "Low", "Close"]] = t.loc[d, ["Open", "High", "Low", "Close"]].to_numpy(float)
+        else:
+            df.loc[d, ["Open", "High", "Low", "Close", "Volume"]] = list(t.loc[d, ["Open", "High", "Low", "Close"]]) + [0.0]
+    df = df.sort_index()
+    df.attrs["patched_days"] = n_new
+    return df
+
+
 def _numf(v):
     try:
         return float(str(v).replace(",", "").strip())
@@ -116,6 +167,7 @@ def fetch_market(period="2y", retries=3):
             raw = yf.download("^TWII", period=period, interval="1d", progress=False, auto_adjust=False)
             df = _clean(raw)
             if df is not None and len(df) >= 70:
+                df = patch_with_twse(df)
                 try:
                     s = fetch_twse_turnover()
                     df["Volume"] = s.reindex(df.index)
