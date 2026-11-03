@@ -48,10 +48,10 @@ def market_chart(mk, bars=45):
         col = UP if cl >= o else DOWN
         ax.vlines(xi, l, h, color=col, linewidth=1)
         ax.bar(xi, max(abs(cl - o), (h - l) * 0.02), bottom=min(o, cl), width=0.65, color=col)
-    ax.plot(x, ma5.values, color="#e6a700", linewidth=0.9, label="MA5")
-    ax.plot(x, ma10.values, color="#16a085", linewidth=0.9, label="MA10")
-    ax.plot(x, ma20.values, color=MA20_C, linewidth=1.2, label="MA20")
-    ax.plot(x, ma60.values, color=MA60_C, linewidth=1.2, label="MA60")
+    ax.plot(x, ma5.values, color="#e6a700", linewidth=0.8, label="5日")
+    ax.plot(x, ma10.values, color="#16a085", linewidth=0.8, label="10日")
+    ax.plot(x, ma20.values, color=MA20_C, linewidth=1.2, label="月線")
+    ax.plot(x, ma60.values, color=MA60_C, linewidth=1.2, label="季線")
 
     # --- 近 3 日（灰色區） ---
     r0, r1 = _pos(idx, s.get("recent_start")), _pos(idx, s.get("recent_end"))
