@@ -639,11 +639,11 @@ def watch_buttons(name, items, limit=15):
                      key=f"watch_{name}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()
-        st.caption(f"追價 {px(it['chase'])}（{up:+.1f}%）｜出場 {px(it['stop1'])}")
+        st.caption(f"追價點 {px(it['chase'])}（{up:+.1f}%）　　　出場價 {px(it['stop1'])}")
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
-    st.caption(L("第一行：資料日收盤、漲跌點、幅度", "追價＝明天要漲到的價格", "（%）＝追價比現價高多少",
-                 f"追價點＝漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點", "盤中看強弱再決定追不追"))
+    st.caption(L("第一行：資料日收盤、漲跌點、幅度", "追價點＝明天要漲到的價格", "（%）＝追價點比現價高多少",
+                 f"追價點是漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點", "盤中看強弱再決定追不追"))
 
 
 st.divider()
@@ -915,7 +915,11 @@ if target:
         name = target["name"] or code
         close = float(df["Close"].iloc[-1])
         chg = (close / float(df["Close"].iloc[-2]) - 1) * 100
-        st.markdown(f"### {'🔴' if chg > 0 else '🟢'} {code} {name}｜現價 `{px(close)}`（{chg:+.2f}%）")
+        pv = float(df["Close"].iloc[-2])
+        clr = "red" if chg > 0 else "green" if chg < 0 else "gray"        # 紅漲綠跌
+        ar = "▲" if chg > 0 else "▼" if chg < 0 else "─"
+        st.markdown(f"### {'🔴' if chg > 0 else '🟢'} {code} {name}")
+        st.markdown(f"#### 現價 :{clr}[{px(close)}　{ar} {abs(close - pv):.2f}（{chg:+.2f}%）]")
         if target["industry"]:
             st.caption(f"產業別：{target['industry']}")
         ex = "TPEX" if target.get("suffix") == ".TWO" else "TWSE"
