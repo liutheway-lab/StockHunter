@@ -120,7 +120,7 @@ def prescreen(df, ratios):
     """用向量運算先挑出「有機會符合」的日子，再交給完整判斷。
     這裡只放策略裡『一定要成立』的條件，所以不會漏掉任何訊號（verify=True 時會逐日驗證）。"""
     c, h, l, v = (df[x] for x in ("Close", "High", "Low", "Volume"))
-    mav20, ema20, ema60 = df["MAV20"], df["EMA20"], df["EMA60"]
+    mav20, ema20, ema60 = df["MAV20"], df["MA20"], df["MA60"]
     n, k = cfg.STAB_LOOKBACK, cfg.STAB_DAYS
     pre = {}
     o = df["Open"]
@@ -181,6 +181,8 @@ def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_acti
                 if not r.get("pre_ok") or "chase_px" not in r:
                     continue
                 trig = float(r["chase_px"])
+                if trig > C[i - 1] * (1 + cfg.CHASE_MAX_DIST) + 1e-9:      # 追價點離昨收太遠，不追
+                    continue
                 if H[i] < trig:
                     continue
                 entry_px = max(trig, float(O[i]))               # 開盤就跳空超過追價點 → 用開盤價買
