@@ -21,11 +21,12 @@ import guide
 import lookup
 import strategies as S
 import backtest
+import chart_png
 import importlib
 
 # Streamlit 會把 config.py、strategies.py 這些檔案留在記憶體裡；
 # 只換檔案沒有 Reboot 時可能還在用舊版，所以每次都重新讀一次（很快，不影響速度）
-for _m in (cfg, lookup, data, S, backtest, guide):
+for _m in (cfg, lookup, data, S, backtest, guide, chart_png):
     importlib.reload(_m)
 
 st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="centered")
@@ -33,7 +34,8 @@ st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="cente
 _missing = [f for f, ok in (("config.py", hasattr(cfg, "WATCH_MAX_CONSOL")),
                             ("strategies.py", hasattr(S, "watch_tomorrow")),
                             ("backtest.py", "entry_mode" in backtest.run_stock.__code__.co_varnames),
-                            ("guide.py", "CHASE_GAIN" in open(guide.__file__, encoding="utf-8").read())) if not ok]
+                            ("guide.py", "CHASE_GAIN" in open(guide.__file__, encoding="utf-8").read()),
+                            ("chart_png.py", hasattr(chart_png, "stock_chart"))) if not ok]
 if _missing:
     st.error("⚠️ GitHub 上這幾個檔案還是舊版，請重新上傳：" + "、".join(_missing))
     st.stop()
