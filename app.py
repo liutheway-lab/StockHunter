@@ -649,8 +649,6 @@ def watch_buttons(name, items, limit=15):
                     unsafe_allow_html=True)
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
-    st.markdown('<div style="text-align:center;opacity:.65;font-size:.85rem;">追價點（%）＝明天要追買的價格（漲幅）</div>',
-                unsafe_allow_html=True)
 
 
 st.divider()
@@ -704,61 +702,74 @@ else:
                      lambda name=name, items=items: watch_buttons(name, items))
 
 # ==================== 資金比例 ====================
-st.divider()
-st.subheader("⚙️ 資金與投入比例")
-capital = st.number_input("可用資金（元）", min_value=10000, max_value=100_000_000, value=1_000_000,
-                          step=50000, key="capital",
-                          help="可以直接輸入金額，或按 + / − 調整，每次 5 萬")
-st.caption("可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）")
-if "w1" not in st.session_state:
-    st.session_state.w1 = int(round(cfg.TRANCHES[0] * 100))
-    st.session_state.w2 = int(round(cfg.TRANCHES[1] * 100))
-    st.session_state.w3 = 100 - st.session_state.w1 - st.session_state.w2
-
-
 def set_w(a, b, c):
     st.session_state.w1, st.session_state.w2, st.session_state.w3 = a, b, c
 
 
-b1, b2, b3 = st.columns(3)
-b1.button("平衡策略 30/40/30", use_container_width=True, on_click=set_w, args=(30, 40, 30))
-b2.button("突破策略 30/50/20", use_container_width=True, on_click=set_w, args=(30, 50, 20))
-b3.button("順勢策略 20/50/30", use_container_width=True, on_click=set_w, args=(20, 50, 30))
-_w1 = min(max(int(st.session_state.w1), 5), 90)                    # 前面改了，後面的上限跟著收緊，不會超過 100%
-_w2 = min(int(st.session_state.w2), 100 - _w1)
-_w3 = min(int(st.session_state.w3), 100 - _w1 - _w2)
-st.session_state.w1, st.session_state.w2, st.session_state.w3 = _w1, _w2, _w3
-cw1, cw2, cw3 = st.columns(3)
-w1 = cw1.number_input("第 1 筆 (%)", 5, 90, step=5, key="w1")
-w2 = cw2.number_input("第 2 筆 (%)", 0, max(0, 100 - w1), step=5, key="w2")
-w3 = cw3.number_input("第 3 筆 (%)", 0, max(0, 100 - w1 - w2), step=5, key="w3")
+def set_fund_open(v):
+    st.session_state["fund_open"] = v
+
+
+_ss = st.session_state
+_DEF = {"capital": 1_000_000, "w1": int(round(cfg.TRANCHES[0] * 100)), "w2": int(round(cfg.TRANCHES[1] * 100)),
+        "a1": int(round(cfg.ATTACK_SPLIT[0] * 100)), "a2": int(round(cfg.ATTACK_SPLIT[1] * 100))}
+_DEF["w3"] = 100 - _DEF["w1"] - _DEF["w2"]
+for _k, _v in _DEF.items():
+    if _k not in _ss:
+        _ss[_k] = _v
+    _ss[_k] = _ss[_k]          # 面板收起來時，輸入框沒畫出來，這樣寫設定才不會被 Streamlit 清掉
+# 前面的比例改了，後面的上限跟著收緊，合計不會超過 100%
+_ss.w1 = min(max(int(_ss.w1), 5), 90)
+_ss.w2 = min(int(_ss.w2), 100 - _ss.w1)
+_ss.w3 = min(int(_ss.w3), 100 - _ss.w1 - _ss.w2)
+_ss.a1 = min(max(int(_ss.a1), 5), 100)
+_ss.a2 = min(int(_ss.a2), 100 - _ss.a1)
+
+st.divider()
+st.markdown("**⚙️ 資金與投入比例**")
+fund_open = _ss.get("fund_open", False)
+if fund_open:
+    st.number_input("可用資金（元）", min_value=10000, max_value=100_000_000, step=50000, key="capital",
+                    help="可以直接輸入金額，或按 + / − 調整，每次 5 萬")
+    st.caption("可直接輸入金額，或按 ＋／－ 調整（每次 5 萬）")
+    b1, b2, b3 = st.columns(3)
+    b1.button("平衡策略 30/40/30", use_container_width=True, on_click=set_w, args=(30, 40, 30))
+    b2.button("突破策略 30/50/20", use_container_width=True, on_click=set_w, args=(30, 50, 20))
+    b3.button("順勢策略 20/50/30", use_container_width=True, on_click=set_w, args=(20, 50, 30))
+    cw1, cw2, cw3 = st.columns(3)
+    cw1.number_input("第 1 筆 (%)", 5, 90, step=5, key="w1")
+    cw2.number_input("第 2 筆 (%)", 0, max(0, 100 - _ss.w1), step=5, key="w2")
+    cw3.number_input("第 3 筆 (%)", 0, max(0, 100 - _ss.w1 - _ss.w2), step=5, key="w3")
+
+w1, w2, w3, a1, a2 = (int(_ss[k]) for k in ("w1", "w2", "w3", "a1", "a2"))
+capital_all = float(_ss.capital)
 tot = w1 + w2 + w3                                                  # 合計可以小於 100%，沒用到的留現金
-capital_all = capital
 capital = capital_all * tot / 100                                   # 後面所有試算都用「實際要投入的資金」
 ratios = S.norm_ratios((w1, w2, w3))
-st.markdown(L("**低位階起漲、量縮抗跌　適用**",
-              f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）",
-              f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）",
-              f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）",
-              f"合計投入 {capital:,.0f} 元（{tot}%），保留現金 {capital_all - capital:,.0f} 元"))
-
-# 強勢續攻（創高拉回、噴出後整理）：只有兩筆（攻擊日、突破日），比例另外設定
-if "a1" not in st.session_state:
-    st.session_state.a1 = int(round(cfg.ATTACK_SPLIT[0] * 100))
-    st.session_state.a2 = int(round(cfg.ATTACK_SPLIT[1] * 100))
-_a1 = min(max(int(st.session_state.a1), 5), 100)
-_a2 = min(int(st.session_state.a2), 100 - _a1)
-st.session_state.a1, st.session_state.a2 = _a1, _a2
-st.markdown(L("**強勢續攻　適用**", "（創高拉回、噴出後整理）"))
-ca1, ca2 = st.columns(2)
-a1 = ca1.number_input("攻擊日 (%)", 5, 100, step=5, key="a1")
-a2 = ca2.number_input("突破日 (%)", 0, max(0, 100 - a1), step=5, key="a2")
 atk_tot = a1 + a2
 capital_atk = capital_all * atk_tot / 100
 atk_split = (a1 / 100, a2 / 100)
-st.markdown(L(f"攻擊日　{capital_atk * a1 / atk_tot:,.0f} 元（{a1}%）",
-              f"突破日　{capital_atk * a2 / atk_tot:,.0f} 元（{a2}%）",
-              f"合計投入 {capital_atk:,.0f} 元（{atk_tot}%），保留現金 {capital_all - capital_atk:,.0f} 元"))
+
+if fund_open:
+    st.markdown(L("**低位階起漲、量縮抗跌　適用**",
+                  f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）",
+                  f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）",
+                  f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）",
+                  f"合計投入 {capital:,.0f} 元（{tot}%），保留現金 {capital_all - capital:,.0f} 元"))
+    # 強勢續攻（創高拉回、噴出後整理）：只有兩筆（攻擊日、突破日），比例另外設定
+    st.markdown(L("**強勢續攻　適用**", "（創高拉回、噴出後整理）"))
+    ca1, ca2 = st.columns(2)
+    ca1.number_input("攻擊日 (%)", 5, 100, step=5, key="a1")
+    ca2.number_input("突破日 (%)", 0, max(0, 100 - _ss.a1), step=5, key="a2")
+    st.markdown(L(f"攻擊日　{capital_atk * a1 / atk_tot:,.0f} 元（{a1}%）",
+                  f"突破日　{capital_atk * a2 / atk_tot:,.0f} 元（{a2}%）",
+                  f"合計投入 {capital_atk:,.0f} 元（{atk_tot}%），保留現金 {capital_all - capital_atk:,.0f} 元"))
+    st.button("✅ 設定好了，收起來", key="fund_close", use_container_width=True, on_click=set_fund_open, args=(False,))
+else:
+    st.caption(L(f"可用資金 {capital_all:,.0f} 元",
+                 f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}（投入 {tot}%）",
+                 f"強勢續攻　攻擊日 {a1}／突破日 {a2}（投入 {atk_tot}%）"))
+    st.button("調整資金比例", key="fund_open_btn", use_container_width=True, on_click=set_fund_open, args=(True,))
 
 # ==================== 單檔回測 ====================
 BT_MODE = {"ladder_avg": "分 3 次買｜買到第 2 筆後，出場價上移到平均成本（保本）",
@@ -885,6 +896,25 @@ def stock_bt_body(code, suffix, capital):
 # ==================== 個股診斷 ====================
 st.divider()
 st.subheader("🔍 個股診斷")
+if st.session_state.get("target"):
+    if st.button("⬆ 回到名單", key="back_to_list", use_container_width=True):
+        st.session_state["_scroll_back"] = st.session_state["target"].get("code", "")
+        st.rerun()
+_back = st.session_state.pop("_scroll_back", None)
+if _back is not None:
+    # 回到剛剛點的那一檔按鈕；找不到（例如清單收起來了）就回到「今日推薦」標題
+    components.html(f"""<script>
+    // {time.time()}
+    setTimeout(function () {{
+      const doc = window.parent.document;
+      for (const b of doc.querySelectorAll('button')) {{
+        if ("{_back}" && b.innerText.trim().indexOf("{_back} ") === 0) {{ b.scrollIntoView({{block: 'center'}}); return; }}
+      }}
+      for (const h of doc.querySelectorAll('h1,h2,h3')) {{
+        if (h.innerText.indexOf('今日推薦') >= 0) {{ h.scrollIntoView({{block: 'start'}}); break; }}
+      }}
+    }}, 150);
+    </script>""", height=0)
 if st.session_state.pop("_scroll_diag", False):
     # 每次內容都不同（加時間戳），否則 Streamlit 會沿用上次的 iframe，script 不會再執行
     components.html(f"""<script>
