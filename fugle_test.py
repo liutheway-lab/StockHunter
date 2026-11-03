@@ -57,6 +57,22 @@ else:
     else:
         out.append(f"\n加權指數日K失敗 {code} {str(j)[:100]}")
 
+    # 2.5 台積電：即時報價的全日累計（看盤軟體的「總量」應該對這個）
+    code, j = get("/intraday/quote/2330")
+    print("2330 quote", code, json.dumps(j, ensure_ascii=False)[:800])
+    if code == 200 and isinstance(j, dict):
+        tot = j.get("total") or {}
+        out.append("\n【台積電 2330・即時報價】")
+        out.append(f"收盤 {j.get('closePrice') or j.get('lastPrice')}")
+        out.append(f"成交量 {tot.get('tradeVolume'):,} 張" if tot.get("tradeVolume") is not None else f"total={tot}")
+        if tot.get("tradeValue"):
+            out.append(f"成交金額 {yi(tot['tradeValue'])}")
+        for k, nm in (("tradeVolumeAtBid", "內盤"), ("tradeVolumeAtAsk", "外盤")):
+            if tot.get(k) is not None:
+                out.append(f"{nm} {tot[k]:,}")
+    else:
+        out.append(f"\n台積電報價失敗 {code} {str(j)[:100]}")
+
     # 3. 台積電：日 K（volume 是「股」，除以 1000 就是張）
     code, j = get("/historical/candles/2330", **{"from": today, "to": today, "timeframe": "D",
                                                      "fields": "open,high,low,close,volume,turnover"})
