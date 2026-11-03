@@ -233,12 +233,13 @@ VOL_MULT = 1.5     # 大量＝當天量至少是當時 20 日均量的 1.5 倍�
 
 
 def vol_levels(df, bars=65):
-    """壓力／支撐（近 bars 日內找）
-    支撐：最近一根「帶量紅 K」（量 >= 20 日均量 1.5 倍、收紅、收盤在現價之下），
-          從那天到今天的最低價。＝這一波放量起漲以來，回測過的最低點。
-    壓力：反過來，最近一根「帶量黑 K」（收黑、收盤在現價之上），從那天到今天的最高價。
+    """壓力／支撐（近 bars 日內找）。「帶量」＝當天量 >= 20 日均量 1.5 倍，不分紅黑。
+    支撐：最近一根帶量 K（收盤在現價或現價之下，今天也算），從那天到今天的最低價。
+    壓力：最近一根帶量 K（收盤在現價之上），從那天到今天的最高價；
+          上方找不到帶量 K，就用近 bars 日的最高點（前高）當壓力。
     回傳 {"press": {...} 或 None, "supp": {...} 或 None}
-    每項：day＝最高／最低價那天、level＝價位、vday＝帶量 K 棒那天、vol＝那天的量（張）、top＝是不是整段最大量"""
+    每項：day＝最高／最低價那天、level＝價位、vday＝帶量 K 棒那天（用前高時是 None）、
+          vol＝那天的量（張）、top＝是不是整段最大量、fallback＝是不是用前高"""
     full = df[df["Volume"] > 0]
     d = full.iloc[-bars:]
     if len(d) < 2:
@@ -248,8 +249,8 @@ def vol_levels(df, bars=65):
     top_day = d["Volume"].idxmax()
     big = d["Volume"] >= vma * VOL_MULT
     out = {}
-    for key, mask, col in (("supp", big & (d["Close"] > d["Open"]) & (d["Close"] < last), "Low"),
-                           ("press", big & (d["Close"] < d["Open"]) & (d["Close"] > last), "High")):
+    for key, mask, col in (("supp", big & (d["Close"] <= last), "Low"),
+                           ("press", big & (d["Close"] > last), "High")):
         cand = d[mask]
         if cand.empty:
             out[key] = None
@@ -258,7 +259,12 @@ def vol_levels(df, bars=65):
         seg = d.loc[vday:, col]
         day = seg.idxmin() if col == "Low" else seg.idxmax()
         out[key] = {"day": day, "level": float(seg.loc[day]), "vday": vday,
-                    "vol": float(d.loc[vday, "Volume"]) / 1000.0, "top": vday == top_day}
+                    "vol": float(d.loc[vday, "Volume"]) / 1000.0, "top": vday == top_day, "fallback": False}
+    if out["press"] is None:                                    # 上方沒有帶量 K：前高就是壓力
+        day = d["High"].idxmax()
+        hi = float(d.loc[day, "High"])
+        out["press"] = ({"day": day, "level": hi, "vday": None, "vol": 0.0, "top": False, "fallback": True}
+                        if hi > last else None)
     return out
 
 
@@ -298,7 +304,8 @@ def stock_chart(df, title="", bars=65):
             continue
         col = "#ff8c00" if it["top"] else ("#e04a4a" if key == "press" else "#2e9e4f")      # 整段最大量固定橘色
         marks.append((it["level"], f"{nm} {it['level']:,.1f}（{it['day']:%m/%d}）", col, "--"))
-        vol_marks.append((_pos(idx, it["vday"]), "第1大量" if it["top"] else nm, col))      # 框起來的是帶量的那根
+        if it["vday"] is not None:                                                         # 框起來的是帶量的那根
+            vol_marks.append((_pos(idx, it["vday"]), "第1大量" if it["top"] else nm, col))
     top_v, bot_v = float(d["High"].max()), float(d["Low"].min())
     allv = [m[0] for m in marks] + [top_v, bot_v]
     lo_y, hi_y = min(allv), max(allv)
@@ -336,7 +343,7 @@ def stock_chart(df, title="", bars=65):
                                     edgecolor=col, linewidth=1.1, zorder=6, clip_on=False))
     axv.set_ylim(0, vmax * 1.12)
     axv.set_ylabel("成交量（張）")
-    axv.legend(loc="upper right", fontsize=8, frameon=False)
+    axv.legend(loc="upper left", fontsize=8, frameon=False)
     axv.grid(alpha=0.15)
 
     step = max(1, n // 9)
