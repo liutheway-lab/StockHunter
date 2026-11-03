@@ -655,6 +655,19 @@ def rec_buttons(prefix, strategy, items, limit=15):
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
+def absorb_buttons(items, limit=15):
+    for it in items[:limit]:
+        if st.button(f"{it['code']} {it['name']}", key=f"absorb_{it['code']}", use_container_width=True):
+            pick(it)
+            st.rerun()
+        st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">'
+                    f'現價 {px(it["close"])}｜今日最低 {px(it["low"])}｜{it["kind"]}｜量 {it["vol_mult"]:.1f} 倍</div>',
+                    unsafe_allow_html=True)
+    st.caption(L("量＝今天量 ÷ 20 日均量", "隔天不破今天最低，才比較可信"))
+    if len(items) > limit:
+        st.caption(f"還有 {len(items) - limit} 檔未列出")
+
+
 def watch_buttons(name, items, limit=15):
     for it in items[:limit]:
         up = (it["chase"] / it["close"] - 1) * 100 if it["close"] else 0
@@ -717,6 +730,12 @@ else:
             items = wl[name]
             foldable(f"obswl_{name}", f"{cfg.STRATEGY_NAMES[name]}・明天可能的追價點｜{len(items)} 檔",
                      lambda name=name, items=items: watch_buttons(name, items))
+
+    ab_list = scan.get("absorb") or []
+    if ab_list:                                                    # 恐慌承接：只供追蹤，不給追價點
+        st.markdown(L(f"**👀 {cfg.ABSORB_NAME}**", "今天殺低後被買回來，而且有量", "只供追蹤，沒有追價點"))
+        foldable("absorbfold", f"長下影／長紅帶量｜{len(ab_list)} 檔",
+                 lambda: absorb_buttons(ab_list), default=False)
 
 # ==================== 資金比例 ====================
 def set_w(a, b, c):
