@@ -664,7 +664,7 @@ def levels_for(code, suffix, price):
 
 
 def _levels_for(code, suffix, price):
-    """有創高拉回／噴後整理的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 8%，壓力留空、前高自動抓；支撐都會算"""
+    """有強勢續攻（創高拉回／噴出後整理）的盤整型態 → 照攻擊日規則；沒有 → 出場價＝買價下 8%，壓力留空、前高自動抓；支撐都會算"""
     raw = None
     try:
         import yfinance as yf
@@ -692,7 +692,7 @@ def _levels_for(code, suffix, price):
     sup, sup_why = support_for(raw, price) if raw is not None else (None, "")
     return {"stop": st.tick(price * (1 - BUY_STOP_PCT), "ceil"), "target": None, "key": key, "sup": sup, "sup_why": sup_why,
             "why": f"買價下 {BUY_STOP_PCT * 100:.0f}%", "pattern": False,
-            "note": "目前不是盤整型態\n（創高拉回、噴出後整理）\n壓力留空\n" + kline + "\n要改請按「調價」"}
+            "note": "目前不是盤整型態\n（強勢續攻）\n壓力留空\n" + kline + "\n要改請按「調價」"}
 
 
 # ================= 指令 =================
