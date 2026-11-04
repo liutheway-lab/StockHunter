@@ -169,7 +169,7 @@ def plain(t):
     return html.unescape(re.sub(r"</?(b|pre|code|i)>", "", t))
 
 
-HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪|▲|▼|－)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|股)(・已加碼)?$")
+HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪|▲|▼|－)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|股)(?:・已持股)?(・已加碼)?$")
 FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出場 ([\d,.]+|—)")),
              ("target", re.compile(r"(?:壓力|目標) ([\d,.]+|—)")), ("sup", re.compile(r"支撐 ([\d,.]+|—)")),
              ("key", re.compile(r"前高 ([\d,.]+|—)")))
@@ -323,7 +323,7 @@ def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
             if x["stop"]:
                 d = (x["stop"] / p - 1) * 100
                 stop_l += f"　距出場 {sg(d)}{abs(d):.1f}%"
-        lines += ["", f"{lamp} {code} {x['name']}　{fmt_qty(x['shares'])}{'・已加碼' if x['added'] else ''}",
+        lines += ["", f"{lamp} {code} {x['name']}　{fmt_qty(x['shares'])}・已持股{'・已加碼' if x['added'] else ''}",
                   now_l, avg_l, stop_l]
         if any(x.get(k) is not None for k in ("sup", "target", "key")):
             lines.append(f"支撐 {_n(x.get('sup'))}　壓力 {_n(x['target'])}　前高 {_n(x['key'])}")
@@ -880,14 +880,11 @@ def handle(text, h, cid=None):
              "stop": pick("stop"), "target": pick("target"), "sup": pick("sup"), "key": pick("key"),
              "added": False, "suffix": sfx, "held": avg is not None}
         h[code] = x
-        tag = "已持股" if x["held"] else "未持股"
-        rows = [("出場", _fmt(x["stop"])), ("支撐", _fmt(x.get("sup"))), ("壓力", _fmt(x["target"])), ("前高", _fmt(x["key"]))]
-        if x["held"]:
-            rows = [("均價", _fmt(avg)), ("股數", fmt_qty(qty))] + rows
-        msg = (f"✅ <b>已加入追蹤　{code} {esc(name)}</b>（{tag}）\n"
-               f"🎯 <b>價位</b>\n" + kv(rows))
+        p = _now_price(code, sfx)                       # 跟追蹤清單的卡片一樣的排版，讓你一眼對得出來
+        card = board_text({code: x}, {code: {"last": p}} if p else {}, None, title="✅ 已加入追蹤")
+        msg = card
         if lv:
-            msg += f"\n🧭 <b>策略判斷</b>\n{esc(lv['note'])}"
+            msg += f"\n\n🧭 策略判斷\n{lv['note']}"
         return msg + "\n\n要改價位，按「調價」", True
     if cmd == "移除" and len(w) >= 2:                              # 不再追蹤（已持股的也一樣移除）
         if w[1] == "全部":
