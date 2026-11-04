@@ -293,7 +293,6 @@ def fix_names(h):
                 x["name"] = nm
 
 
-BOARD_LINE = "━━━━━━━━━━━━━━"                 # 跟晨報一樣的分隔線
 DETAIL_START = ("成交價", "均價", "出場", "支撐", "損益")   # 卡片裡的明細行：送出時排成等寬的小表格
 CARD_START = ("▫", "▲", "▼", "－", "🔴", "🟢", "⚪", "📌")  # 卡片標題、看板標題：送出時粗體
 
@@ -301,7 +300,7 @@ CARD_START = ("▫", "▲", "▼", "－", "🔴", "🟢", "⚪", "📌")  # 卡�
 def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
     """追蹤清單（置頂那則也是它）：一檔一張卡，紅漲綠跌；也是機器人讀取追蹤清單的資料來源"""
     q = q or {}
-    lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}", BOARD_LINE]
+    lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]     # 不放分隔線：置頂列會把第二行也顯示出來
     if not h:
         lines += ["", "（目前沒有追蹤的股票）"]
     for code, x in sorted(h.items()):
