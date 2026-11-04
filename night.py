@@ -260,7 +260,7 @@ def strategy_block(name, items, names, risk, note=""):
         nums = [h["r"]["close"], p["key"], p["stop1"], p["targets"][0][1]]
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
     links = "　".join(tv_link(h["sym"]) for h in shown)
-    more = ""                                  # 不再標示「還有 N 檔未列出」（標題的檔數已經是全部）
+    more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
     low_rr = [(names.get(h["sym"], h["sym"].split(".")[0]), h["plan"]["rr"]) for h in shown
               if h["plan"].get("rr") is not None and h["plan"]["rr"] < cfg.RR_MIN]
     rr_txt = ""
@@ -295,7 +295,7 @@ def watch_block(name, items, names, note="", icon="🎯"):
         p = h["plan"]
         nums = [h["r"]["close"], p["e"], p["stop1"], p["targets"][0][1]]
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
-    more = ""                                  # 不再標示「還有 N 檔未列出」（標題的檔數已經是全部）
+    more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
     legend = (f"\n排序：越符合規則越前面"
               f"\n追價點＝明天盤中要漲到的價格"
               f"\n（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）"
@@ -328,7 +328,7 @@ def load_pre1300(mk):
 
 def absorb_block(items, names, note="", pre=None):
     """恐慌承接觀察名單：今天殺低後被買回來、而且有量。只列股票，沒有追價點"""
-    title = f"*🧺 {cfg.ABSORB_NAME}・今日長下影／長紅帶量*　{len(items)} 檔" + note
+    title = f"*🧺 {cfg.ABSORB_NAME}・今日先殺後拉（長下影）帶量*　{len(items)} 檔" + note
     shown = items[:MAX_LIST]
     pre = pre or set()
     labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" + ("◆" if h['sym'].split('.')[0] in pre else "")
@@ -338,10 +338,10 @@ def absorb_block(items, names, note="", pre=None):
     for h, lab in zip(shown, labels):
         r = h["r"]
         lines.append(_padr(lab, W) + f" {fp(r['close']):>5} {fp(r['low']):>5} {r['vol_mult']:.1f}倍")
-    more = ""                                  # 不再標示「還有 N 檔未列出」（標題的檔數已經是全部）
+    more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
     legend = (f"\n排序：量能越大、振幅越大越前面"
+              f"\n先殺：當天最低價跌破昨收"
               f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
-              f"\n長紅＝收紅且實體占 {cfg.STAB_RED_BODY * 100:.0f}% 以上"
               f"\n量能＝今天量 ÷ 20 日均量"
               f"\n要 {cfg.ABSORB_VOL_MULT} 倍以上"
               f"\n當天振幅要 {cfg.ABSORB_MIN_RANGE * 100:.0f}% 以上"
