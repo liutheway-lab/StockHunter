@@ -736,7 +736,7 @@ if not scan:
 else:
     hits, active = scan["hits"], scan["active"]
     st.caption(L(f"資料日 {scan['data_date']}｜夜間掃描 {scan['generated_at']}",
-                 "依成交金額由大到小｜點股票會帶入下方診斷"))
+                 "越符合規則越前面｜點股票會帶入下方診斷"))
     if active:
         names_on = cfg.names_join(active)
         (st.warning if scan["risk"] else st.success)(
@@ -780,7 +780,7 @@ else:
 
     ab_list = scan.get("absorb") or []
     if ab_list:                                                    # 恐慌承接：只供追蹤，不給追價點
-        st.markdown(L(f"**👀 {cfg.ABSORB_NAME}**", "今天殺低後被買回來，而且有量", "只供追蹤，沒有追價點"))
+        st.markdown(L(f"**🧺 {cfg.ABSORB_NAME}**", "今天殺低後被買回來，而且有量", "量能越大、振幅越大越前面", "只供追蹤，沒有追價點"))
         foldable("absorbfold", f"長下影／長紅帶量｜{len(ab_list)} 檔",
                  lambda: absorb_buttons(ab_list), default=False)
 
