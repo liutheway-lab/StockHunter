@@ -118,6 +118,73 @@ def fetch_twse_stock_volume(code, months=4):
     return pd.Series(out).sort_index()
 
 
+def fetch_twse_market_volume(days, sleep=1.0):
+    """證交所官方：指定的每個交易日，全部上市股票的成交股數。
+    一天只要一次請求（MI_INDEX），所以 70 天大約 70 次。回傳 {日期: {代號: 股數}}，抓不到的日子不會出現在結果裡。"""
+    out = {}
+    for day in days:
+        day = pd.Timestamp(day).normalize()
+        url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={day:%Y%m%d}&type=ALLBUT0999"
+        for k in range(3):
+            try:
+                j = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"}).json()
+                tables = list(j.get("tables") or [])
+                for key in list(j):                          # 舊格式：fields1/data1 ...
+                    if key.startswith("fields") and key.replace("fields", "data") in j:
+                        tables.append({"fields": j[key], "data": j[key.replace("fields", "data")]})
+                got = {}
+                for t in tables:
+                    f = [str(x) for x in (t.get("fields") or [])]
+                    if "證券代號" not in f or "成交股數" not in f:
+                        continue
+                    si, vi = f.index("證券代號"), f.index("成交股數")
+                    for row in t.get("data") or []:
+                        v = _numf(row[vi])
+                        if v is not None:
+                            got[str(row[si]).strip()] = v
+                if got:
+                    out[day] = got
+                break
+            except Exception as e:
+                print(f"證交所全市場成交股數 {day:%Y-%m-%d} 第 {k + 1} 次失敗：{e!r}"[:200])
+                time.sleep(2)
+        time.sleep(sleep)
+    return out
+
+
+def apply_twse_volume(prices, days):
+    """把 Yahoo 的個股量，換成證交所官方的量（只換上市股票、只換抓得到的日子）。
+    證交所整批抓不到時，原樣回傳 Yahoo 的資料。回傳 (prices, 換了幾檔)"""
+    prices = dict(prices)                                    # 不改到呼叫端的原字典
+    try:
+        vols = fetch_twse_market_volume(days)
+    except Exception as e:
+        print("證交所成交股數整批抓取失敗，沿用 Yahoo：", repr(e)[:120])
+        return prices, 0
+    if not vols:
+        print("證交所成交股數沒有抓到任何一天，沿用 Yahoo")
+        return prices, 0
+    changed = 0
+    for sym, df in prices.items():
+        if not sym.endswith(".TW"):
+            continue
+        code = sym.split(".")[0]
+        m = pd.Series({d: vols[d][code] for d in vols if code in vols[d]}, dtype=float)
+        if m.empty:
+            continue
+        idx = pd.DatetimeIndex(df.index)
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+        new = m.reindex(idx).to_numpy()
+        old = df["Volume"].to_numpy(dtype=float)
+        df = df.copy()
+        df["Volume"] = np.where(np.isnan(new), old, new)
+        prices[sym] = df
+        changed += 1
+    print(f"成交量改用證交所官方：{len(vols)} 天，換了 {changed} 檔上市股票")
+    return prices, changed
+
+
 def fetch_twse_ohlc(months=3):
     """證交所官方：加權指數每日開高低收（跟看盤軟體同一份數字）。回傳 DataFrame（索引是日期）。
     Yahoo 偶爾少最後一天，或某一天的高低點有落差，用這份補上、校正。"""
