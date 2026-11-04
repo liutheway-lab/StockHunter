@@ -470,7 +470,7 @@ def telegram_block(today=None, n=5):
     """晨報用的文字（Telegram Markdown）"""
     lines = event_lines(today, n)
     note = stale_note(today or today_tw(), n)
-    return f"*📅 未來 {n} 個交易日重大事件*\n" + "\n".join(lines) + ("\n⚠️ " + note if note else "")
+    return f"*🔔 未來 {n} 個交易日重大事件*\n" + "\n".join(lines) + ("\n⚠️ " + note if note else "")
 
 
 if __name__ == "__main__":
