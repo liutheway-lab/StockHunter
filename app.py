@@ -858,7 +858,7 @@ else:
     ab_list = scan.get("absorb") or []
     if ab_list:                                                    # 恐慌承接：只供追蹤，不給追價點
         st.markdown(L(f"**🧺 {cfg.ABSORB_NAME}**", "今天殺低後被買回來，而且有量", "量能越大、振幅越大越前面", "只供追蹤，沒有追價點"))
-        foldable("absorbfold", f"長下影／長紅帶量｜{len(ab_list)} 檔",
+        foldable("absorbfold", f"先殺後拉（長下影）帶量｜{len(ab_list)} 檔",
                  lambda: absorb_buttons(ab_list), default=False)
 
 # ==================== 資金比例 ====================
