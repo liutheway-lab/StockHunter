@@ -2291,7 +2291,7 @@ def run_market():
             notify_users(f"⚠️ 盤中監控中斷\n{t1:%H:%M}\n已通知管理者")
             to_owner(f"⚠️ 盤中監控中斷 {t1:%H:%M}\n請到 Actions 看紀錄")
         else:
-            notify_users(f"⏹ 盤中監控結束\n{t1:%H:%M} 已收盤")
+            notify_users("⏹ 盤中監控結束\n13:30 已收盤")
 
 
 def close_update():
