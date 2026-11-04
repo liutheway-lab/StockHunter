@@ -313,6 +313,35 @@ def check_absorb(df, i):
             "range": (rng / prev) if prev else 0.0}
 
 
+def check_absorb_live(o, h, l, c, prev, vol, mav20, limit_up=None):
+    """恐慌承接「13:00 預判」：用盤中（13:00）的數字，拿現價當收盤，判斷跟 check_absorb 同一套型態。
+    o/h/l/c＝今天開盤／最高／最低／現價；prev＝昨收；vol＝累計成交量（股）；mav20＝20 日均量（股）；limit_up＝今天漲停價。
+    量能門檻用 cfg.ABSORB_PRE_VOL（到 13:00 約成交 9 成，所以比收盤的 1.5 倍低一點）。
+    不符合回傳 None；漲停鎖死（買不到）也回傳 None。"""
+    try:
+        o, h, l, c, prev, vol, mav20 = (float(x) for x in (o, h, l, c, prev, vol, mav20))
+    except (TypeError, ValueError):
+        return None
+    rng = h - l
+    if rng <= 0 or prev <= 0 or mav20 <= 0 or mav20 != mav20 or vol <= 0:
+        return None
+    if limit_up and c >= float(limit_up) - 1e-9:                      # 漲停鎖死，買不到
+        return None
+    vm = vol / mav20
+    if vm < cfg.ABSORB_PRE_VOL or rng / prev < cfg.ABSORB_MIN_RANGE:
+        return None
+    shadow, body = (min(o, c) - l) / rng, (c - o) / rng
+    kinds = []
+    if shadow >= cfg.STAB_SHADOW:
+        kinds.append("長下影")
+    if c > o and body >= cfg.STAB_RED_BODY:
+        kinds.append("長紅")
+    if not kinds:
+        return None
+    return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow, "body": body,
+            "chg": c / prev - 1, "range": rng / prev, "risk": (c - l) / c}
+
+
 def active_strategies(layer, stab_ok):
     """依大盤層級決定哪些策略啟用。回傳 (策略清單, 是否要標示風險)"""
     if not cfg.USE_REGIME:
