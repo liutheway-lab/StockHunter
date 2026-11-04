@@ -732,7 +732,7 @@ def pick(item):
     st.session_state["_scroll_diag"] = True
 
 
-def rec_buttons(prefix, strategy, items, limit=15):
+def rec_buttons(prefix, strategy, items, limit=None):
     for it in items[:limit]:
         arrow = "↑" if it.get("broke") else ""
         vs = {"壓": "　🔴壓", "撐": "　🟢撐"}.get(it.get("vl_side"), "")
@@ -745,7 +745,7 @@ def rec_buttons(prefix, strategy, items, limit=15):
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
-def absorb_buttons(items, limit=15):
+def absorb_buttons(items, limit=None):
     for it in items[:limit]:
         if st.button(f"{it['code']} {it['name']}", key=f"absorb_{it['code']}", use_container_width=True):
             pick(it)
@@ -759,7 +759,7 @@ def absorb_buttons(items, limit=15):
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
-def watch_buttons(name, items, limit=15):
+def watch_buttons(name, items, limit=None):
     for it in items[:limit]:
         up = (it["chase"] / it["close"] - 1) * 100 if it["close"] else 0
         if st.button(f"{it['code']} {it['name']}", key=f"watch_{name}_{it['code']}", use_container_width=True):
@@ -1127,17 +1127,23 @@ if target:
                 break
         if df is not None:
             df = data._clean(df)
+            st.session_state["_vol_note"] = ""
             if sfx == ".TW":                                      # 上市股票：成交量改用證交所官方（跟券商一致）
                 try:
                     tw_vol = load_twse_stock_vol(code)
                     df = df.copy()
                     df["Volume"] = tw_vol.reindex(df.index).fillna(df["Volume"])
-                except Exception as e:                            # 證交所抓不到，沿用 Yahoo 的量
+                except Exception as e:                            # 證交所抓不到，沿用 Yahoo 的量，並在畫面上說明
                     print("個股成交量改用證交所失敗，沿用 Yahoo：", repr(e)[:120])
+                    st.session_state["_vol_note"] = "⚠️ 證交所個股量暫時抓不到，成交量先用 Yahoo 的數字"
+                else:
+                    st.session_state["_vol_note"] = ""
 
     if df is None:
         st.error(L(f"查無代號【{code}】的歷史資料", "請確認是否為有效掛牌標的"))
     else:
+        if st.session_state.get("_vol_note"):
+            st.warning(st.session_state["_vol_note"])
         ev = S.evaluate(df, mkt_df, ratios)
         name = target["name"] or code
         close = float(df["Close"].iloc[-1])
