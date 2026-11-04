@@ -9,6 +9,9 @@ concurrency:
   group: tg-bot              # 跟 commands 輪流，不會同時讀 Telegram 訊息
   cancel-in-progress: false
 
+permissions:
+  contents: write            # 13:00 恐慌承接預判名單要存回 repo，晚上夜間掃描才能對照
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -27,3 +30,15 @@ jobs:
           TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
           FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}   # 富果行情金鑰（證交所連不上時用）
         run: python intraday.py
+      - name: 存 13:00 預判名單
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add absorb_1300.json || true
+          git diff --cached --quiet || git commit -m "13:00 恐慌承接預判名單"
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main && git push && exit 0
+            sleep 5
+          done
+          exit 0
