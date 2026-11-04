@@ -35,6 +35,39 @@ for _m in (cfg, lookup, data, S, backtest, guide, chart_png) + ((events,) if eve
     importlib.reload(_m)
 
 st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="wide")
+
+# 載入中的小卡片：第一次進來、資料還在更新時顯示；整頁跑完會自動拿掉（之後切換功能不再出現）
+_SPLASH = """
+<style>
+@keyframes sh-l{0%{opacity:0;transform:translateY(3px)}20%{opacity:1;transform:translateY(-3px)}55%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(0)}}
+@keyframes sh-r{0%{opacity:0;transform:translateY(-3px)}20%{opacity:1;transform:translateY(3px)}55%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(0)}}
+@keyframes sh-blink{0%,100%{opacity:.2}50%{opacity:1}}
+.sh-card{margin:18px auto;max-width:480px;text-align:center;padding:1.6rem 1rem 1.3rem;border-radius:24px;
+  background:linear-gradient(135deg,rgba(255,200,226,.32),rgba(180,226,255,.32));border:1.5px dashed rgba(128,128,128,.35)}
+.sh-track{font-size:1.9rem;display:flex;justify-content:center;gap:.9rem;height:2.4rem;align-items:center}
+.sh-track span{display:inline-block;opacity:0;animation:sh-l 2.4s ease-in-out infinite}
+.sh-track span:nth-child(even){animation-name:sh-r}
+.sh-track span:nth-child(1){animation-delay:0s}
+.sh-track span:nth-child(2){animation-delay:.4s}
+.sh-track span:nth-child(3){animation-delay:.8s}
+.sh-track span:nth-child(4){animation-delay:1.2s}
+.sh-track span:nth-child(5){animation-delay:1.6s}
+.sh-t{font-weight:700;font-size:1.15rem;margin:.9rem 0 .25rem}
+.sh-dots i{font-style:normal;animation:sh-blink 1.2s infinite;margin-left:2px}
+.sh-dots i:nth-child(2){animation-delay:.2s}
+.sh-dots i:nth-child(3){animation-delay:.4s}
+.sh-s{opacity:.7;font-size:.92rem}
+</style>
+<div class="sh-card">
+  <div class="sh-track"><span>🐾</span><span>🐾</span><span>🐾</span><span>🐾</span><span>🐾</span></div>
+  <div class="sh-t">獵人正在狩獵股票中<span class="sh-dots"><i>.</i><i>.</i><i>.</i></span></div>
+  <div class="sh-s">請稍等一下，獲取獵物後轉入主頁面 🏹</div>
+</div>
+"""
+_splash = st.empty()
+if not st.session_state.get("_booted"):
+    _splash.markdown(_SPLASH, unsafe_allow_html=True)
+
 st.markdown("""<style>
 @media (max-width: 640px) {       /* 手機：表格字小一點、間距縮小，第一欄可以換行，不要被切掉 */
   table.ht th, table.ht td { padding: 5px 3px !important; font-size: 0.72rem !important; }
@@ -1205,4 +1238,8 @@ if target:
             foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
                      lambda: stock_bt_body(code, sfx_bt, capital), default=False,
                      status="用你的資金比例，模擬這檔過去每一次訊號")
+
+# 整頁跑完：拿掉載入卡片，之後切換功能不再出現
+_splash.empty()
+st.session_state["_booted"] = True
 
