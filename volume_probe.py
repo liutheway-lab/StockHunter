@@ -64,5 +64,26 @@ def main(now_fn=lambda: datetime.now(TZ), sleep_fn=time.sleep, check_fn=has_toda
         sleep_fn(EVERY_SEC)
 
 
+def earlier_run_exists():
+    """GitHub 排程和 Render 備援可能各觸發一次。如果有比我更早建立、還在跑或已經成功的紀錄，我就退出，避免重複私訊。
+    本機測試沒有 GitHub 環境變數，就不擋。"""
+    import requests as rq
+    repo, token, rid = (os.getenv(k, "") for k in ("GITHUB_REPOSITORY", "GITHUB_TOKEN", "GITHUB_RUN_ID"))
+    if not (repo and token and rid):
+        return False
+    h = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    base = f"https://api.github.com/repos/{repo}"
+    me = rq.get(f"{base}/actions/runs/{rid}", headers=h, timeout=20).json()
+    runs = rq.get(f"{base}/actions/workflows/volume_probe.yml/runs?per_page=20", headers=h, timeout=20).json()
+    for w in runs.get("workflow_runs", []):
+        if str(w["id"]) != str(rid) and w["created_at"] < me["created_at"] and \
+                (w["status"] != "completed" or w["conclusion"] == "success"):
+            return True
+    return False
+
+
 if __name__ == "__main__":
-    main()
+    if earlier_run_exists():
+        print("已經有更早的量測在跑或已完成，本次結束")
+    else:
+        main()
