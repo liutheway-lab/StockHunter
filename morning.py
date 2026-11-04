@@ -16,7 +16,7 @@ from notify import send_telegram
 # 分組顯示：(組名, {顯示名稱(4字): Yahoo 代號})
 GROUPS = [
     ("🇺🇸 美股期貨", {"那斯達克": "NQ=F", "標普五百": "ES=F", "道瓊工業": "YM=F"}),
-    ("🌏 亞洲股市", {"日經期貨": "NIY=F", "韓國綜合": "^KS11"}),   # 日經用期貨：休市日也有資料
+    ("🌏 亞洲股市", {"日經指數": "^N225", "韓國綜合": "^KS11"}),   # 日經改用指數：日本休市日（例如 11/03 文化之日）會自動比上一個交易日
     ("😨 恐慌指數", {"恐慌指數": "^VIX"}),
 ]
 
@@ -26,7 +26,7 @@ TX_NAME = "台指夜盤"
 
 # ── 今日結論的判斷規則（想調鬆緊就改這裡）──
 US_SYMS = {"NQ=F", "ES=F", "YM=F"}   # 美股期貨（取平均）
-ASIA_SYMS = {"NIY=F", "^KS11"}       # 亞洲股市（取平均）
+ASIA_SYMS = {"^N225", "^KS11"}       # 亞洲股市（取平均）
 FLAT = 0.3          # 漲跌幅絕對值小於這個 % 視為持平，不加不減分
 VIX_WARN = 25       # VIX 高於這個值：扣 1 分
 VIX_PANIC = 30      # VIX 高於這個值：直接判「不適合」
@@ -51,12 +51,12 @@ def _num(v):
 
 
 # 期貨的「前一盤收盤」要抓幾點的價格：{代號: (時區, 時, 分)}。要跟券商看盤軟體的「漲跌」基準一致。
-# 美股期貨：用美東 16:00（美股現貨收盤、結算價的時間）；日經：用日本 15:45（日經期貨日盤收盤）。
+# 美股期貨：用美東 16:00（美股現貨收盤、結算價的時間）。
+# 日經不用期貨：CME 的日經期貨在日本休市日（例如 11/03 文化之日）仍有零星成交，拿來當前收基準會讓漲跌對不起來。
 FUT_BASE = {
     "NQ=F": ("America/New_York", 16, 0),
     "ES=F": ("America/New_York", 16, 0),
     "YM=F": ("America/New_York", 16, 0),
-    "NIY=F": ("Asia/Tokyo", 15, 45),
 }
 
 
@@ -149,7 +149,7 @@ def get_tx_night():
 
 def judge(pcts, levels):
     """把夜盤、美股期貨、亞股、VIX 綜合成一個結論。
-    計分：夜盤 ±2、美股期貨平均 ±2、亞股平均 ±1、VIX 變動 ±1（VIX 反向），
+    計分：夜盤 ±1、美股期貨平均 ±2、亞股平均 ±1、VIX 變動 ±1（VIX 反向），
     另外 VIX 偏高會扣分或直接否決。
     回傳 (圖示, 結論, 明細[(名稱, 數值, 分數)], 總分, 滿分, 否決原因)"""
     score = max_score = 0
@@ -160,9 +160,9 @@ def judge(pcts, levels):
 
     tx = pcts.get("TX")
     if tx is not None:
-        v = vote(tx, 2)
+        v = vote(tx, 1)
         score += v
-        max_score += 2
+        max_score += 1
         rows.append((TX_NAME, f"{tx:+.2f}%", v))
         if tx <= TX_CRASH:
             veto = "夜盤跌幅過大"
@@ -294,9 +294,9 @@ def run():
         top.append("📌 週末｜以下為最後交易日資料\n　　非即時行情")
 
     icon, text, drows, score, max_score, veto = judge(pcts, levels)
-    tbl = [f"{pad(n)} {v:>7} {p:>+3d}" for n, v, p in drows]
+    tbl = [f"{pad(n)} {p:+d}" for n, v, p in drows]                 # 只寫分數；漲跌幅、VIX 數字下面各區塊都有
     score = max(-max_score, min(max_score, score))
-    tbl.append(f"{pad('綜合分數')} {'':>7} {score:+d}/{max_score}")
+    tbl.append(f"{pad('綜合分數')} {score:+d}/{max_score}")
     concl = f"🎯 *今日結論*\n{icon} *{text}*\n" + code(tbl)
     if veto:
         concl += f"\n⚠️ 否決條件：{veto}"
