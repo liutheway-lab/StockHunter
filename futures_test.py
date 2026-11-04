@@ -1,17 +1,21 @@
-"""futures_test.py — 一次性測試：期交所（TAIFEX）即時報價能不能穩定取得（免費、不用金鑰）
+"""futures_test.py — 期交所（TAIFEX）即時報價測試（免費、不用金鑰）
 在 GitHub 的 Actions → futures_test → Run workflow 手動執行。結果印在紀錄裡，也私訊給管理者。
 
 為什麼換成期交所：富果的期貨行情要另外開通權限（用同一把金鑰測出來是 403 Forbidden）。
 期交所自己的「期貨行情」網站（mis.taifex.com.tw）有公開的報價介面，日盤、夜盤都有。
 
-測的項目：
-1. 日盤（MarketType=0）與夜盤（MarketType=1）各問一次，看有沒有回資料、台指期近月是哪一檔
-2. 連續取樣：每隔幾秒問一次，看價格與時間有沒有跟著更新、成功率、回應時間
-3. 「台指近月全」＝近月合約的夜盤（15:00～05:00）＋日盤（08:45～13:45）合計；近月用到期日判斷（每月第 3 個星期三）
-4. 回傳的欄位名稱（我先猜 CLastPrice、CTime…，不對的話把欄位印出來，下一版再修正）
-5. 備援：萬一被擋，記錄 HTTP 狀態碼（有人回報 Cloudflare 會對部分主機回 520）
+輸出順序：
+1. 【結果】台指近全（目前交易日）合計
+2. 【計算方式】每一步怎麼算的
+3. 日盤、夜盤的報價明細
+4. 連續取樣、回應狀態
+
+交易日規則（期交所）：
+- 日盤 08:45～13:45（平日）屬於當天的交易日
+- 夜盤 15:00 開始，算到「下一個交易日」；05:00 前的資料屬於前一晚的夜盤
+- 所以「台指近全」＝ 夜盤（前一個平日 15:00 起）＋ 日盤（交易日當天 08:45～15:00）
+- 國定假日沒有處理（遇到連假要自己確認）
 """
-import json
 import os
 import time
 from datetime import datetime, timedelta
@@ -89,11 +93,6 @@ def month_list(qs):
     return sorted(out_, key=lambda x: -x[1])
 
 
-def total_volume(qs):
-    """所有月份合計（看盤軟體的「台指全」通常是這個數字）"""
-    return sum(v for _, v, _ in month_list(qs))
-
-
 MONTH_CODE = "ABCDEFGHIJKL"          # 1 月＝A … 12 月＝L
 
 
@@ -134,6 +133,7 @@ def pick_near(qs):
         hit = [q for q in cand if str(q.get("SymbolID", "")).startswith(nb[1])]
         if hit:
             return hit[0]
+
     def vol(q):
         try:
             return float(str(q.get("CTotalVolume") or 0).replace(",", ""))
@@ -170,30 +170,86 @@ def ym(sid):
     return f"{ex.year}年{ex.month}月台指期" if ex else sid
 
 
+def next_weekday(d):
+    d += timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+def prev_weekday(d):
+    d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def trading_date(t):
+    """t 這個時間屬於哪一個交易日（不處理國定假日）"""
+    hm = (t.hour, t.minute)
+    if hm >= (15, 0):                     # 夜盤開始，算到下一個交易日
+        return next_weekday(t.date())
+    if hm < (5, 0):                       # 05:00 前是前一晚的夜盤
+        return next_weekday(t.date() - timedelta(days=1))
+    return t.date() if t.weekday() < 5 else next_weekday(t.date())
+
+
+def day_open(t):
+    """日盤是否計入：平日 08:45～15:00（13:45 收盤後的資料也算當天）"""
+    return t.weekday() < 5 and (8, 45) <= (t.hour, t.minute) < (15, 0)
+
+
+def show(label, r):
+    if r["near"]:
+        n = r["near"]
+        line(f"{label}　{ym(n.get('SymbolID', ''))}")
+        line(f"　成交 {num(n.get('CLastPrice'))}｜{hms(n.get('CTime'))}｜累計量 {num(n.get('CTotalVolume'))}")
+    else:
+        line(f"{label}　失敗 HTTP {r['code']}")
+
+
+# ---------- 1. 先抓資料（不輸出） ----------
 try:
     SESS.get(PAGE, headers={"User-Agent": HEAD["User-Agent"]}, timeout=15)       # 先逛一下首頁拿 cookie
 except Exception as e:
-    line(f"首頁連線失敗：{e!r}"[:120])
+    print(f"首頁連線失敗：{e!r}"[:120])
 
-TOT = {}                                  # 近月合約在各盤別的累計量，最後加總成「近月全」
-NEAR = {}
+raw = {}
 for label, m in (("日盤", 0), ("夜盤", 1)):
     code, j, dt = fetch(m)
     qs = quotes(j) if isinstance(j, dict) else []
-    near = pick_near(qs) if qs else None
-    if near:
-        line(f"{'📈' if m == 0 else '🌙'} {label}　{ym(near.get('SymbolID', ''))}")
-        line(f"　成交 {num(near.get('CLastPrice'))}｜{hms(near.get('CTime'))}｜量 {num(near.get('CTotalVolume'))}")
-    else:
-        line(f"{label}　失敗 HTTP {code}")
-    nb = near_prefix(qs) if qs else None
-    if nb:
-        NEAR.setdefault("prefix", nb[1])
-        TOT[label] = near_volume(qs, nb[1])
-        NEAR.setdefault("expiry", nb[0])
+    raw[m] = {"label": label, "code": code, "qs": qs,
+              "near": pick_near(qs) if qs else None, "nb": near_prefix(qs) if qs else None}
 
-# 連續取樣：近月合約的價格與時間有沒有更新（日盤）
-line(f"\n【連續取樣 {SAMPLES} 次】")
+# ---------- 2. 算結果 ----------
+T = trading_date(now)                     # 目前交易日
+prev = prev_weekday(T)                    # 夜盤開始的那一天（前一個平日）
+nb = raw[1]["nb"] or raw[0]["nb"]         # 近月合約
+prefix = nb[1] if nb else None
+counted = day_open(now)
+night_vol = near_volume(raw[1]["qs"], prefix) if prefix else 0
+day_vol = near_volume(raw[0]["qs"], prefix) if (prefix and counted) else 0
+total = night_vol + day_vol
+exp_txt = f"{nb[0].year}年{nb[0].month}月" if nb else "近月"
+
+# ---------- 3. 輸出：結果在最上面 ----------
+line(f"【結果】台指近全（交易日 {T:%m/%d}）：{total:,} 口")
+line(f"　夜盤（{prev:%m/%d} 15:00 起）{night_vol:,} 口")
+line(f"　日盤（{T:%m/%d}）" + (f"{day_vol:,} 口" if counted else "還沒開盤，不計入"))
+line("")
+line("【計算方式】")
+line(f"1. 現在 {now:%H:%M}，屬於交易日 {T:%m/%d}（15:00 後換成下一個交易日；05:00 前算前一晚的夜盤）")
+line(f"2. 夜盤：{exp_txt}台指期的夜盤累計量 {night_vol:,} 口，從 {prev:%m/%d} 15:00 開始，算到 {T:%m/%d}")
+line(f"3. 日盤：只有平日 08:45～15:00 才計入，現在{'計入' if counted else '不計入'}")
+line(f"4. 合計 ＝ 夜盤 {night_vol:,} ＋ 日盤 {day_vol:,} ＝ {total:,}")
+line("5. 國定假日沒有處理，假日前後要自己確認")
+line("")
+line("【報價明細】")
+show("📈 日盤", raw[0])
+show("🌙 夜盤", raw[1])
+
+# ---------- 4. 連續取樣 ----------
+line(f"\n【連續取樣 {SAMPLES} 次（日盤）】")
 seen = []
 for i in range(SAMPLES):
     code, j, dt = fetch(0)
@@ -205,13 +261,9 @@ for i in range(SAMPLES):
         line(f"{i + 1}. 沒有資料 HTTP {code}")
     if i < SAMPLES - 1:
         time.sleep(GAP)
-line("✅ 有在更新" if len(set(seen)) > 1 else "⚠️ 沒有變動（休市或盤間沒成交，要在交易時間再測）")
+line("✅ 有在更新" if len(set(seen)) > 1 else "⚠️ 沒有變動（休市、盤間沒成交，或目前是夜盤時段，要在交易時間再測）")
 
-if TOT:
-    ex = NEAR["expiry"]
-    line(f"\n【近月全】{ex.year}年{ex.month}月台指期（{ex:%m/%d} 到期）")
-    line(f"合計：{sum(TOT.values()):,.0f} 口")
-
+# ---------- 5. 狀態 ----------
 times = stats["times"]
 line(f"\n成功 {stats['ok']}／失敗 {stats['fail']}｜狀態碼 {stats['codes']}")
 if times:
