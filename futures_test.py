@@ -7,13 +7,14 @@
 測的項目：
 1. 日盤（MarketType=0）與夜盤（MarketType=1）各問一次，看有沒有回資料、台指期近月是哪一檔
 2. 連續取樣：每隔幾秒問一次，看價格與時間有沒有跟著更新、成功率、回應時間
-3. 回傳的欄位名稱（我先猜 CLastPrice、CTime…，不對的話把欄位印出來，下一版再修正）
-4. 備援：萬一被擋，記錄 HTTP 狀態碼（有人回報 Cloudflare 會對部分主機回 520）
+3. 「台指近月全」＝近月合約的夜盤（15:00～05:00）＋日盤（08:45～13:45）合計；近月用到期日判斷（每月第 3 個星期三）
+4. 回傳的欄位名稱（我先猜 CLastPrice、CTime…，不對的話把欄位印出來，下一版再修正）
+5. 備援：萬一被擋，記錄 HTTP 狀態碼（有人回報 Cloudflare 會對部分主機回 520）
 """
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -73,10 +74,66 @@ def quotes(j):
         return []
 
 
+def month_list(qs):
+    """所有月份的台指期（不含價差合約 /），回傳 [(合約, 累計量, 成交價)]，依成交量由大到小"""
+    out_ = []
+    for q in qs:
+        sid = str(q.get("SymbolID", ""))
+        if not sid.startswith("TXF") or "/" in sid:
+            continue
+        try:
+            v = float(str(q.get("CTotalVolume") or 0).replace(",", ""))
+        except Exception:
+            v = 0
+        out_.append((sid, v, q.get("CLastPrice")))
+    return sorted(out_, key=lambda x: -x[1])
+
+
+def total_volume(qs):
+    """所有月份合計（看盤軟體的「台指全」通常是這個數字）"""
+    return sum(v for _, v, _ in month_list(qs))
+
+
+MONTH_CODE = "ABCDEFGHIJKL"          # 1 月＝A … 12 月＝L
+
+
+def expiry_of(sid):
+    """TXFK6-F → 2026/11 合約的到期日（每月第 3 個星期三）；看不懂就回 None"""
+    try:
+        month = MONTH_CODE.index(sid[3]) + 1
+        year = now.year // 10 * 10 + int(sid[4])
+        if year < now.year - 1:
+            year += 10
+    except Exception:
+        return None
+    first = datetime(year, month, 1, tzinfo=TZ)
+    wed = [first + timedelta(days=i) for i in range(21) if (first + timedelta(days=i)).weekday() == 2]
+    return wed[2].date()
+
+
+def near_prefix(qs):
+    """近月合約的前綴（例：TXFK6）：還沒到期的合約裡到期日最近的那一個。
+    到期日當天 13:30 結算後就算過期（夜盤開始就換下一個月）"""
+    best = None
+    for sid, _, _ in month_list(qs):
+        ex = expiry_of(sid)
+        if ex is None:
+            continue
+        if ex < now.date() or (ex == now.date() and (now.hour, now.minute) >= (13, 30)):
+            continue
+        if best is None or ex < best[0]:
+            best = (ex, sid[:5])
+    return best                           # (到期日, 前綴) 或 None
+
+
 def pick_near(qs):
-    """近月：SymbolID 以「TXF」開頭、結尾是「-F」（日盤）或「-M」（夜盤），挑成交量最大的月份合約"""
+    """近月合約那一筆；判斷不出來就退回「成交量最大」"""
+    nb = near_prefix(qs)
     cand = [q for q in qs if str(q.get("SymbolID", "")).startswith("TXF") and "/" not in str(q.get("SymbolID", ""))]
-    cand = [q for q in cand if not str(q.get("SymbolID", "")).startswith("TXFR")] or cand
+    if nb:
+        hit = [q for q in cand if str(q.get("SymbolID", "")).startswith(nb[1])]
+        if hit:
+            return hit[0]
     def vol(q):
         try:
             return float(str(q.get("CTotalVolume") or 0).replace(",", ""))
@@ -85,11 +142,21 @@ def pick_near(qs):
     return max(cand, key=vol) if cand else None
 
 
+def near_volume(qs, prefix):
+    """指定近月（前綴）的累計量（不含價差）"""
+    for sid, v, _ in month_list(qs):
+        if sid.startswith(prefix):
+            return v
+    return 0
+
+
 try:
     SESS.get(PAGE, headers={"User-Agent": HEAD["User-Agent"]}, timeout=15)       # 先逛一下首頁拿 cookie
 except Exception as e:
     line(f"首頁連線失敗：{e!r}"[:120])
 
+TOT = {}                                  # 近月合約在各盤別的累計量，最後加總成「近月全」
+NEAR = {}
 for label, m in (("日盤", 0), ("夜盤", 1)):
     line(f"\n【{label}（MarketType={m}）】")
     code, j, dt = fetch(m)
@@ -101,16 +168,23 @@ for label, m in (("日盤", 0), ("夜盤", 1)):
             line("欄位：" + "、".join(list(qs[0].keys())[:25]))
             near = pick_near(qs)
             if near:
-                line(f"主力合約：{near.get('SymbolID')} {near.get('DispCName')}")
+                line(f"近月合約：{near.get('SymbolID')} {near.get('DispCName')}")
                 line(f"成交 {near.get('CLastPrice')}｜時間 {near.get('CTime')}｜累計量 {near.get('CTotalVolume')}"
                      f"｜開 {near.get('COpenPrice')} 高 {near.get('CHighPrice')} 低 {near.get('CLowPrice')}")
+            months = month_list(qs)
+            line("各月份累計量：" + "、".join(f"{sid} {v:,.0f}" for sid, v, _ in months))
+            nb = near_prefix(qs)
+            if nb:
+                line(f"近月：{nb[1]}（{nb[0]:%m/%d} 到期）")
+                NEAR.setdefault("prefix", nb[1])
+                TOT[label] = near_volume(qs, nb[1])
         else:
             line("沒有資料（休市時間，或欄位名稱跟我猜的不一樣）")
     else:
         line(f"失敗：HTTP {code} {str(j)[:120]}")
 
 # 連續取樣：看價格與時間有沒有更新
-line(f"\n【連續取樣 {SAMPLES} 次・日盤主力合約】")
+line(f"\n【連續取樣 {SAMPLES} 次・日盤近月合約】")
 seen = []
 for i in range(SAMPLES):
     code, j, dt = fetch(0)
@@ -123,6 +197,10 @@ for i in range(SAMPLES):
     if i < SAMPLES - 1:
         time.sleep(GAP)
 line("價格或時間有更新" if len(set(seen)) > 1 else "價格與時間都沒變（休市，或盤間沒成交；要在交易時間再測）")
+
+if TOT:
+    line(f"\n【台指近月全】{NEAR.get('prefix', '')}")
+    line(f"合計：{sum(TOT.values()):,.0f} 口")
 
 times = stats["times"]
 line("\n【總結】")
