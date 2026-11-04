@@ -5,7 +5,7 @@
 
 【怎麼增加或修改事件】只改下面的 STATIC（一行一個事件）：
     ("日期", "台灣時間", "名稱", 重要度)
-    重要度：3＝最重要（會標 ⭐）、2＝重要、1＝一般
+    重要度：3＝非常重要（標 ‼️）、2＝重要（標 ❗️）、1＝一般（不標）
     時間不確定就寫 ""。
 改完把 COVERED_UNTIL 改成「事件資料涵蓋到哪一天」，超過那天 App 與晨報會提醒你更新。
 """
@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 WEEKDAY = "一二三四五六日"
+MARK = {3: "‼️", 2: "❗️", 1: ""}      # 重要度 → 標記
 COVERED_UNTIL = date(2026, 12, 31)          # 事件資料只涵蓋到這天；之後要補 2027 年的行程
 
 # 台股休市的平日（用來算「5 個交易日」）。只列已確認的；之後要補（例如 2027 春節）
@@ -149,7 +150,7 @@ def telegram_block(today=None, n=5):
         rows = []
         for lab, its in by_day(items, today):
             rows.append(lab)
-            rows += [f"　{(it[1] or '全天')} {'⭐' if it[3] >= 3 else ''}{it[2]}" for it in its]
+            rows += [f"　{(it[1] or '全天')} {MARK.get(it[3], '')}{it[2]}" for it in its]
         body = "\n".join(rows)
     note = stale_note(today, n)
     return head + "\n" + body + ("\n⚠️ " + note if note else "")
