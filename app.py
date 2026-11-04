@@ -741,8 +741,6 @@ def rec_buttons(prefix, strategy, items, limit=None):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
     st.caption(L("🔴壓＝近 65 交易日第 1 大量當天最高點在現價之上（短線壓力）", "🟢撐＝最低點在現價之下（支撐、出場參考）"))
-    if len(items) > limit:
-        st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
 def absorb_buttons(items, limit=None):
@@ -755,8 +753,6 @@ def absorb_buttons(items, limit=None):
                     unsafe_allow_html=True)
     st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)      # 跟上面的股票空一行
     st.caption(L("量能＝今天量 ÷ 20 日均量", "隔天不破發現日最低，才比較可信"))
-    if len(items) > limit:
-        st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
 def watch_buttons(name, items, limit=None):
@@ -768,8 +764,6 @@ def watch_buttons(name, items, limit=None):
         st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">'
                     f'現價 {px(it["close"])}｜追價點 {px(it["chase"])}（{up:+.1f}%）｜出場價 {px(it["stop1"])}</div>',
                     unsafe_allow_html=True)
-    if len(items) > limit:
-        st.caption(f"還有 {len(items) - limit} 檔未列出")
 
 
 st.divider()
