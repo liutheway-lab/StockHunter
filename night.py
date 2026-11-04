@@ -334,22 +334,16 @@ def absorb_block(items, names, note="", pre=None):
     title = f"*🧺{cfg.ABSORB_NAME}　{len(items)}檔*\n說明（今日帶量先殺後拉）" + note
     shown = items[:MAX_LIST]
     pre = pre or set()
-    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" + ("◆" if h['sym'].split('.')[0] in pre else "")
-              for h in shown]
-    W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    # 數字欄位：每欄右對齊，欄寬取表頭與該欄最寬的值，所以每一列的數字會對齊
-    head = ("現價", "今日最低", "量能")
-    rows = [(fp(h["r"]["close"]), fp(h["r"]["low"]), f"{h['r']['vol_mult']:.1f}倍") for h in shown]
-    cw = [max([_w(head[k])] + [_w(r[k]) for r in rows]) for k in range(3)]
-
-    def rj(t, w):
-        return " " * max(0, round(w - _w(t))) + t
-
-    lines = [_padr("代號 名稱", W) + "".join(" " + rj(head[k], cw[k]) for k in range(3))]
-    for lab, r in zip(labels, rows):
-        lines.append(_padr(lab, W) + "".join(" " + rj(r[k], cw[k]) for k in range(3)))
+    # 表格只放「純半形」的數字欄，名稱放最後一欄：
+    # 中文字在不同手機／電腦的寬度不一樣，放在最後就不會把數字欄推歪（朋友的畫面不會空很大）
+    rows = [(h["sym"].split(".")[0], fp(h["r"]["close"]), fp(h["r"]["low"]), f"{h['r']['vol_mult']:.1f}",
+             names.get(h["sym"], h["sym"].split(".")[0]) + ("◆" if h["sym"].split(".")[0] in pre else ""))
+            for h in shown]
+    cw = [max(len(r[k]) for r in rows) for k in (1, 2, 3)] if rows else [0, 0, 0]
+    lines = [f"{code} {c:>{cw[0]}} {lo:>{cw[1]}} {v:>{cw[2]}}  {nm}" for code, c, lo, v, nm in rows]
     more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
-    legend = (f"\n排序：量能越大、振幅越大越前面"
+    legend = (f"\n欄位：代號、現價、今日最低、量能（倍）、名稱"
+              f"\n排序：量能越大、振幅越大越前面"
               f"\n先殺：當天最低價跌破昨收"
               f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
               f"\n量能＝今天量 ÷ 20 日均量"
@@ -365,7 +359,7 @@ def absorb_block(items, names, note="", pre=None):
             nm = {k.split(".")[0]: v for k, v in names.items()}
             legend += "\n13:00 預判、收盤沒成立：" + "、".join(f"{c} {nm.get(c, '')}".strip() for c in gone)
     links = "　".join(tv_link(h["sym"]) for h in shown)
-    return title + "\n" + code_block(lines, header=True) + legend + more + "\n📊 TradingView 線圖：" + links
+    return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
 
 
 def save_results(mk, hits, names, directory, now, watch=None, absorb=None, pre=None):
