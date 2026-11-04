@@ -158,55 +158,42 @@ except Exception as e:
 TOT = {}                                  # 近月合約在各盤別的累計量，最後加總成「近月全」
 NEAR = {}
 for label, m in (("日盤", 0), ("夜盤", 1)):
-    line(f"\n【{label}（MarketType={m}）】")
     code, j, dt = fetch(m)
-    if isinstance(j, dict):
-        print(label, code, json.dumps(j, ensure_ascii=False)[:800])
-        qs = quotes(j)
-        line(f"HTTP {code}｜RtCode {j.get('RtCode')}｜{len(qs)} 檔｜{dt:.2f} 秒")
-        if qs:
-            line("欄位：" + "、".join(list(qs[0].keys())[:25]))
-            near = pick_near(qs)
-            if near:
-                line(f"近月合約：{near.get('SymbolID')} {near.get('DispCName')}")
-                line(f"成交 {near.get('CLastPrice')}｜時間 {near.get('CTime')}｜累計量 {near.get('CTotalVolume')}"
-                     f"｜開 {near.get('COpenPrice')} 高 {near.get('CHighPrice')} 低 {near.get('CLowPrice')}")
-            months = month_list(qs)
-            line("各月份累計量：" + "、".join(f"{sid} {v:,.0f}" for sid, v, _ in months))
-            nb = near_prefix(qs)
-            if nb:
-                line(f"近月：{nb[1]}（{nb[0]:%m/%d} 到期）")
-                NEAR.setdefault("prefix", nb[1])
-                TOT[label] = near_volume(qs, nb[1])
-        else:
-            line("沒有資料（休市時間，或欄位名稱跟我猜的不一樣）")
+    qs = quotes(j) if isinstance(j, dict) else []
+    near = pick_near(qs) if qs else None
+    if near:
+        line(f"{label}　{near.get('SymbolID')}｜成交 {near.get('CLastPrice')}｜{near.get('CTime')}｜量 {near.get('CTotalVolume')}")
     else:
-        line(f"失敗：HTTP {code} {str(j)[:120]}")
+        line(f"{label}　失敗 HTTP {code}")
+    nb = near_prefix(qs) if qs else None
+    if nb:
+        NEAR.setdefault("prefix", nb[1])
+        TOT[label] = near_volume(qs, nb[1])
+        NEAR.setdefault("expiry", nb[0])
 
-# 連續取樣：看價格與時間有沒有更新
-line(f"\n【連續取樣 {SAMPLES} 次・日盤近月合約】")
+# 連續取樣：近月合約的價格與時間有沒有更新（日盤）
+line(f"\n【連續取樣 {SAMPLES} 次】")
 seen = []
 for i in range(SAMPLES):
     code, j, dt = fetch(0)
     near = pick_near(quotes(j)) if isinstance(j, dict) else None
     if near:
         seen.append((near.get("CLastPrice"), near.get("CTime")))
-        line(f"第 {i + 1} 次：{near.get('CLastPrice')}｜{near.get('CTime')}｜{dt:.2f} 秒")
+        line(f"{i + 1}. {near.get('CLastPrice')}｜{near.get('CTime')}｜{dt:.2f} 秒")
     else:
-        line(f"第 {i + 1} 次：沒有資料 HTTP {code}")
+        line(f"{i + 1}. 沒有資料 HTTP {code}")
     if i < SAMPLES - 1:
         time.sleep(GAP)
-line("價格或時間有更新" if len(set(seen)) > 1 else "價格與時間都沒變（休市，或盤間沒成交；要在交易時間再測）")
+line("✅ 有在更新" if len(set(seen)) > 1 else "⚠️ 沒有變動（休市或盤間沒成交，要在交易時間再測）")
 
 if TOT:
-    line(f"\n【台指近月全】{NEAR.get('prefix', '')}")
+    line(f"\n【台指近月全】{NEAR.get('prefix', '')}（{NEAR['expiry']:%m/%d} 到期）" if NEAR.get("expiry") else f"\n【台指近月全】{NEAR.get('prefix', '')}")
     line(f"合計：{sum(TOT.values()):,.0f} 口")
 
 times = stats["times"]
-line("\n【總結】")
-line(f"成功 {stats['ok']}／失敗 {stats['fail']}｜狀態碼 {stats['codes']}")
+line(f"\n成功 {stats['ok']}／失敗 {stats['fail']}｜狀態碼 {stats['codes']}")
 if times:
-    line(f"回應時間 最快 {min(times):.2f} 秒、最慢 {max(times):.2f} 秒")
+    line(f"回應 最快 {min(times):.2f} 秒、最慢 {max(times):.2f} 秒")
 
 text = "\n".join(out)
 if TOKEN and OWNER:
