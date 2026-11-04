@@ -309,7 +309,8 @@ def check_absorb(df, i):
     if not kinds:
         return None
     return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow,
-            "body": body, "chg": (c / prev - 1) if prev else 0.0, "turnover": float(r["TURN20"])}
+            "body": body, "chg": (c / prev - 1) if prev else 0.0, "turnover": float(r["TURN20"]),
+            "range": (rng / prev) if prev else 0.0}
 
 
 def active_strategies(layer, stab_ok):
@@ -455,7 +456,9 @@ def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **
     r = _result(name, checks, close=E, entry=entry, key=H, peak_date=df.index[pk], leg_start=leg_lo,
                 cons_hi=upper, cons_lo=lower, attack=bool(broke), pre_ok=pre_ok, chase_px=chase_px, n_cons=n_cons,
                 target=target, stop_after2=tick(H * (1 - cfg.ATTACK_STOP2_PCT)), status=status,
-                date=df.index[i], turnover=float(row["TURN20"]), **extra)
+                date=df.index[i], turnover=float(row["TURN20"]),
+                q={"gain": gain, "pos": pos, "vr": vr, "n_cons": n_cons,
+                   "depth": (1 - lower / H) if n_cons >= 1 else None}, **extra)
     r["stop1"], r["stop1_note"] = attack_stop(r, entry)
     return r
 
@@ -497,7 +500,10 @@ def check_pullback(df, i, ratios=None, max_consol=None):
          f"盤整均量 = 前高那天的 {_ratio(cons_vol, v[pk]) * 100:.0f}%（需 ≤ {cfg.PB_CONS_VOL_RATIO * 100:.0f}%）"
          if cons_vol == cons_vol else "還沒有盤整區"),
     ]
-    return _attack(df, i, pk, S, "pullback", base, quality, max_consol=max_consol)
+    r = _attack(df, i, pk, S, "pullback", base, quality, max_consol=max_consol)
+    if r.get("q") is not None and cons_vol == cons_vol and v[pk] > 0:
+        r["q"]["cons_ratio"], r["q"]["cons_limit"] = cons_vol / v[pk], cfg.PB_CONS_VOL_RATIO
+    return r
 
 
 def check_breakout(df, i):
@@ -532,7 +538,9 @@ def check_breakout(df, i):
     return _result("breakout", checks, close=close, key=float(row["High"]), neckline=neck,
                    stop1=stop1, target=tick(E * (1 + cfg.BO_TARGET_PCT)),
                    stop1_note=f"頸線下 2%（{tick(neck * 0.98)}）與買價下 {cfg.BO_STOP_PCT * 100:.0f}%（{tick(E * (1 - cfg.BO_STOP_PCT))}）取較低",
-                   date=df.index[i], turnover=float(row["TURN20"]))
+                   date=df.index[i], turnover=float(row["TURN20"]),
+                   q={"volx": volx, "rise": rise, "box": box_lo / box_hi if box_hi > 0 else 0.0,
+                      "over": close / neck - 1 if neck > 0 else 0.0})
 
 
 def check_dry(df, i, mkt=None):
@@ -554,6 +562,7 @@ def check_dry(df, i, mkt=None):
          f"3日均量 = 20日均量的 {_ratio(vol3, mav20) * 100:.0f}%（需 ≤ {cfg.DRY_VOL_RATIO * 100:.0f}%）"),
         (f"{k}日不破前低", low3 > L, f"最近{k}日最低 {_fp(low3)}，前低 {_fp(L)}"),
     ]
+    q = {"vol_ratio": _ratio(vol3, mav20), "hold": low3 / L - 1 if L > 0 else 0.0}
     rs_ok, rs_detail = False, "大盤資料不足，無法比較"
     if mkt is not None and len(mkt):
         d = df.index[i]
@@ -566,6 +575,8 @@ def check_dry(df, i, mkt=None):
                 peak = seg.cummax()
                 s_dd = float(((peak - seg) / peak).max())                    # 同一段期間的最大回檔（中間跌很深再反彈也算）
                 rs_ok = bool(s_dd <= cfg.DRY_RS_RATIO * m_drop)
+                if m_drop > 0:
+                    q["rs"] = s_dd / (cfg.DRY_RS_RATIO * m_drop)          # 越小越抗跌（<1 才過關）
                 rs_detail = (f"大盤自 {m_date:%m/%d} 高點跌 {m_drop * 100:.1f}%，個股同期最大回檔 {s_dd * 100:.1f}%"
                              f"（需 ≤ 大盤的 {cfg.DRY_RS_RATIO * 100:.0f}%）")
     checks.append(("比大盤抗跌", rs_ok, rs_detail))
@@ -600,7 +611,7 @@ def check_dry(df, i, mkt=None):
             t2, t2_note = r2, f"買價＋{cfg.DRY_T2_R:g}倍風險"
     return _result("dry", checks, close=close, key=key, prior_low=L, stop1=stop1, target=target,
                    target2=t2, target2_note=t2_note,
-                   stop1_note=f"跌破近 {cfg.DRY_STOP_DAYS} 日最低點 {stop1}", date=df.index[i], turnover=float(row["TURN20"]))
+                   stop1_note=f"跌破近 {cfg.DRY_STOP_DAYS} 日最低點 {stop1}", date=df.index[i], turnover=float(row["TURN20"]), q=q)
 
 
 def check_flag(df, i, max_consol=None):
@@ -659,7 +670,13 @@ def check_flag(df, i, max_consol=None):
          bool(len(cons_close) and cons_vol <= cfg.FLAG_VOL_RATIO * burst_vol),
          f"盤整均量 = 噴出期均量的 {_ratio(cons_vol, burst_vol) * 100:.0f}%"),
     ]
-    return _attack(df, i, pk, S, "flag", base, quality, max_consol=max_consol, burst_start=S, burst_gain=G)
+    r = _attack(df, i, pk, S, "flag", base, quality, max_consol=max_consol, burst_start=S, burst_gain=G)
+    if r.get("q") is not None:
+        if len(cons_close) and burst_vol > 0 and cons_vol == cons_vol:
+            r["q"]["cons_ratio"], r["q"]["cons_limit"] = cons_vol / burst_vol, cfg.FLAG_VOL_RATIO
+        if len(cons_close) and G > 0:
+            r["q"]["pullback"] = max(0.0, (H - min_close) / G)       # 盤整期間回檔了噴出漲幅的幾成（越小越好）
+    return r
 
 
 def watch_tomorrow(raw, name):
@@ -766,6 +783,67 @@ def plan_for(name, r, ratios=None, split=None):
     return ladder_plan(r["close"], r["key"], r["stop1"], r["target"], ratios,
                        key_label=f"突破{labels[name]}", stop1_note=r.get("stop1_note", ""),
                        first_target=(name == "dry"), target2=r.get("target2"), target2_note=r.get("target2_note", ""))
+
+
+# =====================================================
+# 4.5 排序：越符合規則的越前面
+# =====================================================
+def _m(x, lo, hi):
+    """x 從 lo（剛好過關）到 hi（非常漂亮）線性換成 0～1，超過的不再加分"""
+    if x is None or x != x or hi == lo:
+        return 0.0
+    return min(1.0, max(0.0, (x - lo) / (hi - lo)))
+
+
+def plan_rr(plan):
+    """風報比＝（第一目標 − 買價）÷（買價 − 出場價）。算不出來回傳 None"""
+    try:
+        e, s1, t = plan["e"], plan["stop1"], plan["targets"][0][1]
+        return (t - e) / (e - s1) if e > s1 else None
+    except Exception:
+        return None
+
+
+def rank_score(name, r, plan=None, watch=False):
+    """符合程度 0～100。入選的股票都已過關，這裡看『每個條件過得多漂亮』：
+    每一項從『剛好過關＝0』算到『很漂亮＝1』，平均後再加上風報比。
+    watch=True 是明日追價名單（今天還沒攻擊，攻擊日那幾項不算，改看追價點離現價多近）。"""
+    q = r.get("q") or {}
+    parts = []
+    if name in ("pullback", "flag"):
+        if not watch:
+            parts += [_m(q.get("gain"), cfg.ATTACK_MIN_GAIN, 0.10),                       # 漲幅 5% → 10%
+                      _m(q.get("pos"), cfg.ATTACK_CLOSE_POS, 1.0),                         # 收盤位置 67% → 100%
+                      _m(q.get("vr"), cfg.ATTACK_VOL_VS_PEAK, 1.8)]                        # 量 = 前高的 0.9 倍 → 1.8 倍
+        if q.get("cons_ratio") is not None:
+            parts.append(_m(q["cons_limit"] - q["cons_ratio"], 0.0, q["cons_limit"]))      # 盤整越縮量越好
+        if q.get("depth") is not None:
+            parts.append(_m(cfg.ATTACK_MAX_DEPTH - q["depth"], 0.0, cfg.ATTACK_MAX_DEPTH))  # 盤整越淺越好
+        if q.get("pullback") is not None:
+            parts.append(_m(cfg.FLAG_MAX_PULLBACK - q["pullback"], 0.0, cfg.FLAG_MAX_PULLBACK))
+        if watch and r.get("chase_px") and r.get("close"):
+            parts.append(_m(cfg.CHASE_MAX_DIST - (r["chase_px"] / r["close"] - 1), 0.0, cfg.CHASE_MAX_DIST))
+    elif name == "breakout":
+        parts += [_m(q.get("volx"), cfg.BO_VOL_MULT, 4.0),                                 # 爆量 2 倍 → 4 倍
+                  _m(cfg.BO_MAX_RISE - q.get("rise", cfg.BO_MAX_RISE), 0.0, cfg.BO_MAX_RISE),   # 離低點漲幅越小越好
+                  _m(q.get("box"), cfg.BO_BOX_RATIO, 1.0),                                 # 盤整越窄越好
+                  _m(q.get("over"), 0.0, 0.05)]                                            # 突破頸線的幅度
+    elif name == "dry":
+        parts += [_m(cfg.DRY_VOL_RATIO - q.get("vol_ratio", cfg.DRY_VOL_RATIO), 0.0, cfg.DRY_VOL_RATIO),   # 越量縮越好
+                  _m(q.get("hold"), 0.0, 0.05)]                                            # 離前低越遠越好
+        if q.get("rs") is not None:
+            parts.append(_m(1.0 - q["rs"], 0.0, 0.8))                                      # 比大盤越抗跌越好
+    base = sum(parts) / len(parts) if parts else 0.0
+    rr = plan_rr(plan) if plan else None
+    rr_part = _m(rr, 1.0, 3.0) if rr is not None else 0.0                                  # 風報比 1 → 3
+    return round((0.7 * base + 0.3 * rr_part) * 100, 1)
+
+
+def rank_absorb(a):
+    """恐慌承接的排序分數：量能越大、振幅越大、影線越長（或紅 K 實體越大）越前面"""
+    shape = max(_m(a["shadow"], cfg.STAB_SHADOW, 1.0), _m(a["body"], cfg.STAB_RED_BODY, 1.0))   # 黑 K 的 body 是負的，自然得 0
+    parts = [_m(a["vol_mult"], cfg.ABSORB_VOL_MULT, 4.0), _m(a.get("range"), cfg.ABSORB_MIN_RANGE, 0.15), shape]
+    return round(sum(parts) / len(parts) * 100, 1)
 
 
 # =====================================================
