@@ -170,7 +170,7 @@ def plain(t):
     return html.unescape(re.sub(r"</?(b|pre|code|i)>", "", t))
 
 
-HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪|▲|▼|－)\s*(\d{4,6})\s+(\S+)\s+([\d,.]+) (張|股)(?:・已持股)?(・已加碼)?$")
+HEAD_RE = re.compile(r"^(?:🔴|🟢|⚪|▲|▼|－)\s*(\d{4,6})\s+(\S+)\s+(?:已持股\s*)?([\d,.]+) (張|股)(?:・已持股)?(・已加碼)?$")   # 新格式「已持股 2 張」，舊格式「2 張・已持股」都讀得懂
 FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出場 ([\d,.]+|—)")),
              ("target", re.compile(r"(?:壓力|目標) ([\d,.]+|—)")), ("sup", re.compile(r"支撐 ([\d,.]+|—)")),
              ("key", re.compile(r"前高 ([\d,.]+|—)")))
@@ -329,7 +329,7 @@ def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
             if x["stop"]:
                 d = (x["stop"] / p - 1) * 100
                 stop_l += f"　距出場 {sg(d)}{abs(d):.1f}%"
-        lines += ["", f"{lamp} {code} {x['name']}　{fmt_qty(x['shares'])}・已持股{'・已加碼' if x['added'] else ''}",
+        lines += ["", f"{lamp} {code} {x['name']}　已持股 {fmt_qty(x['shares'])}{'・已加碼' if x['added'] else ''}",
                   now_l, avg_l, stop_l]
         if any(x.get(k) is not None for k in ("sup", "target", "key")):
             lines.append(f"支撐 {_n(x.get('sup'))}　壓力 {_n(x['target'])}　前高 {_n(x['key'])}")
