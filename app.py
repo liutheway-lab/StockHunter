@@ -1251,6 +1251,9 @@ if target:
             foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
                      lambda: stock_bt_body(code, sfx_bt, capital), default=False,
                      status="用你的資金比例，模擬這檔過去每一次訊號")
+            if st.button("⬆️ 回到今日推薦", key="back_to_list_bottom", use_container_width=True):
+                st.session_state["_scroll_back"] = st.session_state["target"].get("code", "")
+                st.rerun()
 
 # 整頁跑完：拿掉載入卡片，之後切換功能不再出現
 _splash.empty()
