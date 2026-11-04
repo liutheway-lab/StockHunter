@@ -734,12 +734,35 @@ def watch_buttons(name, items, limit=15):
 
 
 st.divider()
-st.subheader("📅 重大事件")
+st.subheader("🔔 重大事件")
 if events is None:
     st.caption("需要上傳 events.py 才會顯示")
 else:
+    import html as _html
     st.caption(L("未來 5 個交易日｜台灣時間", "‼️＝非常重要、❗️＝重要"))
-    st.markdown("  \n".join(events.event_lines()))
+    _rows = events.event_rows()
+    if not _rows:
+        st.markdown("沒有列入的重大事件")
+    else:
+        _tr = "".join(
+            f'<tr><td class="ev-d">{_html.escape(r["date"])}</td>'
+            f'<td class="ev-t">{_html.escape(r["time"])}</td>'
+            f'<td class="ev-m">{r["mark"]}</td>'
+            f'<td class="ev-n">{_html.escape(r["name"])}</td></tr>'
+            for r in _rows)
+        st.markdown(
+            '<style>'
+            '.ev{width:100%;border-collapse:collapse;font-size:.95rem;line-height:1.35}'
+            '.ev th{font-weight:500;opacity:.55;text-align:left;padding:.35rem .5rem;'
+            'border-bottom:1px solid rgba(128,128,128,.35);white-space:nowrap}'
+            '.ev td{padding:.5rem .5rem;border-bottom:1px solid rgba(128,128,128,.15);vertical-align:middle}'
+            '.ev .ev-d{white-space:nowrap;font-weight:600;width:6.5em}'
+            '.ev .ev-t{white-space:nowrap;font-variant-numeric:tabular-nums;opacity:.8;width:4.2em}'
+            '.ev .ev-m{width:1.6em;text-align:center}'
+            '</style>'
+            '<table class="ev"><thead><tr><th>日期</th><th>時間</th><th></th><th>事件</th></tr></thead>'
+            f'<tbody>{_tr}</tbody></table>',
+            unsafe_allow_html=True)
     if events.stale_note():
         st.warning(events.stale_note())
 
@@ -790,7 +813,7 @@ else:
                      lambda name=name, items=items: rec_buttons("obs", name, items))
         for name in obs_wl:                                        # 盤整條件成立、但大盤不適用的「明天可能的追價點」
             items = wl[name]
-            foldable(f"obswl_{name}", f"{cfg.STRATEGY_NAMES[name]}・明天可能的追價點｜{len(items)} 檔",
+            foldable(f"obswl_{name}", f"{cfg.STRATEGY_NAMES[name]}｜明天可能的追價點｜{len(items)} 檔",
                      lambda name=name, items=items: watch_buttons(name, items))
 
     ab_list = scan.get("absorb") or []
