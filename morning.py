@@ -90,9 +90,100 @@ def get_quote_fut(symbol):
     return curr, prev, idx[k]
 
 
+# ── 亞洲現貨指數（日經、韓國綜合）：Yahoo 的日線偶爾會漏掉某一天（例如 11/03），
+#    直接拿「日線最後兩筆」會把更早的收盤當成前收，漲跌就整個錯掉。
+#    做法：日線 + 5 分 K 一起看，每天取最後一筆當收盤；再檢查「前一個交易日」有沒有在資料裡。
+IDX_TZ = {"^N225": "Asia/Tokyo", "^KS11": "Asia/Seoul"}
+IDX_HOLIDAYS = {          # 該市場休市的平日（只要寫會影響「缺資料」判斷的日子；寫漏了頂多多一個警示）
+    "^N225": {"2026-11-03", "2026-11-23", "2026-12-31", "2027-01-01", "2027-01-04", "2027-01-11", "2027-02-11", "2027-02-23"},
+    "^KS11": {"2026-12-25", "2026-12-31", "2027-01-01"},
+}
+SUSPECT = {}              # {代號: 說明}：前收可能缺資料，不列入分數
+NAVER_URL = "https://m.stock.naver.com/api/index/KOSPI/basic"      # 韓國 Naver 證券：KOSPI 現價與前日比
+
+
+def _naver_kospi():
+    """備援：Naver 的 KOSPI 即時報價（現價、前日比一次給）。回傳 (現價, 前收, 時間)；數字對不上就丟錯誤"""
+    r = requests.get(NAVER_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+    r.raise_for_status()
+    j = r.json()
+    curr, diff, ratio = _num(j.get("closePrice")), _num(j.get("compareToPreviousClosePrice")), _num(j.get("fluctuationsRatio"))
+    if curr is None or diff is None:
+        raise ValueError("Naver 欄位缺少")
+    cd = str((j.get("compareToPreviousPrice") or {}).get("code", ""))
+    if cd in ("1", "2"):
+        down = False
+    elif cd in ("4", "5"):
+        down = True
+    else:
+        down = bool(ratio is not None and ratio < 0) or diff < 0
+    d = -abs(diff) if down else abs(diff)
+    prev = curr - d
+    if prev <= 0 or (ratio is not None and abs(abs(d) / prev * 100 - abs(ratio)) > 0.1):
+        raise ValueError("Naver 數字對不上")
+    t = j.get("localTradedAt")
+    ts = pd.Timestamp(t) if t else pd.Timestamp.now(tz="Asia/Seoul")
+    when = ts.tz_localize(None) if ts.tzinfo is None else ts.tz_convert("Asia/Seoul").tz_localize(None)
+    print("Naver KOSPI：", curr, "前收", round(prev, 2), "時間", when)
+    return curr, prev, when
+
+
+def get_quote_index(symbol):
+    """日經／韓國綜合：回傳 (最新價, 前收, 最新資料日期)。"""
+    tz = IDX_TZ[symbol]
+    d = yf.Ticker(symbol).history(period="10d", interval="1d").dropna(subset=["Close"])
+    closes = {t.date(): float(c) for t, c in zip(d.index, d["Close"])}           # 日線的日期已經是當地日期
+    fives = {}
+    try:
+        m = yf.Ticker(symbol).history(period="5d", interval="5m").dropna(subset=["Close"])
+        if len(m):
+            mi = m.index.tz_convert(tz) if m.index.tz is not None else m.index.tz_localize("UTC").tz_convert(tz)
+            for t, c in zip(mi, m["Close"]):                                   # 時間由早到晚，同一天最後一筆就是當天收盤（盤中＝最新價）
+                fives[t.date()] = float(c)
+    except Exception as e:
+        print(symbol, "5 分 K 抓不到：", repr(e))
+    print(symbol, "日線：", [(f"{k:%m/%d}", round(v, 2)) for k, v in list(closes.items())[-4:]],
+          "｜5分K每天最後一筆：", [(f"{k:%m/%d}", round(v, 2)) for k, v in list(fives.items())[-4:]])
+    if not closes and not fives:
+        raise ValueError("沒有資料")
+    dlast, mlast = max(closes) if closes else None, max(fives) if fives else None
+    if mlast is not None and (dlast is None or mlast > dlast):
+        cur_date, curr = mlast, fives[mlast]
+    else:
+        cur_date, curr = dlast, closes[dlast]
+    merged = dict(fives)
+    merged.update(closes)                                                      # 同一天日線優先；日線漏掉的那天用 5 分 K 補
+    olds = [k for k in merged if k < cur_date]
+    if not olds:
+        raise ValueError("找不到前一個交易日")
+    prev_date = max(olds)
+    prev = merged[prev_date]
+    exp = cur_date - timedelta(days=1)                                         # 理論上的前一個交易日：往前跳過週末與休市日
+    while exp.weekday() >= 5 or f"{exp:%Y-%m-%d}" in IDX_HOLIDAYS.get(symbol, ()):
+        exp -= timedelta(days=1)
+    SUSPECT.pop(symbol, None)
+    if prev_date < exp:
+        SUSPECT[symbol] = f"缺 {exp:%m/%d} 收盤"
+        print(symbol, "⚠️ 前一個交易日", exp, "不在資料裡，最近一筆是", prev_date)
+        if symbol == "^KS11":
+            try:
+                c2, p2, w2 = _naver_kospi()
+                SUSPECT.pop(symbol, None)
+                return c2, p2, pd.Timestamp(w2)
+            except Exception as e:
+                print("Naver 備援失敗：", repr(e))
+    print(symbol, f"→ 最新 {cur_date:%m/%d} {curr:,.2f}｜前收 {prev_date:%m/%d} {prev:,.2f}")
+    return curr, prev, pd.Timestamp(cur_date)
+
+
 def get_quote(symbol):
     """回傳 (最新價, 前收, 最新資料日期)。
     期貨用 get_quote_fut（對前一盤收盤，基準時間見 FUT_BASE）；失敗或其他商品，用日線最後兩筆（點數與百分比必定一致）。"""
+    if symbol in IDX_TZ:
+        try:
+            return get_quote_index(symbol)
+        except Exception as e:
+            print(f"{symbol} 專用抓法失敗，改用日線：", repr(e))
     if symbol.endswith("=F"):
         try:
             return get_quote_fut(symbol)
@@ -272,6 +363,10 @@ def run():
                 pcts.pop(sym, None)                     # 舊資料不拿來算今天的結論
                 why = "無新資料" if sym.endswith("=F") else "休市"
                 notes.append(f"※ {label}{why}（停在 {d:%m/%d}）")
+        for label, sym, curr, prev, d in rows:
+            if sym in SUSPECT and curr is not None:
+                pcts.pop(sym, None)                     # 前收可能缺資料，數字不可信，不拿來算今天的結論
+                notes.append(f"※ {label}前收資料{SUSPECT[sym]}，不列入分數")
         head = f"*{title}*"
         if gdate:
             head += f"　{gdate:%m/%d}"
@@ -283,7 +378,7 @@ def run():
             if curr is None:
                 lines.append(f"⚠️ {pad(label)} 抓不到")
             else:
-                lines.append(fmt_row(label, sym, curr, prev))
+                lines.append(fmt_row(label, sym, curr, prev, " ⚠️" if sym in SUSPECT else ""))
         blocks.append(head + "\n" + code(lines) + ("\n" + "\n".join(notes) if notes else ""))
 
     top = [
@@ -303,10 +398,18 @@ def run():
     if now.weekday() >= 5:
         concl += "\n（週末資料，僅供參考）"
 
+    try:                                                # 近 5 個交易日重大事件（events.py）；失敗不影響早報
+        import events
+        cal = events.telegram_block(today)
+    except Exception as e:
+        print("事件日曆失敗：", repr(e))
+        cal = ""
+
     report = (
         "\n".join(top) + f"\n{LINE}\n"
         + concl + f"\n{LINE}\n"
         + "\n".join(blocks)
+        + (f"\n{LINE}\n" + cal if cal else "")
         + f"\n{LINE}\n"
         "⏰ 08:45 台指期開盤　09:00 現貨開盤"
     )
