@@ -1,4 +1,4 @@
-"""night.py — 夜間個股掃描（台灣時間 21:55 開始，約 15 分鐘跑完）
+"""night.py — 收盤後個股掃描（台灣時間 14:35 開始，資料沒更新會每 5 分鐘再抓，最多等到 15:15）
 流程：加權指數 → 判斷大盤五層 → 依層級決定啟用哪些策略 → 掃描全上市櫃 → Telegram 通知。
 沒有符合的股票也會發訊息（確認系統有在跑）。
 所有策略數字都在 config.py。
@@ -418,6 +418,20 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None, pre=N
         json.dump({"date": f"{mk['date']:%Y-%m-%d}", "stocks": base}, f, ensure_ascii=False, separators=(",", ":"))
 
 
+def wait_market(now, max_wait_min=40, step_min=5):
+    """收盤後資料不一定馬上更新：資料日不是今天，就每 5 分鐘再抓一次，最多等 40 分鐘。
+    等不到就用最新的（報告會標示「資料為最近交易日」）。週末不等"""
+    import time
+    tries = max_wait_min // step_min
+    for i in range(tries + 1):
+        mk = st.market_summary(fetch_market())
+        if mk["date"].date() == now.date() or now.weekday() >= 5 or i == tries:
+            return mk
+        print(f"大盤資料還是 {mk['date']:%m/%d}，{step_min} 分鐘後再抓（第 {i + 1} 次）")
+        time.sleep(step_min * 60)
+        now = datetime.now(ZoneInfo("Asia/Taipei"))
+
+
 def run():
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     ratios = cfg.TRANCHES
@@ -430,8 +444,7 @@ def run():
             print("說明書傳送失敗：", repr(e))
 
     try:
-        mkt = fetch_market()
-        mk = st.market_summary(mkt)
+        mk = wait_market(now)
     except Exception as e:
         send_telegram([f"🌙 *台股夜間掃描*\n⚠️ 大盤資料抓取失敗\n今晚無法掃描：{e}"])
         raise SystemExit(str(e))
