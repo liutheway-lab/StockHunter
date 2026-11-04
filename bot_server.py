@@ -46,6 +46,7 @@ JOBS = [
     {"name": "night", "file": "night.yml", "at": (22, 5), "until": (23, 50), "since": (21, 0)},
     {"name": "morning", "file": "morning.yml", "at": (8, 35), "until": (9, 30), "since": (7, 30)},
     {"name": "intraday", "file": "intraday.yml", "at": (8, 56), "until": (13, 0), "since": (8, 0)},
+    {"name": "volume", "file": "volume_probe.yml", "at": (13, 25), "until": (15, 0), "since": (13, 0)},
 ]
 
 
@@ -92,7 +93,7 @@ def backup_step(now, state, job):
     return f"請 GitHub 補跑 {job['name']} 失敗 {r.status_code} {r.text[:120]}"
 
 
-SHOW = {"night": "夜間掃描", "morning": "早報", "intraday": "盤中監控"}
+SHOW = {"night": "夜間掃描", "morning": "早報", "intraday": "盤中監控", "volume": "大盤成交金額量測"}
 
 
 def _notify_owner(job, msg):
