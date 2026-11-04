@@ -24,10 +24,14 @@ import strategies as S
 import backtest
 import chart_png
 import importlib
+try:                                                    # 重大事件日曆；沒上傳 events.py 時只是不顯示，不影響其他功能
+    import events
+except Exception:
+    events = None
 
 # Streamlit 會把 config.py、strategies.py 這些檔案留在記憶體裡；
 # 只換檔案沒有 Reboot 時可能還在用舊版，所以每次都重新讀一次（很快，不影響速度）
-for _m in (cfg, lookup, data, S, backtest, guide, chart_png):
+for _m in (cfg, lookup, data, S, backtest, guide, chart_png) + ((events,) if events else ()):
     importlib.reload(_m)
 
 st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="wide")
@@ -728,6 +732,21 @@ def watch_buttons(name, items, limit=15):
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
+
+st.divider()
+st.subheader("📅 重大事件")
+if events is None:
+    st.caption("需要上傳 events.py 才會顯示")
+else:
+    _ev = events.upcoming()
+    st.caption(L("未來 5 個交易日", "時間為台灣時間，‼️＝非常重要、❗️＝重要"))
+    if not _ev:
+        st.caption("這段期間沒有列入的重大事件")
+    for _lab, _its in events.by_day(_ev):
+        st.markdown(f"**{_lab}**  \n" + "  \n".join(
+            f"{it[1] or '全天'}　{(events.MARK.get(it[3], '') + ' ') if events.MARK.get(it[3]) else ''}{it[2]}" for it in _its))
+    if events.stale_note():
+        st.warning(events.stale_note())
 
 st.divider()
 st.subheader("🌟 今日推薦")
