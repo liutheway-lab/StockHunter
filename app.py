@@ -1203,6 +1203,10 @@ if target:
                              "帶量＝當天量 ≥ 20 日均量 1.5 倍，不分紅黑",
                              "下方沒有帶量 K 時，前低就是支撐", "上方沒有帶量 K 時，前高就是壓力",
                              "起點太近時，至少回看 3 個交易日"))
+            st.write("")                         # 跟上面的說明空一行
+            if st.button("回到今日推薦", key="back_to_list_bottom", use_container_width=True):
+                st.session_state["_scroll_back"] = st.session_state["target"].get("code", "")
+                st.rerun()
             st.divider()                         # 策略診斷、回測放在兩欄下面，整行寬度各自一區
             st.markdown("**策略診斷**")
             st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
@@ -1251,9 +1255,6 @@ if target:
             foldable(f"{code}_bt", "🧪 這檔的回測（近 5 年）",
                      lambda: stock_bt_body(code, sfx_bt, capital), default=False,
                      status="用你的資金比例，模擬這檔過去每一次訊號")
-            if st.button("⬆️ 回到今日推薦", key="back_to_list_bottom", use_container_width=True):
-                st.session_state["_scroll_back"] = st.session_state["target"].get("code", "")
-                st.rerun()
 
 # 整頁跑完：拿掉載入卡片，之後切換功能不再出現
 _splash.empty()
