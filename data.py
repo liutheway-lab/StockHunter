@@ -95,9 +95,9 @@ def fetch_twse_stock_volume(code, months=4):
     out = {}
     for _ in range(months):
         url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={y}{m:02d}01&stockNo={code}"
-        for k in range(3):
+        for k in range(2):                                   # 兩次就放棄，不讓 App 一直轉
             try:
-                j = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"}).json()
+                j = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"}).json()
                 if j.get("stat") == "OK" and j.get("data"):
                     ca = j["fields"].index("成交股數")
                     for row in j["data"]:
