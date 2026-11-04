@@ -293,10 +293,15 @@ def fix_names(h):
                 x["name"] = nm
 
 
+BOARD_LINE = "━━━━━━━━━━━━━━"                 # 跟晨報一樣的分隔線
+DETAIL_START = ("成交價", "均價", "出場", "支撐", "損益")   # 卡片裡的明細行：送出時排成等寬的小表格
+CARD_START = ("▫", "▲", "▼", "－", "🔴", "🟢", "⚪", "📌")  # 卡片標題、看板標題：送出時粗體
+
+
 def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
     """追蹤清單（置頂那則也是它）：一檔一張卡，紅漲綠跌；也是機器人讀取追蹤清單的資料來源"""
     q = q or {}
-    lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
+    lines = [f"{title}　{datetime.now(TZ).strftime('%m/%d %H:%M')}", BOARD_LINE]
     if not h:
         lines += ["", "（目前沒有追蹤的股票）"]
     for code, x in sorted(h.items()):
@@ -335,14 +340,31 @@ def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
     return "\n".join(lines)
 
 
-def board_html(text):
-    """送出用的格式：使用者名單那行做成「點一下才顯示」（spoiler），平常是一片灰點，不佔版面。
-    Telegram 回傳給機器人的仍是純文字，所以讀取不受影響"""
-    out = []
-    for ln in text.split("\n"):
-        ln = html.escape(ln, quote=False)
-        out.append(f"<tg-spoiler>{ln}</tg-spoiler>" if ln.startswith(USERS_TAG) else ln)
+def _board_rows(lines):
+    """看板的送出格式（只改顯示，機器人讀回來的仍是純文字，讀取不受影響）：
+    卡片標題粗體、明細行放進等寬的 <pre>（跟晨報字卡一樣）；使用者名單那行仍是「點一下才顯示」"""
+    out, mono = [], []
+
+    def flush():
+        if mono:
+            out.append("<pre>" + "\n".join(html.escape(x, quote=False) for x in mono) + "</pre>")
+            mono.clear()
+    for ln in lines:
+        if ln.startswith(USERS_TAG):
+            flush()
+            out.append(f"<tg-spoiler>{html.escape(ln, quote=False)}</tg-spoiler>")
+        elif ln.startswith(DETAIL_START):
+            mono.append(ln)
+        else:
+            flush()
+            e = html.escape(ln, quote=False)
+            out.append(f"<b>{e}</b>" if ln.startswith(CARD_START) else e)
+    flush()
     return "\n".join(out)
+
+
+def board_html(text):
+    return _board_rows(text.split("\n"))
 
 
 def quotes_quick(h, wait=10):
@@ -372,7 +394,7 @@ def board_payload(text, users, hidden):
         lines.pop()
     url = HIDE_URL + urllib.parse.quote(json.dumps(users, ensure_ascii=False, separators=(",", ":")), safe="")
     head = html.escape(lines[0][1:], quote=False) if lines[0].startswith("📌") else html.escape(lines[0], quote=False)
-    out = [f'<a href="{html.escape(url, quote=True)}">📌</a>{head}'] + [html.escape(ln, quote=False) for ln in lines[1:]]
+    out = [f'<a href="{html.escape(url, quote=True)}">📌</a><b>{head}</b>', _board_rows(lines[1:])]
     return "\n".join(out)
 
 
