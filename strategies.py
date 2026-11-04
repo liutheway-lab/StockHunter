@@ -286,7 +286,8 @@ def vol_low(df, days=65):
 
 def check_absorb(df, i):
     """恐慌承接（只做觀察名單）：今天殺低後被買回來，而且有量。
-    長下影＝下影線占當天高低差 ≥ 50%；長紅＝收紅且實體占 ≥ 80%（跟大盤止跌確認的 K 棒同一套）；兩者其一，量 ≥ 20 日均量 1.5 倍，當天振幅 ≥ 8%。
+    先殺再拉：當天最低價要跌破昨收，且下影線占當天高低差 ≥ 50%（長下影）；量 ≥ 20 日均量 1.5 倍，當天振幅 ≥ 8%。
+    長紅不算（直接漲停的股票也會符合，不是恐慌殺低）。
     不符合回傳 None"""
     r = df.iloc[i]
     o, h, l, c = (float(r[k]) for k in ("Open", "High", "Low", "Close"))
@@ -301,13 +302,11 @@ def check_absorb(df, i):
     if prev and rng / prev < cfg.ABSORB_MIN_RANGE:
         return None
     shadow, body = (min(o, c) - l) / rng, (c - o) / rng
-    kinds = []
-    if shadow >= cfg.STAB_SHADOW:
-        kinds.append("長下影")
-    if c > o and body >= cfg.STAB_RED_BODY:
-        kinds.append("長紅")
-    if not kinds:
+    if prev and l >= prev:                    # 沒有殺到昨收以下（漲停、跳空高開都是這種），不算恐慌
         return None
+    if shadow < cfg.STAB_SHADOW:              # 只留「先殺再拉」的長下影；長紅會把直接漲停的股票也收進來，所以不收
+        return None
+    kinds = ["長下影"]
     return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow,
             "body": body, "chg": (c / prev - 1) if prev else 0.0, "turnover": float(r["TURN20"]),
             "range": (rng / prev) if prev else 0.0}
@@ -331,13 +330,11 @@ def check_absorb_live(o, h, l, c, prev, vol, mav20, limit_up=None):
     if vm < cfg.ABSORB_PRE_VOL or rng / prev < cfg.ABSORB_MIN_RANGE:
         return None
     shadow, body = (min(o, c) - l) / rng, (c - o) / rng
-    kinds = []
-    if shadow >= cfg.STAB_SHADOW:
-        kinds.append("長下影")
-    if c > o and body >= cfg.STAB_RED_BODY:
-        kinds.append("長紅")
-    if not kinds:
+    if l >= prev:                             # 沒有殺到昨收以下（漲停、跳空高開都是這種），不算恐慌
         return None
+    if shadow < cfg.STAB_SHADOW:              # 只留「先殺再拉」的長下影
+        return None
+    kinds = ["長下影"]
     return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow, "body": body,
             "chg": c / prev - 1, "range": rng / prev, "risk": (c - l) / c}
 
