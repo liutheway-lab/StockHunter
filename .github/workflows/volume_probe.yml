@@ -1,0 +1,26 @@
+name: volume_probe
+
+on:
+  schedule:
+    - cron: "25 5 * * 1-5"    # 台灣時間 週一到週五 13:25 開始量測（GitHub 用 UTC，所以是 05:25）；程式自己在 15:30 結束
+  workflow_dispatch:          # 也可以手動執行：Actions → volume_probe → Run workflow
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 量測大盤成交金額何時抓得到
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
+        run: python volume_probe.py
