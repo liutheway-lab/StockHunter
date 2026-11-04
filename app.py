@@ -710,6 +710,7 @@ def absorb_buttons(items, limit=15):
         st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">'
                     f'現價 {px(it["close"])}｜今日最低 {px(it["low"])}｜{it["kind"]}｜量能 {it["vol_mult"]:.1f} 倍</div>',
                     unsafe_allow_html=True)
+    st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)      # 跟上面的股票空一行
     st.caption(L("量能＝今天量 ÷ 20 日均量", "隔天不破今天最低，才比較可信"))
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
