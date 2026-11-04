@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import config as cfg
 import strategies as st
-from data import fetch_market, fetch_prices, get_directory
+from data import apply_twse_volume, fetch_market, fetch_prices, get_directory
 from notify import send_photo, send_telegram
 
 MAX_LIST = 12   # 每套策略最多列出幾檔（依符合程度由高到低，同分才比 20 日均成交金額）
@@ -260,7 +260,7 @@ def strategy_block(name, items, names, risk, note=""):
         nums = [h["r"]["close"], p["key"], p["stop1"], p["targets"][0][1]]
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
     links = "　".join(tv_link(h["sym"]) for h in shown)
-    more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
+    more = ""                                  # 不再標示「還有 N 檔未列出」（標題的檔數已經是全部）
     low_rr = [(names.get(h["sym"], h["sym"].split(".")[0]), h["plan"]["rr"]) for h in shown
               if h["plan"].get("rr") is not None and h["plan"]["rr"] < cfg.RR_MIN]
     rr_txt = ""
@@ -295,7 +295,7 @@ def watch_block(name, items, names, note="", icon="🎯"):
         p = h["plan"]
         nums = [h["r"]["close"], p["e"], p["stop1"], p["targets"][0][1]]
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
-    more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
+    more = ""                                  # 不再標示「還有 N 檔未列出」（標題的檔數已經是全部）
     legend = (f"\n排序：越符合規則越前面"
               f"\n追價點＝明天盤中要漲到的價格"
               f"\n（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）"
@@ -338,7 +338,7 @@ def absorb_block(items, names, note="", pre=None):
     for h, lab in zip(shown, labels):
         r = h["r"]
         lines.append(_padr(lab, W) + f" {fp(r['close']):>5} {fp(r['low']):>5} {r['vol_mult']:.1f}倍")
-    more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
+    more = ""                                  # 不再標示「還有 N 檔未列出」（標題的檔數已經是全部）
     legend = (f"\n排序：量能越大、振幅越大越前面"
               f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
               f"\n長紅＝收紅且實體占 {cfg.STAB_RED_BODY * 100:.0f}% 以上"
@@ -453,6 +453,7 @@ def run():
     directory = directory.assign(sym=directory["code"] + directory["suffix"])
     names = dict(zip(directory["sym"], directory["name"]))
     prices, failed = fetch_prices(list(directory["sym"]))
+    prices, _ = apply_twse_volume(prices, list(mk["df"].index[-70:]))   # 上市股票的成交量改用證交所官方（跟券商一致）
     hits, liquid, stale, funnel, watch, absorb = scan(prices, mk, ratios)
 
     print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
