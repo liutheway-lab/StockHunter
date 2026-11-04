@@ -87,6 +87,37 @@ def fetch_twse_turnover(months=4):
     return fetch_twse_daily(months)["amount"].dropna()
 
 
+def fetch_twse_stock_volume(code, months=4):
+    """證交所官方：上市個股每日成交股數（股）。回傳 Series（索引是日期）。
+    跟看盤軟體、券商用同一份數字；Yahoo 的台股量有時會跟它對不上。上櫃股票這裡抓不到（會丟例外）。"""
+    now = datetime.now(ZoneInfo("Asia/Taipei"))
+    y, m = now.year, now.month
+    out = {}
+    for _ in range(months):
+        url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={y}{m:02d}01&stockNo={code}"
+        for k in range(3):
+            try:
+                j = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"}).json()
+                if j.get("stat") == "OK" and j.get("data"):
+                    ca = j["fields"].index("成交股數")
+                    for row in j["data"]:
+                        yy, mm, dd = (int(x) for x in row[0].strip().split("/"))
+                        v = _numf(row[ca])
+                        if v is not None:
+                            out[pd.Timestamp(yy + 1911, mm, dd)] = v
+                break
+            except Exception as e:
+                print(f"證交所個股成交量 {code} {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
+                time.sleep(2)
+        time.sleep(0.5)
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    if not out:
+        raise RuntimeError(f"證交所個股成交量 {code} 抓不到")
+    return pd.Series(out).sort_index()
+
+
 def fetch_twse_ohlc(months=3):
     """證交所官方：加權指數每日開高低收（跟看盤軟體同一份數字）。回傳 DataFrame（索引是日期）。
     Yahoo 偶爾少最後一天，或某一天的高低點有落差，用這份補上、校正。"""
