@@ -52,6 +52,8 @@ STATUS_TAG = "⏱ 盤中監控"
 HIDE_URL = "https://t.me/zhezhe_users?d="      # 使用者名單藏在置頂標題 📌 的連結裡（畫面上看不到）
 _HIDE_OK = {"v": True}                           # 藏在連結裡讀不回來時改成 False，退回「點一下才顯示」
 RESULT_FILE = Path(__file__).parent / "scan_results.json"
+BASE_FILE = Path(__file__).parent / "absorb_base.json"      # 夜間掃描存的全市場基準（20 日均量、昨收）
+PRE_FILE = Path(__file__).parent / "absorb_1300.json"       # 13:00 預判通知過的名單（夜間掃描收盤後對照）
 
 
 # ================= Telegram =================
@@ -1550,7 +1552,9 @@ def _twse_fetch(ex):
         else:
             last, notrade = f("y"), True           # 今天還沒有任何成交 → 先放昨收（不會拿來觸發提醒）
         if last:
-            res[q["c"]] = {"last": last, "high": f("h") or last, "low": f("l") or last, "prev": f("y"), "date": q.get("d", ""),
+            vol = f("v")                               # 證交所的 v ＝ 累計成交量（張）
+            res[q["c"]] = {"open": f("o"), "vol": vol * 1000 if vol else None, "up": f("u"),
+                           "last": last, "high": f("h") or last, "low": f("l") or last, "prev": f("y"), "date": q.get("d", ""),
                            "name": (q.get("n") or "").strip() or None, "notrade": notrade, "src": "證交所",
                            "suffix": {"otc": ".TWO", "emg": ".EMG"}.get(q.get("ex"), ".TW")}
     return res
@@ -1819,6 +1823,89 @@ def load_watch():
     return out
 
 
+def load_absorb():
+    """昨晚夜間掃描的恐慌承接名單（只供追蹤：盤中跌破發現日的最低點 ＝ 承接失敗）"""
+    try:
+        scan = json.loads(RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return [dict(it) for it in (scan.get("absorb") or []) if it.get("low")]
+
+
+def absorb_scan(today_iso):
+    """13:00 恐慌承接預判的計算（12:50～12:59 跑一次）：用盤中開高低現價和累計量套型態規則。
+    回傳 {"hits": 全部符合的, "shown": 要通知的, "seen": 檢查幾檔}；沒做成回傳 None"""
+    try:
+        base = json.loads(BASE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        print("13:00 預判：沒有 absorb_base.json（昨晚夜間掃描還沒更新？）")
+        return None
+    stocks = base.get("stocks") or {}
+    if not stocks:
+        return None
+    if time.time() < SRC["twse_off_until"]:
+        to_owner("⚠️ 13:00 恐慌承接預判跳過：證交所報價暫時連不上")
+        return None
+    codes = list(stocks)
+    quotes = {}
+    for i in range(0, len(codes), 80):                       # 80 檔一批，避免網址太長
+        chunk = codes[i:i + 80]
+        parts = [f"{'otc' if stocks[c]['s'] == '.TWO' else 'tse'}_{c}.tw" for c in chunk]
+        try:
+            quotes.update(_twse_fetch("|".join(parts)))
+        except Exception as e:
+            print("13:00 預判：證交所連不上", repr(e)[:80])
+            SRC["twse_off_until"] = time.time() + TWSE_PAUSE
+            to_owner("⚠️ 13:00 恐慌承接預判失敗：證交所報價連不上")
+            return None
+        time.sleep(0.4)
+    hits, seen = [], 0
+    for c, q in quotes.items():
+        b = stocks.get(c)
+        if not b or q.get("notrade") or q.get("date") != today_iso.replace("-", ""):
+            continue
+        o, h, l, px = q.get("open"), q.get("high"), q.get("low"), q.get("last")
+        if not all([o, h, l, px]) or not q.get("vol"):
+            continue
+        seen += 1
+        r = st.check_absorb_live(o, h, l, px, q.get("prev") or b["p"], q["vol"], b["m"], q.get("up"))
+        if r is None:                                          # 漲停鎖住、量不夠、型態不對都直接不列
+            continue
+        hits.append({"code": c, "sfx": b["s"], "name": q.get("name") or b["n"], **r})
+    if seen == 0:
+        print("13:00 預判：沒有今天的成交資料")
+        return None
+    hits.sort(key=lambda a: (-st.rank_absorb(a), a["risk"]))
+    return {"hits": hits, "shown": hits[:cfg.ABSORB_PRE_MAX], "seen": seen}
+
+
+def absorb_send(res, now=None):
+    """13:00 推播預判結果，並存下通知過的代號（收盤後夜間掃描會對照）。回傳通知的代號清單"""
+    if res is None:                                          # 12:50 沒算成（證交所斷線等），13:00 不推播
+        return []
+    hits, shown = res["hits"], res["shown"]
+    if shown:
+        lines = [f"🧺 *恐慌承接預判（{(now or datetime.now(TZ)):%H:%M}）*",
+                 f"今天殺低後被買回、量已放大的股票（共 {len(hits)} 檔）", ""]
+        for a in shown:
+            lines.append(f"*{tv(a['code'], a['sfx'])} {a['name']}*　{a['kind']}")
+            lines.append(f"現價 {a['close']:g}｜今日最低 {a['low']:g}｜風險 {a['risk'] * 100:.1f}%｜量 {a['vol_mult']:.1f} 倍")
+        if len(hits) > len(shown):
+            lines.append(f"…另有 {len(hits) - len(shown)} 檔未列出")
+        lines += ["", "停損參考＝今日最低點", "13:00 預判，收盤後夜間掃描會確認",
+                  "最後 30 分鐘型態可能改變", "沒有追價點，不是買進建議"]
+        to_group("\n".join(lines))
+    else:
+        to_group("🧺 *恐慌承接預判（13:00）*\n目前沒有符合的股票")
+    codes = [a["code"] for a in shown]
+    try:
+        PRE_FILE.write_text(json.dumps({"date": now.strftime("%Y-%m-%d") if now else "", "codes": codes},
+                                       ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print("13:00 預判名單存檔失敗", repr(e)[:80])
+    return codes
+
+
 def tv(code, sfx):
     ex = "TPEX" if sfx == ".TWO" else "TWSE"
     return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
@@ -1853,8 +1940,9 @@ def _alert_once(cid, last, key, why, text, code, name, now):
                  "tail": (now.hour, now.minute) >= TAIL_AT or bool(old and old["tail"])}
 
 
-def check_once(watch, books, sent, today, last=None, now=None):
-    """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)"""
+def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
+    """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)
+    absorb：恐慌承接名單（跌破發現日最低＝承接失敗，通知群組一次）"""
     last = {} if last is None else last
     now = now or datetime.now(TZ)
     items = []                                              # 持股排前面：報價額度不夠時，先顧持股
@@ -1862,6 +1950,7 @@ def check_once(watch, books, sent, today, last=None, now=None):
         for code, x in h.items():
             items.append((code, x.get("suffix") or guess_suffix(code)))
     items += [(w["code"], w["suffix"]) for w in watch]
+    items += [(a["code"], a.get("suffix") or guess_suffix(a["code"])) for a in (absorb or [])]
     q = get_quotes(list(dict.fromkeys(items)))
     traded = [v for v in q.values() if v.get("date") == today and not v.get("notrade")]
     for w in watch:                                         # 🎯 追價提醒（群組）
@@ -1877,6 +1966,18 @@ def check_once(watch, books, sent, today, last=None, now=None):
                      f"成交價 {v['last']:g}（{chg:+.1f}%）{back}\n"
                      f"出場 {w['stop1']:g}｜壓力 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
                      f"📊 {tv(w['code'], w['suffix'])}")
+    for a in (absorb or []):                                # 👀 恐慌承接：跌破發現日最低 ＝ 承接失敗（群組）
+        v = q.get(a["code"])
+        if not v or v.get("date") != today or v.get("notrade") or ("absorb", "group", a["code"]) in sent:
+            continue
+        if v["last"] < a["low"]:
+            sent.add(("absorb", "group", a["code"]))
+            chg = (v["last"] / v["prev"] - 1) * 100 if v.get("prev") else 0
+            to_group(f"🧺 *恐慌承接失敗*　{a['code']} {a['name']}\n"
+                     f"盤中跌破發現日最低 {a['low']:g}\n"
+                     f"成交價 {v['last']:g}（{chg:+.1f}%）\n"
+                     f"發現日收盤 {a['close']:g}｜量能 {a['vol_mult']:g} 倍\n"
+                     f"📊 {tv(a['code'], a.get('suffix') or guess_suffix(a['code']))}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
             v = q.get(code)
@@ -1969,19 +2070,35 @@ def _run_market():
     now = datetime.now(TZ)
     today = now.strftime("%Y%m%d")
     watch = load_watch()
-    print(f"追價名單 {len(watch)} 檔")
+    absorb = load_absorb()
+    print(f"追價名單 {len(watch)} 檔｜恐慌承接 {len(absorb)} 檔")
     sent = set()
     last = {}                                                # 持股提醒最近一次送出的時間
     no_trade_checks = 0
+    pre_res, pre_sent = None, False                           # 12:50 算好、13:00 推播
+    pre_scanned = False
     warned, bad = [datetime(2000, 1, 1, tzinfo=TZ)], [0]
     while True:
         now = datetime.now(TZ)
         if (now.hour, now.minute) >= CLOSE_AT:
             break
         process_commands()
+        hm = (now.hour, now.minute)
+        if not pre_scanned and cfg.ABSORB_PRE_SCAN <= hm < cfg.ABSORB_PRE_AT:
+            pre_scanned = True                                # 12:50～12:59 只算一次
+            try:
+                pre_res = absorb_scan(now.strftime("%Y-%m-%d"))
+            except Exception as e:
+                print("13:00 預判計算出錯", repr(e)[:120])
+        if pre_res is not None and not pre_sent and cfg.ABSORB_PRE_AT <= hm < (13, 20):
+            pre_sent = True                                   # 13:00 推播；失敗不影響其他監控
+            try:
+                absorb_send(pre_res, now)
+            except Exception as e:
+                print("13:00 預判推播出錯", repr(e)[:120])
         if (now.hour, now.minute) >= OPEN_AT:
             books = all_books()
-            n = check_once(watch, books, sent, today, last)
+            n = check_once(watch, books, sent, today, last, absorb=absorb)
             prob = source_problem()
             bad[0] = bad[0] + 1 if prob else 0
             if bad[0] >= 3 and (now - warned[0]).total_seconds() >= 1800:
