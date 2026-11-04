@@ -23,24 +23,25 @@ US_HOLIDAYS = {"2026-11-26", "2026-12-25", "2027-01-01"}
 
 STATIC = [
     # ── 美國（BLS／Fed／BEA 官方行程）──
-    ("2026-11-06", "21:30", "美國 非農就業報告（10月）", 3),
-    ("2026-11-10", "21:30", "美國 CPI 消費者物價（10月）", 3),
-    ("2026-11-13", "21:30", "美國 PPI 生產者物價（10月）", 2),
-    ("2026-11-19", "03:00", "聯準會 FOMC 會議紀要（10月會議）", 2),
-    ("2026-11-25", "21:30", "美國 PCE 物價（10月）", 2),
-    ("2026-12-01", "23:00", "美國 JOLTS 職缺（10月）", 1),
-    ("2026-12-04", "21:30", "美國 非農就業報告（11月）", 3),
-    ("2026-12-10", "03:00", "聯準會 FOMC 利率決議（03:30 記者會）", 3),
-    ("2026-12-10", "21:30", "美國 CPI 消費者物價（11月）", 3),
-    ("2026-12-15", "21:30", "美國 PPI 生產者物價（11月）", 2),
-    ("2026-12-23", "21:30", "美國 PCE 物價（11月）", 2),
-    ("2026-12-31", "03:00", "聯準會 FOMC 會議紀要（12月會議）", 2),
+    ("2026-11-06", "21:30", "非農就業（10月）", 3),
+    ("2026-11-10", "21:30", "CPI（10月）", 3),
+    ("2026-11-13", "21:30", "PPI（10月）", 2),
+    ("2026-11-19", "03:00", "FOMC 會議紀要（10月）", 2),
+    ("2026-11-25", "21:30", "PCE（10月）", 2),
+    ("2026-12-01", "23:00", "JOLTS（10月）", 1),
+    ("2026-12-04", "21:30", "非農就業（11月）", 3),
+    ("2026-12-10", "03:00", "FOMC 利率決議＋記者會", 3),
+    ("2026-12-10", "21:30", "CPI（11月）", 3),
+    ("2026-12-15", "21:30", "PPI（11月）", 2),
+    ("2026-12-23", "21:30", "PCE（11月）", 2),
+    ("2026-12-31", "03:00", "FOMC 會議紀要（12月）", 2),
     # ── 台灣 ──
-    ("2026-12-17", "", "台灣央行 理監事會（暫定，會後記者會）", 3),
+    ("2026-12-17", "", "台灣央行理監事會（暫定）", 3),
     # ── 休市 ──
     ("2026-11-26", "", "美股休市（感恩節）", 1),
-    ("2026-11-27", "", "美股提早收盤（感恩節隔天）", 1),
-    ("2026-12-25", "", "美股休市（聖誕節）、台股休市（行憲紀念日）", 1),
+    ("2026-11-27", "", "美股提早收盤", 1),
+    ("2026-12-25", "", "美股休市（聖誕）", 1),
+    ("2026-12-25", "", "台股休市（行憲紀念）", 1),
 ]
 
 
@@ -76,14 +77,14 @@ def _rule_events(start, end):
     out = []
     y, m = start.year, start.month
     while date(y, m, 1) <= end:
-        out.append((_nth_business(y, m, 1), "23:00", "美國 ISM 製造業指數", 2))
-        out.append((_nth_business(y, m, 3), "23:00", "美國 ISM 非製造業指數", 2))
+        out.append((_nth_business(y, m, 1), "23:00", "ISM 製造業", 2))
+        out.append((_nth_business(y, m, 3), "23:00", "ISM 非製造業", 2))
         wed = [d for d in (date(y, m, k) for k in range(1, 22)) if d.weekday() == 2]
-        out.append((wed[2], "13:30", "台指期／選擇權 月結算日", 2))              # 每月第 3 個星期三
+        out.append((wed[2], "13:30", "台指期結算日", 2))              # 每月第 3 個星期三
         due = date(y, m, 10)
         while not _is_tw_trading(due):                                         # 10 日遇假日，往前找最近的交易日
             due -= timedelta(days=1)
-        out.append((due, "", "台股月營收公布截止日（台積電等）", 2))
+        out.append((due, "", "台股月營收截止", 2))
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     return out
 
@@ -121,39 +122,23 @@ def stale_note(today=None, n=5):
     return f"事件資料只涵蓋到 {COVERED_UNTIL:%m/%d}，請更新 events.py" if end > COVERED_UNTIL else ""
 
 
-def day_label(d, today=None):
-    today = today or today_tw()
-    rel = {0: "今天", 1: "明天"}.get((d - today).days, "")
-    return f"{d:%m/%d}（{WEEKDAY[d.weekday()]}）" + (f"{rel}" if rel else "")
+def fmt_item(it):
+    """一件事一行：11/06(五) 21:30 ‼️非農就業（10月）"""
+    d, t, name, imp = it
+    mk = MARK.get(imp, "")
+    return f"{d:%m/%d}({WEEKDAY[d.weekday()]}) {t or '全天'} {mk + ' ' if mk else ''}{name}"
 
 
-def by_day(items, today=None):
-    """依日期分組：[(日期標籤, [項目…])]"""
-    out = []
-    for it in items:
-        lab = day_label(it[0], today)
-        if out and out[-1][0] == lab:
-            out[-1][1].append(it)
-        else:
-            out.append((lab, [it]))
-    return out
+def event_lines(today=None, n=5):
+    """晨報與 App 共用：每件事一行；沒有事件回傳一行說明"""
+    items = upcoming(today or today_tw(), n)
+    return [fmt_item(it) for it in items] or ["沒有列入的重大事件"]
 
 
 def telegram_block(today=None, n=5):
     """晨報用的文字（Telegram Markdown）"""
-    today = today or today_tw()
-    items = upcoming(today, n)
-    head = f"*📅 未來 {n} 個交易日重大事件*"
-    if not items:
-        body = "沒有列入的重大事件"
-    else:
-        rows = []
-        for lab, its in by_day(items, today):
-            rows.append(lab)
-            rows += [f"　{(it[1] or '全天')} {MARK.get(it[3], '')}{it[2]}" for it in its]
-        body = "\n".join(rows)
-    note = stale_note(today, n)
-    return head + "\n" + body + ("\n⚠️ " + note if note else "")
+    note = stale_note(today or today_tw(), n)
+    return f"*📅 未來 {n} 個交易日重大事件*\n" + "\n".join(event_lines(today, n)) + ("\n⚠️ " + note if note else "")
 
 
 if __name__ == "__main__":
