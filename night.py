@@ -16,7 +16,7 @@ import strategies as st
 from data import fetch_market, fetch_prices, get_directory
 from notify import send_photo, send_telegram
 
-MAX_LIST = 12   # 每套策略最多列出幾檔（依 20 日均成交金額由大到小）
+MAX_LIST = 12   # 每套策略最多列出幾檔（依符合程度由高到低，同分才比 20 日均成交金額）
 WEEKDAY = "一二三四五六日"
 LINE = "━━━━━━━━━━━━━━"
 LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
@@ -159,7 +159,7 @@ def scan(prices, mk, ratios):
             }
             ab = st.check_absorb(df, i)
             if ab:
-                absorb.append({"sym": sym, "r": ab, "turnover": ab["turnover"]})
+                absorb.append({"sym": sym, "r": ab, "turnover": ab["turnover"], "score": st.rank_absorb(ab)})
             for name, r in results.items():
                 if r is None:
                     continue
@@ -168,7 +168,8 @@ def scan(prices, mk, ratios):
                 if r["ok"]:
                     funnel[name]["ok"] += 1
                     plan = st.plan_for(name, r, ratios)
-                    hits[name].append({"sym": sym, "r": r, "plan": plan, "turnover": r["turnover"], "vl": st.vol_low(df)})
+                    hits[name].append({"sym": sym, "r": r, "plan": plan, "turnover": r["turnover"], "vl": st.vol_low(df),
+                                        "score": st.rank_score(name, r, plan)})
             for name in watch:                    # 今天還沒攻擊、但盤整條件已成立 → 明天的追價點
                 if results[name] is not None and results[name]["ok"]:
                     continue
@@ -176,14 +177,16 @@ def scan(prices, mk, ratios):
                 if w:
                     plan = st.attack_plan(w, entry=w["chase_px"])
                     watch[name].append({"sym": sym, "r": w, "plan": plan, "turnover": w["turnover"],
+                                        "score": st.rank_score(name, w, plan, watch=True),
                                         "prev": float(raw["Close"].iloc[-2]) if len(raw) >= 2 else None})
         except Exception as e:   # 單一股票出錯不影響整體
             print(f"{sym} 分析失敗：{e!r}")
+    by_score = lambda x: (-x["score"], -x["turnover"])        # 越符合規則越前面；同分才比成交金額
     for k in hits:
-        hits[k].sort(key=lambda x: -x["turnover"])
+        hits[k].sort(key=by_score)
     for k in watch:
-        watch[k].sort(key=lambda x: -x["turnover"])
-    absorb.sort(key=lambda x: -x["turnover"])
+        watch[k].sort(key=by_score)
+    absorb.sort(key=by_score)
     dedupe_similar(hits, mk["active"])
     dedupe_similar(watch, mk["active"])
     return hits, liquid, stale, funnel, watch, absorb
@@ -262,7 +265,8 @@ def strategy_block(name, items, names, risk, note=""):
     if t2:
         pairs = [f"{n} {fp(v)}" for n, v in t2]
         rr_txt += "\n🎯 第二目標（參考）：\n" + "\n".join("　" + "　".join(pairs[k:k + 2]) for k in range(0, len(pairs), 2))
-    legend = ("\n壓＝第1大量日最高點在現價上"
+    legend = ("\n排序：越符合規則越前面"
+              "\n壓＝第1大量日最高點在現價上"
               "\n撐＝第1大量日最低點在現價下"
               "\n（65 日內成交量最大的那天）")
     also = sorted({h["also"] for h in shown if h.get("also")})
@@ -271,9 +275,9 @@ def strategy_block(name, items, names, risk, note=""):
     return title + "\n" + code_block(lines, header=True) + rr_txt + legend + more + "\n📊 TradingView 線圖：" + links
 
 
-def watch_block(name, items, names, note=""):
+def watch_block(name, items, names, note="", icon="🎯"):
     """明日追價名單：明天盤中漲 4% 且突破盤整高點，就是追價點"""
-    title = f"*👀 明日追價名單・{cfg.STRATEGY_NAMES[name]}*　{len(items)} 檔" + note
+    title = f"*{icon} 明日追價名單・{cfg.STRATEGY_NAMES[name]}*　{len(items)} 檔" + note
     shown = items[:MAX_LIST]
     labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" + ("◆" if h.get("also") else "")
               for h in shown]
@@ -285,7 +289,8 @@ def watch_block(name, items, names, note=""):
         nums = [h["r"]["close"], p["e"], p["stop1"], p["targets"][0][1]]
         lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    legend = (f"\n追價點＝明天盤中要漲到的價格"
+    legend = (f"\n排序：越符合規則越前面"
+              f"\n追價點＝明天盤中要漲到的價格"
               f"\n（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）"
               f"\n盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天、離前高 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%"
               f"\n追價點離現價最多 {cfg.CHASE_MAX_DIST * 100:.0f}%"
@@ -302,7 +307,7 @@ RESULT_FILE = "scan_results.json"
 
 def absorb_block(items, names, note=""):
     """恐慌承接觀察名單：今天殺低後被買回來、而且有量。只列股票，沒有追價點"""
-    title = f"*👀 {cfg.ABSORB_NAME}・今日長下影／長紅帶量*　{len(items)} 檔" + note
+    title = f"*🧺 {cfg.ABSORB_NAME}・今日長下影／長紅帶量*　{len(items)} 檔" + note
     shown = items[:MAX_LIST]
     labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" for h in shown]
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
@@ -311,7 +316,8 @@ def absorb_block(items, names, note=""):
         r = h["r"]
         lines.append(_padr(lab, W) + f" {fp(r['close']):>5} {fp(r['low']):>5} {r['vol_mult']:.1f}倍")
     more = f"\n（還有 {len(items) - MAX_LIST} 檔未列出）" if len(items) > MAX_LIST else ""
-    legend = (f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
+    legend = (f"\n排序：量能越大、振幅越大越前面"
+              f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
               f"\n長紅＝收紅且實體占 {cfg.STAB_RED_BODY * 100:.0f}% 以上"
               f"\n量能＝今天量 ÷ 20 日均量"
               f"\n要 {cfg.ABSORB_VOL_MULT} 倍以上"
@@ -342,7 +348,7 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None):
                 "code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
                 "industry": ind or "", "market": mkt or "",
                 "close": round(h["r"]["close"], 2), "key": h["plan"]["key"], "stop1": h["plan"]["stop1"],
-                "target": h["plan"]["targets"][0][1], "turnover": round(h["turnover"]),
+                "target": h["plan"]["targets"][0][1], "turnover": round(h["turnover"]), "score": h["score"],
                 "broke": bool(name == "flag" and h["r"].get("status", "").startswith("已突破")),
                 **({"also": h["also"]} if h.get("also") else {}),
                 **({"vl_low": h["vl"]["level"], "vl_date": f"{h['vl']['date']:%m/%d}", "vl_vol": round(h["vl"]["vol"]),
@@ -358,7 +364,7 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None):
             rows.append({"code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
                          "industry": ind or "", "market": mkt or "", "close": round(h["r"]["close"], 2),
                          "chase": h["plan"]["e"], "stop1": h["plan"]["stop1"], "target": h["plan"]["targets"][0][1],
-                         "key": h["plan"]["key"], "days": int(h["r"].get("n_cons", 0)), "turnover": round(h["turnover"]),
+                         "key": h["plan"]["key"], "days": int(h["r"].get("n_cons", 0)), "turnover": round(h["turnover"]), "score": h["score"],
                          **({"prev": round(h["prev"], 2)} if h.get("prev") else {})})
         out["watch"][name] = rows
     out["absorb"] = []
@@ -370,7 +376,7 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None):
                               "industry": ind or "", "market": mkt or "", "close": round(r["close"], 2),
                               "low": round(r["low"], 2), "high": round(r["high"], 2), "kind": r["kind"],
                               "vol_mult": round(r["vol_mult"], 1), "chg": round(r["chg"] * 100, 2),
-                              "turnover": round(h["turnover"])})
+                              "turnover": round(h["turnover"]), "score": h["score"]})
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
 
@@ -431,7 +437,8 @@ def run():
             parts.append("今晚沒有符合的股票。")
     for name in ("pullback", "flag"):              # 明日追價名單（大盤啟用這套策略時才推播）
         if watch[name] and (name in active or DIAG):
-            parts.append(watch_block(name, watch[name], names, "" if name in active else inactive_note(mk)))
+            parts.append(watch_block(name, watch[name], names, "" if name in active else inactive_note(mk),
+                                     icon="🎯" if name in active else "👀"))
     if absorb:                                     # 恐慌承接觀察名單：不管大盤層級，只供追蹤
         parts.append(absorb_block(absorb, names, "" if active else inactive_note(mk)))
     # 只有出問題時才顯示提醒
