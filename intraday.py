@@ -40,6 +40,7 @@ import requests
 import config as cfg
 import strategies as st
 from notify import TG_TOKEN, chat_ids, tg_send
+import spike
 
 TZ = ZoneInfo("Asia/Taipei")
 OWNER = os.getenv("TG_OWNER_ID", "").strip()
@@ -2102,6 +2103,37 @@ def _alert_once(cid, last, key, why, text, code, name, now):
                  "tail": (now.hour, now.minute) >= TAIL_AT or bool(old and old["tail"])}
 
 
+SPIKE = spike.Tracker()          # 放量急殺（試跑）：每檔的累計量，每分鐘記一筆
+
+
+def spike_update(q, today, now):
+    for code, v in q.items():
+        if v.get("date") == today and not v.get("notrade") and not v.get("delayed") and v.get("vol") is not None:
+            SPIKE.update(code, now, v["vol"], v["last"])
+
+
+def spike_check(books, q, today, now, sent):
+    """試跑：只看管理者自己的追蹤清單，成立就私訊管理者（每檔每天一次）"""
+    hm = (now.hour, now.minute)
+    if spike.threshold(hm) is None:
+        return
+    for cid, h in books.items():
+        if str(cid) != str(OWNER):
+            continue
+        for code, x in h.items():
+            v = q.get(code)
+            if ("spike", code) in sent or not v or v.get("date") != today or v.get("notrade") or v.get("delayed") or v.get("vol") is None:
+                continue
+            m = SPIKE.measure(code, now)
+            hit = spike.judge(m, hm, x.get("stop"), x.get("sup"))
+            if hit:
+                sent.add(("spike", code))
+                try:
+                    to_owner(spike.message(code, x["name"], m, hit, spike.threshold(hm)))
+                except Exception as e:
+                    print("放量急殺提醒失敗", repr(e)[:120])
+
+
 def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
     """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)
     absorb：恐慌承接名單（跌破發現日最低＝承接失敗，通知群組一次）"""
@@ -2114,7 +2146,8 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
     items += [(w["code"], w["suffix"]) for w in watch]
     items += [(a["code"], a.get("suffix") or guess_suffix(a["code"])) for a in (absorb or [])]
     q = get_quotes(list(dict.fromkeys(items)))
-    traded = [v for v in q.values() if v.get("date") == today and not v.get("notrade")]
+    spike_update(q, today, now)
+    traded =[v for v in q.values() if v.get("date") == today and not v.get("notrade")]
     for w in watch:                                         # 🎯 追價提醒（群組）
         v = q.get(w["code"])
         if not v or v.get("date") != today or ("chase", "group", w["code"]) in sent:
@@ -2182,6 +2215,7 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
                             f"🎯 <b>碰到壓力</b>　{code} {nm}\n"
                             + kv([("成交價", f"{p:g}"), ("壓力", f"{x['target']:g}")] + avg_row)
                             + f"{lag}\n請按下方按鈕處理", code, x["name"], now)
+    spike_check(books, q, today, now, sent)
     return len(traded)
 
 
