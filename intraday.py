@@ -1532,8 +1532,11 @@ def _handle_message(m, state, asked):
         delete_msgs(cid, LAST_HELP.pop(cid, []))      # 舊的說明刪掉，聊天室只留最新一則
         mid = send_kb(cid, HELP)
         LAST_HELP[cid] = [m.get("message_id"), mid]
+    elif text == "持股" and me[0]:                    # 看板已經在置頂更新了，不再另外送一份完整報表
+        delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的確認訊息刪掉，只留最新一則
+        LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, f"✅ 已更新置頂看板　{datetime.now(TZ):%H:%M}")]
     elif reply and text == "持股":
-        delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的持股畫面刪掉，只留最新一則
+        delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 空清單：照舊回一則說明
         LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply)]
     elif reply:
         send_kb(cid, reply)
@@ -2270,6 +2273,18 @@ def run_market():
             notify_users(f"⏹ 盤中監控結束\n{t1:%H:%M} 已收盤")
 
 
+def close_update():
+    """收盤後：把每個人置頂看板的現價更新一次（不另外送報表；看板狀態列會由 run_market 改成「已停止」）"""
+    for cid in allowed_users():
+        h, mid, users = load_holdings(cid)
+        if not h or not mid:
+            continue
+        try:
+            save_holdings(cid, h, mid, users if str(cid) == str(OWNER) else None, quotes_for(h))
+        except Exception as e:
+            print(f"收盤更新看板失敗（{cid}）：", repr(e)[:120])
+
+
 def _run_market():
     now = datetime.now(TZ)
     today = now.strftime("%Y%m%d")
@@ -2314,9 +2329,7 @@ def _run_market():
                     print("今天沒有開盤，結束")
                     return "holiday"
         time.sleep(POLL_SEC)
-    for cid, h in all_books().items():                      # 收盤後傳一次持股狀況給每個人
-        if h:
-            send_to(cid, holdings_report(h, quotes_for(h), "📋 收盤追蹤清單"))
+    close_update()
 
 
 if __name__ == "__main__":
