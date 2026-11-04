@@ -454,6 +454,18 @@ def event_lines(today=None, n=5):
     return [fmt_item(it) for it in items] or ["沒有列入的重大事件"]
 
 
+def event_rows(today=None, n=5):
+    """App 用的結構化資料：日期只在同一天的第一列顯示，其餘列留空（排版比較乾淨）"""
+    items = upcoming(today or today_tw(), n)
+    rows, last = [], None
+    for d, t, name, imp in items:
+        day = f"{d:%m/%d}（{WEEKDAY[d.weekday()]}）"
+        rows.append({"date": day if d != last else "", "time": t or "全天",
+                     "mark": MARK.get(imp, ""), "name": name})
+        last = d
+    return rows
+
+
 def telegram_block(today=None, n=5):
     """晨報用的文字（Telegram Markdown）"""
     lines = event_lines(today, n)
