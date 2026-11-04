@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read               # 讓程式查有沒有別的量測已經在跑（避免 GitHub 排程和 Render 備援重複私訊）
 
 jobs:
   run:
@@ -23,4 +24,5 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python volume_probe.py
