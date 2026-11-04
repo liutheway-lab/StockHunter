@@ -418,6 +418,12 @@ def load_market():
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def load_twse_stock_vol(code):
+    """證交所個股每日成交股數（上市）：跟券商看盤同一份數字"""
+    return data.fetch_twse_stock_volume(code, months=4)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def load_stock(code, suffix):
     # auto_adjust=False：價格不還原股利，跟看盤軟體、夜間掃描一致
     return yf.Ticker(code + suffix).history(period="1y", auto_adjust=False)
@@ -1121,6 +1127,13 @@ if target:
                 break
         if df is not None:
             df = data._clean(df)
+            if sfx == ".TW":                                      # 上市股票：成交量改用證交所官方（跟券商一致）
+                try:
+                    tw_vol = load_twse_stock_vol(code)
+                    df = df.copy()
+                    df["Volume"] = tw_vol.reindex(df.index).fillna(df["Volume"])
+                except Exception as e:                            # 證交所抓不到，沿用 Yahoo 的量
+                    print("個股成交量改用證交所失敗，沿用 Yahoo：", repr(e)[:120])
 
     if df is None:
         st.error(L(f"查無代號【{code}】的歷史資料", "請確認是否為有效掛牌標的"))
