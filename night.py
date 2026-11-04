@@ -131,6 +131,9 @@ def dedupe_similar(lists, active):
     lists[dname][:] = [h for h in drop if h["sym"] not in ksyms]
 
 
+ABSORB_BASE = {}      # {代號.TW: (20 日均量（股）, 收盤價)}：給盤中 13:00 恐慌承接預判用
+
+
 def scan(prices, mk, ratios):
     """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數, 明日追價名單, 恐慌承接名單)"""
     hits = {k: [] for k in ORDER}
@@ -138,6 +141,7 @@ def scan(prices, mk, ratios):
     funnel = {k: {"checks": {}, "ok": 0} for k in ORDER}
     absorb = []                                # 恐慌承接觀察名單（今天長下影／長紅且帶量）
     liquid = stale = 0
+    ABSORB_BASE.clear()
     last_date = mk["date"]
     for sym, raw in prices.items():
         try:
@@ -151,6 +155,9 @@ def scan(prices, mk, ratios):
             if not st._liq(df.iloc[i])[1]:
                 continue
             liquid += 1
+            mav = float(df["MAV20"].iloc[i])
+            if mav == mav and mav > 0:
+                ABSORB_BASE[sym] = (mav, float(df["Close"].iloc[i]))
             results = {
                 "pullback": st.check_pullback(df, i, ratios),
                 "flag": st.check_flag(df, i),
@@ -303,13 +310,29 @@ def watch_block(name, items, names, note="", icon="🎯"):
 
 
 RESULT_FILE = "scan_results.json"
+BASE_FILE = "absorb_base.json"          # 全市場基準（盤中 13:00 預判要讀）
+PRE_FILE = "absorb_1300.json"           # 盤中 13:00 通知過的名單（intraday.py 存，這裡對照收盤結果）
 
 
-def absorb_block(items, names, note=""):
+def load_pre1300(mk):
+    """今天 13:00 預判通知過的代號集合；檔案不是今天的就當作沒有"""
+    try:
+        with open(PRE_FILE, encoding="utf-8") as f:
+            j = json.load(f)
+        if j.get("date") == f"{mk['date']:%Y-%m-%d}":
+            return set(j.get("codes") or [])
+    except Exception:
+        pass
+    return set()
+
+
+def absorb_block(items, names, note="", pre=None):
     """恐慌承接觀察名單：今天殺低後被買回來、而且有量。只列股票，沒有追價點"""
     title = f"*🧺 {cfg.ABSORB_NAME}・今日長下影／長紅帶量*　{len(items)} 檔" + note
     shown = items[:MAX_LIST]
-    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" for h in shown]
+    pre = pre or set()
+    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" + ("◆" if h['sym'].split('.')[0] in pre else "")
+              for h in shown]
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
     lines = [_padr("代號 名稱", W) + " 現價 今日最低 量能"]
     for h, lab in zip(shown, labels):
@@ -323,12 +346,19 @@ def absorb_block(items, names, note=""):
               f"\n要 {cfg.ABSORB_VOL_MULT} 倍以上"
               f"\n當天振幅要 {cfg.ABSORB_MIN_RANGE * 100:.0f}% 以上"
               f"\n只供追蹤，沒有追價點"
-              f"\n隔天不破今天最低，才比較可信")
+              f"\n隔天不破發現日最低，才比較可信")
+    if pre:
+        legend += "\n◆＝13:00 已預判通知過"
+        codes_now = {h["sym"].split(".")[0] for h in items}
+        gone = sorted(c for c in pre if c not in codes_now)
+        if gone:
+            nm = {k.split(".")[0]: v for k, v in names.items()}
+            legend += "\n13:00 預判、收盤沒成立：" + "、".join(f"{c} {nm.get(c, '')}".strip() for c in gone)
     links = "　".join(tv_link(h["sym"]) for h in shown)
     return title + "\n" + code_block(lines, header=True) + legend + more + "\n📊 TradingView 線圖：" + links
 
 
-def save_results(mk, hits, names, directory, now, watch=None, absorb=None):
+def save_results(mk, hits, names, directory, now, watch=None, absorb=None, pre=None):
     """把今晚的掃描結果存成 JSON，網頁 app 的『今日推薦』直接讀它"""
     info = {r.sym: (r.industry, r.market) for r in directory.itertuples()}
     out = {
@@ -376,9 +406,16 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None):
                               "industry": ind or "", "market": mkt or "", "close": round(r["close"], 2),
                               "low": round(r["low"], 2), "high": round(r["high"], 2), "kind": r["kind"],
                               "vol_mult": round(r["vol_mult"], 1), "chg": round(r["chg"] * 100, 2),
-                              "turnover": round(h["turnover"]), "score": h["score"]})
+                              "turnover": round(h["turnover"]), "score": h["score"],
+                              **({"pre": True} if code in (pre or set()) else {})})
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
+    base = {}                                          # 全市場基準：盤中 13:00 恐慌承接預判用（20 日均量、昨收）
+    for sym, (mav, prev) in ABSORB_BASE.items():
+        code, sfx = sym.split(".")[0], "." + sym.split(".")[1]
+        base[code] = {"s": sfx, "n": names.get(sym, code), "m": round(mav), "p": round(prev, 2)}
+    with open(BASE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"date": f"{mk['date']:%Y-%m-%d}", "stocks": base}, f, ensure_ascii=False, separators=(",", ":"))
 
 
 def run():
@@ -406,8 +443,9 @@ def run():
     hits, liquid, stale, funnel, watch, absorb = scan(prices, mk, ratios)
 
     print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
+    pre = load_pre1300(mk)
     try:
-        save_results(mk, hits, names, directory, now, watch, absorb)
+        save_results(mk, hits, names, directory, now, watch, absorb, pre)
     except Exception as e:
         print("掃描結果存檔失敗：", repr(e))
 
@@ -440,7 +478,7 @@ def run():
             parts.append(watch_block(name, watch[name], names, "" if name in active else inactive_note(mk),
                                      icon="🎯" if name in active else "👀"))
     if absorb:                                     # 恐慌承接觀察名單：不管大盤層級，只供追蹤
-        parts.append(absorb_block(absorb, names, "" if active else inactive_note(mk)))
+        parts.append(absorb_block(absorb, names, "" if active else inactive_note(mk), pre))
     # 只有出問題時才顯示提醒
     warn = []
     if directory.attrs.get("fallback"):
