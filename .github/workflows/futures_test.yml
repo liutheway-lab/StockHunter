@@ -17,5 +17,4 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
-          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
         run: python futures_test.py
