@@ -27,10 +27,13 @@ DIAG = os.getenv("DIAG", "").strip().lower() in ("1", "true", "yes")
 
 
 def fp(x):
-    """價格格式：>=1000 不顯示小數，>=100 一位，其餘兩位"""
-    if x >= 1000:
+    """價格格式：依台股升降單位（tick）對齊，只留必要的小數，不補零。
+    例：33.30→33.3、227.0→227、124.5→124.5、2820→2,820"""
+    tick = 0.01 if x < 10 else 0.05 if x < 50 else 0.1 if x < 100 else 0.5 if x < 500 else 1 if x < 1000 else 5
+    x = round(round(x / tick) * tick, 2)
+    if abs(x - round(x)) < 1e-9:
         return f"{x:,.0f}"
-    if x >= 100:
+    if abs(x * 10 - round(x * 10)) < 1e-9:
         return f"{x:.1f}"
     return f"{x:.2f}"
 
@@ -328,16 +331,23 @@ def load_pre1300(mk):
 
 def absorb_block(items, names, note="", pre=None):
     """恐慌承接觀察名單：今天殺低後被買回來、而且有量。只列股票，沒有追價點"""
-    title = f"*🧺 {cfg.ABSORB_NAME}・今日先殺後拉（長下影）帶量*　{len(items)} 檔" + note
+    title = f"*🧺{cfg.ABSORB_NAME}　{len(items)}檔*\n說明（今日帶量先殺後拉）" + note
     shown = items[:MAX_LIST]
     pre = pre or set()
     labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" + ("◆" if h['sym'].split('.')[0] in pre else "")
               for h in shown]
     W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    lines = [_padr("代號 名稱", W) + " 現價 今日最低 量能"]
-    for h, lab in zip(shown, labels):
-        r = h["r"]
-        lines.append(_padr(lab, W) + f" {fp(r['close']):>5} {fp(r['low']):>5} {r['vol_mult']:.1f}倍")
+    # 數字欄位：每欄右對齊，欄寬取表頭與該欄最寬的值，所以每一列的數字會對齊
+    head = ("現價", "今日最低", "量能")
+    rows = [(fp(h["r"]["close"]), fp(h["r"]["low"]), f"{h['r']['vol_mult']:.1f}倍") for h in shown]
+    cw = [max([_w(head[k])] + [_w(r[k]) for r in rows]) for k in range(3)]
+
+    def rj(t, w):
+        return " " * max(0, round(w - _w(t))) + t
+
+    lines = [_padr("代號 名稱", W) + "".join(" " + rj(head[k], cw[k]) for k in range(3))]
+    for lab, r in zip(labels, rows):
+        lines.append(_padr(lab, W) + "".join(" " + rj(r[k], cw[k]) for k in range(3)))
     more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
     legend = (f"\n排序：量能越大、振幅越大越前面"
               f"\n先殺：當天最低價跌破昨收"
