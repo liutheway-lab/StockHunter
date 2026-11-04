@@ -150,6 +150,26 @@ def near_volume(qs, prefix):
     return 0
 
 
+def num(x):
+    """整數顯示：42355.00 → 42,355（不留小數）"""
+    try:
+        return f"{int(float(str(x).replace(',', ''))):,}"
+    except Exception:
+        return str(x)
+
+
+def hms(t):
+    """121940 → 12:19:40"""
+    t = str(t or "")
+    return f"{t[:2]}:{t[2:4]}:{t[4:6]}" if len(t) == 6 else t
+
+
+def ym(sid):
+    """TXFK6-F → 2026年11月台指期"""
+    ex = expiry_of(sid)
+    return f"{ex.year}年{ex.month}月台指期" if ex else sid
+
+
 try:
     SESS.get(PAGE, headers={"User-Agent": HEAD["User-Agent"]}, timeout=15)       # 先逛一下首頁拿 cookie
 except Exception as e:
@@ -162,7 +182,8 @@ for label, m in (("日盤", 0), ("夜盤", 1)):
     qs = quotes(j) if isinstance(j, dict) else []
     near = pick_near(qs) if qs else None
     if near:
-        line(f"{label}　{near.get('SymbolID')}｜成交 {near.get('CLastPrice')}｜{near.get('CTime')}｜量 {near.get('CTotalVolume')}")
+        line(f"{'📈' if m == 0 else '🌙'} {label}　{ym(near.get('SymbolID', ''))}")
+        line(f"　成交 {num(near.get('CLastPrice'))}｜{hms(near.get('CTime'))}｜量 {num(near.get('CTotalVolume'))}")
     else:
         line(f"{label}　失敗 HTTP {code}")
     nb = near_prefix(qs) if qs else None
@@ -179,7 +200,7 @@ for i in range(SAMPLES):
     near = pick_near(quotes(j)) if isinstance(j, dict) else None
     if near:
         seen.append((near.get("CLastPrice"), near.get("CTime")))
-        line(f"{i + 1}. {near.get('CLastPrice')}｜{near.get('CTime')}｜{dt:.2f} 秒")
+        line(f"{i + 1}. {num(near.get('CLastPrice'))}｜{hms(near.get('CTime'))}｜{dt:.2f} 秒")
     else:
         line(f"{i + 1}. 沒有資料 HTTP {code}")
     if i < SAMPLES - 1:
@@ -187,7 +208,8 @@ for i in range(SAMPLES):
 line("✅ 有在更新" if len(set(seen)) > 1 else "⚠️ 沒有變動（休市或盤間沒成交，要在交易時間再測）")
 
 if TOT:
-    line(f"\n【台指近月全】{NEAR.get('prefix', '')}（{NEAR['expiry']:%m/%d} 到期）" if NEAR.get("expiry") else f"\n【台指近月全】{NEAR.get('prefix', '')}")
+    ex = NEAR["expiry"]
+    line(f"\n【近月全】{ex.year}年{ex.month}月台指期（{ex:%m/%d} 到期）")
     line(f"合計：{sum(TOT.values()):,.0f} 口")
 
 times = stats["times"]
