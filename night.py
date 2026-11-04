@@ -139,7 +139,7 @@ def scan(prices, mk, ratios):
     hits = {k: [] for k in ORDER}
     watch = {"pullback": [], "flag": []}       # 明日追價名單
     funnel = {k: {"checks": {}, "ok": 0} for k in ORDER}
-    absorb = []                                # 恐慌承接觀察名單（今天長下影／長紅且帶量）
+    absorb = []                                # 恐慌承接觀察名單（今天先殺後拉：長下影且帶量）
     liquid = stale = 0
     ABSORB_BASE.clear()
     last_date = mk["date"]
