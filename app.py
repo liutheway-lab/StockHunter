@@ -712,10 +712,10 @@ def absorb_buttons(items, limit=15):
             pick(it)
             st.rerun()
         st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">'
-                    f'現價 {px(it["close"])}｜今日最低 {px(it["low"])}｜{it["kind"]}｜量能 {it["vol_mult"]:.1f} 倍</div>',
+                    f'現價 {px(it["close"])}｜今日最低 {px(it["low"])}｜{it["kind"]}｜量能 {it["vol_mult"]:.1f} 倍{"｜13:00 已預判" if it.get("pre") else ""}</div>',
                     unsafe_allow_html=True)
     st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)      # 跟上面的股票空一行
-    st.caption(L("量能＝今天量 ÷ 20 日均量", "隔天不破今天最低，才比較可信"))
+    st.caption(L("量能＝今天量 ÷ 20 日均量", "隔天不破發現日最低，才比較可信"))
     if len(items) > limit:
         st.caption(f"還有 {len(items) - limit} 檔未列出")
 
@@ -738,13 +738,8 @@ st.subheader("📅 重大事件")
 if events is None:
     st.caption("需要上傳 events.py 才會顯示")
 else:
-    _ev = events.upcoming()
-    st.caption(L("未來 5 個交易日", "時間為台灣時間，‼️＝非常重要、❗️＝重要"))
-    if not _ev:
-        st.caption("這段期間沒有列入的重大事件")
-    for _lab, _its in events.by_day(_ev):
-        st.markdown(f"**{_lab}**  \n" + "  \n".join(
-            f"{it[1] or '全天'}　{(events.MARK.get(it[3], '') + ' ') if events.MARK.get(it[3]) else ''}{it[2]}" for it in _its))
+    st.caption(L("未來 5 個交易日｜台灣時間", "‼️＝非常重要、❗️＝重要"))
+    st.markdown("  \n".join(events.event_lines()))
     if events.stale_note():
         st.warning(events.stale_note())
 
