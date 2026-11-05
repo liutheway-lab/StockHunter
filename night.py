@@ -137,6 +137,21 @@ def dedupe_similar(lists, active):
 ABSORB_BASE = {}      # {代號.TW: (20 日均量（股）, 收盤價, 日線三層數字)}：給盤中 13:00 恐慌承接預判用
 
 
+def absorb_avg_poc(sym, day):
+    """恐慌承接發現日的均價與 POC（用 Yahoo 5 分 K）。抓不到回傳 (None, None)，盤中就只看跌停與破低"""
+    try:
+        import yfinance as yf
+        bars = yf.download(sym, period="60d", interval="5m", progress=False, auto_adjust=False)
+        if bars is None or bars.empty:
+            return None, None
+        if hasattr(bars.columns, "levels"):                   # 多層欄位（yfinance 新版）→ 只留欄位名稱
+            bars.columns = bars.columns.get_level_values(0)
+        return st.day_avg_poc(bars, day)
+    except Exception as e:
+        print(f"{sym} 發現日均價／POC 抓不到：{repr(e)[:80]}")
+        return None, None
+
+
 def scan(prices, mk, ratios):
     """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數, 明日追價名單, 恐慌承接名單)"""
     hits = {k: [] for k in ORDER}
@@ -169,7 +184,9 @@ def scan(prices, mk, ratios):
             }
             ab = st.check_absorb(df, i)
             if ab:
-                absorb.append({"sym": sym, "r": ab, "turnover": ab["turnover"], "score": st.rank_absorb(ab)})
+                avg, poc = absorb_avg_poc(sym, df.index[i])          # 發現日的均價＋POC：盤中用來判斷警示與站回
+                absorb.append({"sym": sym, "r": ab, "turnover": ab["turnover"], "score": st.rank_absorb(ab),
+                               "avg": avg, "poc": poc})
             for name, r in results.items():
                 if r is None:
                     continue
@@ -414,6 +431,7 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None, pre=N
                               "low": round(r["low"], 2), "high": round(r["high"], 2), "kind": r["kind"],
                               "vol_mult": round(r["vol_mult"], 1), "chg": round(r["chg"] * 100, 2),
                               "turnover": round(h["turnover"]), "score": h["score"],
+                              "avg": h.get("avg"), "poc": h.get("poc"),
                               **({"pre": True} if code in (pre or set()) else {})})
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
