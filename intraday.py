@@ -2115,24 +2115,33 @@ def quote_report(codes):
     if intl:
         q.update(intl_quotes(intl, 10))
     esc = lambda v: html.escape(str(v), quote=False)
+    # 版面跟晨報一樣：等寬表格，每行「箭頭 名稱 漲跌幅 現價 漲跌點」，只顯示這五個欄位（不顯示代號）
     out = [f"🔎 <b>查價</b>　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
-    for c in codes:                                          # 只顯示：名稱、現價、漲跌點、漲跌幅（不顯示代號）
+    rows, tail = [], []
+    for c in codes:
         x = q.get(c)
         if not x:
-            out += ["", f"－ {esc(_dir_name(c) or c)}　查不到"]
+            tail.append(f"⚠️ {esc(_dir_name(c) or c)} 查不到")
             continue
         last, prev = x["last"], x.get("prev")
-        name = esc(x.get("name") or _dir_name(c) or c)
+        name = x.get("name") or _dir_name(c) or c
         if x.get("notrade"):
-            out += ["", f"－ <b>{name}</b>", f"今天還沒成交（昨收 {_n(last)}）"]
+            tail.append(f"－ {esc(name)}　今天還沒成交（昨收 {_n(last)}）")
             continue
-        lamp, chg = "－", ""
         if prev:
             diff = last - prev
-            sg = "+" if diff > 0 else "−"
-            lamp = "▲" if diff > 0 else "▼" if diff < 0 else "－"
-            chg = f"　{sg}{_n(round(abs(diff), 2))}　{sg}{abs(diff / prev * 100):,.2f}%" if diff else "　平盤"
-        out += ["", f"{lamp} <b>{name}</b>", f"<b>{_n(last)}</b>{chg}"]
+            icon = "─" if abs(diff) < 1e-9 else "▲" if diff > 0 else "▼"
+            sg = "+" if diff > 0 else "-" if diff < 0 else ""
+            pct_txt = "0.00%" if not diff else f"{sg}{abs(diff / prev * 100):.2f}%"
+            chg = "0" if not diff else f"{sg}{_n(round(abs(diff), 2))}"
+        else:
+            icon, pct_txt, chg = "－", "—", "—"
+        rows.append((icon, str(name), pct_txt, _n(last), chg))
+    if rows:
+        w_name = max(_cells(r[1]) for r in rows)
+        lines = [f"{i} {n}{' ' * (w_name - _cells(n))} {p:>7} {v:>9} {c:>8}" for i, n, p, v, c in rows]
+        out.append(pre(lines, pad=2))
+    out += tail
     return "\n".join(out)
 
 
