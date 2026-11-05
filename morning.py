@@ -410,8 +410,8 @@ def run():
         + concl + f"\n{LINE}\n"
         + "\n".join(blocks)
         + (f"\n{LINE}\n" + cal if cal else "")
-        + f"\n{LINE}\n"
-        "⏰ 08:45 台指期開盤　09:00 現貨開盤"
+        + f"\n{LINE}\n*⏰ 開盤提醒*\n"
+        + code(["08:45  台指期開盤", "09:00  現貨開盤"])
     )
     send_telegram([report])
     if failed == total:
