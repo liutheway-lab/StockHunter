@@ -1068,6 +1068,7 @@ LAST_VIEW = {}         # 上一次的「持股」訊息編號（再按持股時�
 LAST_BOT = {}          # 機器人最後傳的一則訊息編號
 MENU_WAIT = {}         # 管理者選單正在等你選（還沒做完，先不清）
 CHAT = {}              # 每個人私訊視窗裡，機器人傳的和使用者傳的訊息編號（下一次操作時整批清掉，只留釘選和最新的）
+KEEP_LAST = {}         # {chat id: 目前保留的最新一則機器人訊息}：按鍵掛在它上面，下一個指令完成後才刪掉，按鍵才不會消失
 
 
 def delete_msgs(cid, ids):
@@ -1665,8 +1666,18 @@ def handle_message(m, state, asked):
         return                                        # 還沒開通、或這串操作還沒做完：先不清
     ensure_pinned(cid, state[cid], (state.get(OWNER) or [0, 0, None])[2] if cid == OWNER else None)
     keep = {state[cid][1], (state.get(OWNER) or [None, None])[1]}          # 只留釘選的持股清單
-    doomed = [i for i in CHAT.get(cid, []) if i not in keep]               # 這一串的結果與使用者的訊息
+    batch = CHAT.get(cid, [])                                               # 這一串的結果與使用者的訊息
     CHAT[cid] = []
+    carrier = LAST_BOT.get(cid)                                             # 這一串最新的機器人訊息：按鍵掛在它上面，先留著
+    if carrier not in batch or carrier in keep:
+        carrier = None
+    doomed = [i for i in batch if i not in keep and i != carrier]
+    old = KEEP_LAST.get(cid)
+    if carrier:                                                             # 有新的結果：上一則保留的訊息這時才刪掉
+        if old and old not in keep and old != carrier:
+            doomed.append(old)
+        KEEP_LAST[cid] = carrier
+    doomed = [i for i in dict.fromkeys(doomed) if i]
     if doomed:                                                              # 顯示 RESULT_SEC 秒後自動消失
         threading.Timer(RESULT_SEC, delete_msgs, args=(cid, doomed)).start()
 
