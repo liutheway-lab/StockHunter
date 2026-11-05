@@ -90,6 +90,7 @@ def fetch_twse_turnover(months=4):
 _MIS_HEAD = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
              "Referer": "https://mis.twse.com.tw/stock/index.jsp", "Accept": "application/json, text/javascript, */*; q=0.01"}
 _MIS_SESS = {}
+_LIVE_LAST = {}          # {(代號, 後綴): (日期, 最近一次成交價)}：證交所有時一瞬間沒回成交價，就用這個
 
 
 def fetch_live_quote(code, suffix):
@@ -116,11 +117,18 @@ def fetch_live_quote(code, suffix):
                 return float(str(q.get(k, "")).split("_")[0])
             except ValueError:
                 return None
-        last = num("z") or num("o") or num("y")               # z＝最新成交價；這一瞬間沒成交時退回開盤或昨收
-        prev = num("y")                                       # y＝昨收（漲跌的基準）
-        if not last or not prev:
+        day, prev = q.get("d", ""), num("y")                  # y＝昨收（漲跌的基準）
+        key = (code, suffix)
+        z = num("z")                                          # z＝最新成交價；這一瞬間沒有新成交時是「-」
+        if z:
+            _LIVE_LAST[key] = (day, z)
+        elif key in _LIVE_LAST and _LIVE_LAST[key][0] == day:
+            z = _LIVE_LAST[key][1]                            # 同一天記到的最近成交價（不拿開盤或昨收冒充）
+        else:
+            return None                                       # 今天還沒有成交價 → 讓頁面退回日線收盤
+        if not prev:
             return None
-        return {"last": last, "prev": prev, "time": f"{q.get('d', '')} {q.get('t', '')}"}
+        return {"last": z, "prev": prev, "time": f"{day} {q.get('t', '')}"}
     except Exception as e:
         print(f"{code} 即時報價抓不到：{repr(e)[:80]}")
         _MIS_SESS.clear()
