@@ -20,5 +20,5 @@ jobs:
       - name: 探測族群頁分頁
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
         run: python group_probe.py
