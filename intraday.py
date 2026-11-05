@@ -1121,8 +1121,17 @@ def _kb(rows):
 
 
 def empty_kb():
-    """追蹤清單是空的時的按鍵：追蹤、查價、按讚訂閱、取消"""
-    return _kb([["追蹤", "查價"], [LIKE_BTN], ["取消"]])
+    """追蹤清單是空的時的按鍵：追蹤、查價、按讚訂閱、取消（不會按一次就收起來，按完還在）"""
+    kb = _kb([["追蹤", "查價"], [LIKE_BTN], ["取消"]])
+    kb["one_time_keyboard"] = False
+    return kb
+
+
+def _like_done(cid, mids):
+    """按讚感謝顯示完：清掉點按的訊息與感謝；若清單還是空的，重新顯示空清單提示與按鍵"""
+    delete_msgs(cid, mids)
+    if not get(cid)[0]:
+        send_kb(cid, EMPTY_TRACK_MSG, empty_kb())
 
 
 def _track_rows(s_):
@@ -1501,8 +1510,9 @@ def _handle_message(m, state, asked):
     me = get(cid)
     if text == LIKE_BTN:                                  # 按讚訂閱：回一句感謝，顯示幾秒後連同點按的訊息與回覆一起清掉
         mid_user = m.get("message_id")
-        mid_thanks = send_kb(cid, random.choice(THANKS))
-        threading.Timer(LIKE_CLEAN_SEC, delete_msgs, args=(cid, [mid_user, mid_thanks])).start()
+        j = tg("sendMessage", chat_id=cid, text=random.choice(THANKS), reply_markup=empty_kb())   # 感謝訊息也帶按鍵，按鍵才不會跟著不見
+        mid_thanks = (j.get("result") or {}).get("message_id")
+        threading.Timer(LIKE_CLEAN_SEC, _like_done, args=(cid, [mid_user, mid_thanks])).start()
         return
     if cid == OWNER:
         mid0 = m.get("message_id")
