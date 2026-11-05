@@ -284,9 +284,38 @@ def vol_low(df, days=65):
             "vol": float(d.loc[day, "Volume"]) / 1000.0, "side": "壓" if pressure else "撐"}
 
 
+def absorb_levels(prev_df):
+    """今天「之前」的日線算出恐慌承接要用的三個數字：近 19 日最高、近 19 日最低、近 65 日最大量日的最低點（支撐）。
+    收盤版（check_absorb）和盤中 13:00 版共用；盤中版的 absorb_base.json 也存這三個數字。資料不足回傳 None。"""
+    if len(prev_df) < 19:
+        return None
+    vl = vol_low(prev_df)
+    return {"hi19": float(prev_df["High"].iloc[-19:].max()), "lo19": float(prev_df["Low"].iloc[-19:].min()),
+            "sup": float(vl["low"]) if vl else None}
+
+
+def absorb_extra(c, h, l, lv):
+    """恐慌承接的日線三層（收盤版、盤中版共用）。c＝收盤（盤中＝現價）；h／l＝今天最高／最低；lv＝absorb_levels（不含今天）。
+    1 距高點回落：近 20 日（含今天）最高點 → 收盤，跌幅在 ABSORB_DROP_MIN ～ ABSORB_DROP_MAX 之間
+      （跌不到 15% 是高檔震盪；跌超過 35% 先不列）
+    2 守住支撐：收盤 ≥ 近 65 日成交量最大那天的最低點
+    3 收回：收盤 ≥ 今日最低 × (1 + ABSORB_RECOVER)
+    回傳 (三項是否全過, 數字 dict)；lv 缺資料一律不過（寧可漏，不要錯判）。"""
+    if not lv or any(lv.get(k) is None for k in ("hi19", "lo19", "sup")):
+        return False, None
+    hi, lo = max(lv["hi19"], h), min(lv["lo19"], l)
+    if hi <= 0 or lo <= 0:
+        return False, None
+    ratio, drop = hi / lo, c / hi - 1
+    ok = (-cfg.ABSORB_DROP_MAX <= drop <= -cfg.ABSORB_DROP_MIN
+          and c >= lv["sup"] and c >= l * (1 + cfg.ABSORB_RECOVER))
+    return ok, {"ratio": ratio, "drop": drop, "sup": lv["sup"]}
+
+
 def check_absorb(df, i):
     """恐慌承接（只做觀察名單）：今天殺低後被買回來，而且有量。
-    先殺再拉：當天最低價要跌破昨收，且下影線占當天高低差 ≥ 50%（長下影）；量 ≥ 20 日均量 1.5 倍，當天振幅 ≥ 8%。
+    先殺再拉：當天最低價要跌破昨收，且下影線占當天高低差 ≥ 50%（長下影）；量 ≥ 20 日均量 2 倍，當天振幅 ≥ 10%。
+    日線三層（absorb_extra）：距 20 日高點跌 15%～35%、守住 65 日大量日的低點，收盤要收回最低 5% 以上。
     長紅不算（直接漲停的股票也會符合，不是恐慌殺低）。
     不符合回傳 None"""
     r = df.iloc[i]
@@ -306,13 +335,16 @@ def check_absorb(df, i):
         return None
     if shadow < cfg.STAB_SHADOW:              # 只留「先殺再拉」的長下影；長紅會把直接漲停的股票也收進來，所以不收
         return None
+    ok, ex = absorb_extra(c, h, l, absorb_levels(df.iloc[:i]))     # 日線三層：距高點跌 15%～35%、守住支撐、收回
+    if not ok:
+        return None
     kinds = ["長下影"]
     return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow,
             "body": body, "chg": (c / prev - 1) if prev else 0.0, "turnover": float(r["TURN20"]),
-            "range": (rng / prev) if prev else 0.0}
+            "range": (rng / prev) if prev else 0.0, "ratio": ex["ratio"], "drop": ex["drop"], "sup": ex["sup"]}
 
 
-def check_absorb_live(o, h, l, c, prev, vol, mav20, limit_up=None):
+def check_absorb_live(o, h, l, c, prev, vol, mav20, limit_up=None, lv=None):
     """恐慌承接「13:00 預判」：用盤中（13:00）的數字，拿現價當收盤，判斷跟 check_absorb 同一套型態。
     o/h/l/c＝今天開盤／最高／最低／現價；prev＝昨收；vol＝累計成交量（股）；mav20＝20 日均量（股）；limit_up＝今天漲停價。
     盤中累計量先換算成全日量：除以「這個時間點佔全日的比例」（cfg.VOL_SHARE_PRE，由 volume_profile.py 量測），
@@ -336,9 +368,13 @@ def check_absorb_live(o, h, l, c, prev, vol, mav20, limit_up=None):
         return None
     if shadow < cfg.STAB_SHADOW:              # 只留「先殺再拉」的長下影
         return None
+    ok, ex = absorb_extra(c, h, l, lv)                # 日線三層；lv＝夜間掃描存的 absorb_base（沒有就不列）
+    if not ok:
+        return None
     kinds = ["長下影"]
     return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow, "body": body,
-            "chg": c / prev - 1, "range": rng / prev, "risk": (c - l) / c}
+            "chg": c / prev - 1, "range": rng / prev, "risk": (c - l) / c,
+            "ratio": ex["ratio"], "drop": ex["drop"], "sup": ex["sup"]}
 
 
 def active_strategies(layer, stab_ok):
