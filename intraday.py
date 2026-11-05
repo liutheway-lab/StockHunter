@@ -98,7 +98,7 @@ def to_group(text):
 
 
 # ================= 持股（存在私人對話的置頂訊息） =================
-UNHELD_RE = re.compile(r"^▫\s*(\d{4,6})\s+(\S+)\s+未持股$")     # 追蹤中、還沒持股的一張卡
+UNHELD_RE = re.compile(r"^▫\s*(\d{4,6})\s+(\S+)\s+(?:追蹤|未持股)$")     # 追蹤中、還沒持股的一張卡（舊版寫「未持股」，一樣讀得懂）
 LINE_RE = re.compile(r"^(\d{4,6})\s+(\S+)｜([\d,.]+) (張|股)｜均價 ([\d.]+)｜出場 ([\d.]+|—)｜目標 ([\d.]+|—)｜前高 ([\d.]+|—)｜加碼 (未|已)$")
 
 
@@ -314,7 +314,7 @@ def board_text(h, q=None, users=None, title=HOLD_TAG, status=None):
             if p and x["stop"]:
                 d = (x["stop"] / p - 1) * 100
                 stop_l += f"　距出場 {'+' if d >= 0 else '−'}{abs(d):.1f}%"
-            lines += ["", f"▫ {code} {x['name']}　未持股", now_l, stop_l]
+            lines += ["", f"▫ {code} {x['name']}　追蹤", now_l, stop_l]
             if any(x.get(k) is not None for k in ("sup", "target", "key")):
                 lines.append(f"支撐 {_n(x.get('sup'))}　壓力 {_n(x['target'])}　前高 {_n(x['key'])}")
             continue
@@ -1547,10 +1547,10 @@ def _handle_message(m, state, asked):
                 old = user_limit(users, u)
                 set_user_limit(users, u, n)
                 ADMIN.pop(cid, None)
-                owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
                 tidy()
                 MENU_WAIT.pop(cid, None)
-                send_kb(cid, f"✅ {user_name(users[u])} 可以追蹤 {n} 檔")
+                send_kb(cid, f"✅ {user_name(users[u])} 可以追蹤 {n} 檔")       # 先顯示這一步的結果
+                owner[1] = save_holdings(OWNER, owner[0], owner[1], users)     # 再更新置頂的看板（名單裡的額度）
                 if n != old and (adm["mode"] == "adjust" or n != 1):
                     send_kb(u, f"管理者已設定\n你現在可以追蹤 {n} 檔")
                 return
@@ -1594,7 +1594,6 @@ def _handle_message(m, state, asked):
         if reply:
             tidy()
             if changed:
-                owner[1] = save_holdings(OWNER, owner[0], owner[1], users)
                 PENDING.pop(text.split()[1], None)
             send_kb(OWNER, reply)
             w_ = text.split()
@@ -1602,6 +1601,8 @@ def _handle_message(m, state, asked):
                 ADMIN[cid] = {"uid": w_[1], "mode": "approve", "step": "pick"}
                 MENU_WAIT[cid] = True
                 send_kb(cid, f"{user_name(users[w_[1]])} 要開放幾檔？\n（不選的話維持 1 檔）", _kb([["1檔", "2檔", "3檔"], ["自己輸入"], ["取消"]]))
+            if changed:
+                owner[1] = save_holdings(OWNER, owner[0], owner[1], users)      # 結果與提示都顯示完，看板最後更新
             return
     me = get(cid)
     if text in ("清畫面", "清除畫面", "清空"):                    # 畫面只剩一則看板（釘選），不再多送任何提示
@@ -1629,10 +1630,8 @@ def _handle_message(m, state, asked):
         text = line
     _LASTQ.pop("q", None)
     reply, changed = handle(text, me[0], cid)
-    if changed:
-        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, rotate=True)
-    elif text == "持股" and me[0] and "q" in _LASTQ:                 # 按「持股」順便把置頂看板的現價更新
-        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, _LASTQ["q"])
+    # 置頂看板等「結果」顯示完才更新（不然看板會跳在結果前面）
+    refresh = ("rotate", None) if changed else ("quote", _LASTQ["q"]) if (text == "持股" and me[0] and "q" in _LASTQ) else None
     if reply == HELP:
         delete_msgs(cid, LAST_HELP.pop(cid, []))      # 舊的說明刪掉，聊天室只留最新一則
         mid = send_kb(cid, HELP)
@@ -1645,6 +1644,10 @@ def _handle_message(m, state, asked):
         LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply, empty_kb())]
     elif reply:
         send_kb(cid, reply)
+    if refresh and refresh[0] == "rotate":
+        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, rotate=True)
+    elif refresh:
+        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, refresh[1])
 
 
 def handle_message(m, state, asked):
