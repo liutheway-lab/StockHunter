@@ -1,44 +1,42 @@
-"""group_probe.py — 一次性探測：Yahoo 族群頁的成分股是從哪個網址載入的（用完可以刪掉）
+"""group_probe.py — 一次性探測：掃 Yahoo 族群頁載入的 JavaScript 檔，找成分股的資料網址（用完可以刪掉）
 只在 GitHub Actions 手動執行（group_probe.yml）。結果只私訊管理者（TG_OWNER_ID）。
-上一輪結果：分頁參數都沒有用，頁面一開始只有 34 檔，其餘是網頁載入後才出現。
-這次：抓網頁原始碼，找出它會去呼叫的網址（API），並試著直接打開看看能不能拿到完整成分股。
+前幾次結果：分頁參數沒有用；網頁原始碼裡只有 34 檔，也找不到 API 網址。
+這次：把網頁載入的 JS 檔抓下來，找出跟「成分股、分類、sectorId、category」有關的網址片段。
 """
-import json
 import os
 import re
+from urllib.parse import urljoin
 
 import requests
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
       "Accept-Language": "zh-TW,zh;q=0.9"}
 PAGE = "https://tw.stock.yahoo.com/class-quote?category=PCB&categoryLabel=電子產業"
-CODE_RE = re.compile(r"(\d{4,6})\.(?:TWO|TW)\b")
-lines = ["🔎 族群成分股 API 探測（PCB）"]
+KEYS = re.compile(r"class-quote|categoryLabel|sectorId|/_td[-/a-z]*api|/api/[a-zA-Z/_-]*(?:class|sector|category|quote|stock)", re.I)
+lines = ["🔎 族群頁 JS 探測（PCB）"]
 
-r = requests.get(PAGE, headers=UA, timeout=30)
-html = r.text
-lines.append(f"網頁 HTTP {r.status_code}，長度 {len(html)}，代號 {len(set(CODE_RE.findall(html)))} 個")
+html = requests.get(PAGE, headers=UA, timeout=30).text
+srcs = list(dict.fromkeys(re.findall(r'<script[^>]+src="([^"]+)"', html)))
+lines.append(f"網頁載入 {len(srcs)} 支 JS，掃前 12 支")
 
-# 1) 網頁原始碼裡提到的 API 網址
-urls = re.findall(r"""(?:https?:)?//tw\.stock\.yahoo\.com/[^\s"'<>\\]*(?:api|_td)[^\s"'<>\\]*""", html)
-urls += re.findall(r"""["'](/[^\s"'<>\\]*(?:/api/|_td-stock)[^\s"'<>\\]*)["']""", html)
-uniq = list(dict.fromkeys(urls))[:8]
-lines.append("頁面提到的 API 網址：" + (" ｜ ".join(u[:90] for u in uniq) if uniq else "沒找到"))
-
-# 2) 試著直接打開：看有沒有拿到完整成分股（58 檔）
-cands = [u if u.startswith("http") else "https://tw.stock.yahoo.com" + u for u in uniq]
-for u in cands[:5]:
+hits = []
+for s in srcs[:12]:
+    u = urljoin(PAGE, s)
     try:
-        rr = requests.get(u, headers={**UA, "Accept": "application/json"}, timeout=30)
-        codes = set(CODE_RE.findall(rr.text))
-        if not codes:
-            try:
-                codes = {str(x) for x in re.findall(r'"symbol"\s*:\s*"(\d{4,6})', rr.text)}
-            except Exception:
-                codes = set()
-        lines.append(f"試 {u[:60]}…：HTTP {rr.status_code}，代號 {len(codes)} 個")
+        js = requests.get(u, headers=UA, timeout=30).text
     except Exception as e:
-        lines.append(f"試 {u[:60]}…：失敗 {repr(e)[:60]}")
+        lines.append(f"讀取失敗 {u[-40:]}：{repr(e)[:50]}")
+        continue
+    for m in KEYS.finditer(js):
+        a, b = max(0, m.start() - 50), min(len(js), m.end() + 70)
+        hits.append(f"[{u.split('/')[-1][:25]}] …{js[a:b]}…".replace("\n", " "))
+        if len(hits) >= 12:
+            break
+    if len(hits) >= 12:
+        break
+
+lines.append(f"找到 {len(hits)} 處可能的網址片段：")
+lines += [h[:200] for h in hits[:12]] or ["沒找到"]
 
 text = "\n".join(lines)
 print(text)
