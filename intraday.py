@@ -751,6 +751,14 @@ KEYBOARD = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "�
             "resize_keyboard": True, "is_persistent": True}
 KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
                   "resize_keyboard": True, "is_persistent": True}
+# 追蹤清單是空的時的提示（一句一行，不切斷）與按鍵
+EMPTY_TRACK_MSG = "目前沒有追蹤清單唷😊\n趕緊加入股票 按讚 訂閱 開啟小鈴噹唷！🔔"
+LIKE_BTN = "按讚 訂閱 開啟小鈴噹🔔"
+THANKS = ["謝謝你的支持，哲哲老師超開心的！🥰",
+          "感謝你按讚訂閱，哲哲老師會更努力喔！💪",
+          "有你陪著一起看盤，真的好溫暖！💖",
+          "謝謝你開啟小鈴噹，重要訊息都不會漏掉囉！🔔✨"]
+LIKE_CLEAN_SEC = 4                                   # 感謝訊息顯示幾秒後，連同點按的那一則一起清掉
 FORMAT = {
     "追蹤": "追蹤格式：追蹤 代號\n例：追蹤 2330\n（未持股，系統自動算價位）\n也可以按下方「追蹤」按鈕",
     "買": "已持股格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 壓力 1100",
@@ -912,7 +920,7 @@ def handle(text, h, cid=None):
     if cmd == "移除" and len(w) >= 2:                              # 不再追蹤（已持股的也一樣移除）
         if w[1] == "全部":
             if not h:
-                return "追蹤清單是空的", False
+                return EMPTY_TRACK_MSG, False
             names = "\n".join(f"{c} {x['name']}" for c, x in sorted(h.items()))
             h.clear()
             return f"✅ <b>已全部移除</b>\n{pre(names.split(chr(10)))}\n追蹤清單已清空", True
@@ -1067,6 +1075,11 @@ def _kb(rows):
     return {"keyboard": [[{"text": t} for t in r] for r in rows], "resize_keyboard": True, "one_time_keyboard": True}
 
 
+def empty_kb():
+    """追蹤清單是空的時的按鍵：追蹤、查價、按讚訂閱、取消"""
+    return _kb([["追蹤", "查價"], [LIKE_BTN], ["取消"]])
+
+
 def _track_rows(s_):
     """追蹤流程目前這一步的按鈕（含建議價）"""
     lv, st_ = s_["lv"], s_["step"]
@@ -1125,7 +1138,7 @@ def guided(cid, text, h):
         return None
     if t == "移除":
         if not h:
-            send_kb(cid, "追蹤清單是空的")
+            send_kb(cid, EMPTY_TRACK_MSG, empty_kb())
             return None
         SESSIONS[cid] = {"flow": "remove", "step": "code"}
         rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["全部移除"], ["取消"]]
@@ -1139,7 +1152,7 @@ def guided(cid, text, h):
         return None
     if t == "調價":
         if not h:
-            send_kb(cid, "追蹤清單是空的")
+            send_kb(cid, EMPTY_TRACK_MSG, empty_kb())
             return None
         SESSIONS[cid] = {"flow": "edit", "step": "code"}
         rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
@@ -1177,7 +1190,7 @@ def guided(cid, text, h):
             return "查價 加權指數 " + " ".join(INTL_GROUP)
         if t == "追蹤的股票":                                  # 按鍵：追蹤清單的股票
             if not h:
-                send_kb(cid, "追蹤清單是空的，先按「追蹤」加一檔吧", _kb([["台灣及國際行情", "追蹤的股票"], ["取消"]]))
+                send_kb(cid, EMPTY_TRACK_MSG, _kb([["台灣及國際行情", "追蹤"], [LIKE_BTN], ["取消"]]))
                 return None
             SESSIONS.pop(cid, None)
             return "查價 " + " ".join(sorted(h))
@@ -1441,6 +1454,11 @@ def _handle_message(m, state, asked):
             send_kb(OWNER, f"👤 {name or '有人'} 想使用持股追蹤\n請按「管理者」→「待開通名單」開通")
         return
     me = get(cid)
+    if text == LIKE_BTN:                                  # 按讚訂閱：回一句感謝，顯示幾秒後連同點按的訊息與回覆一起清掉
+        mid_user = m.get("message_id")
+        mid_thanks = send_kb(cid, random.choice(THANKS))
+        threading.Timer(LIKE_CLEAN_SEC, delete_msgs, args=(cid, [mid_user, mid_thanks])).start()
+        return
     if cid == OWNER:
         mid0 = m.get("message_id")
 
@@ -1568,8 +1586,8 @@ def _handle_message(m, state, asked):
         delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 舊的確認訊息刪掉，只留最新一則
         LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, f"✅ 已更新置頂看板　{datetime.now(TZ):%H:%M}")]
     elif reply and text == "持股":
-        delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 空清單：照舊回一則說明
-        LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply)]
+        delete_msgs(cid, LAST_VIEW.pop(cid, []))      # 空清單：照舊回一則說明，附上追蹤與按讚的按鍵
+        LAST_VIEW[cid] = [m.get("message_id"), send_kb(cid, reply, empty_kb())]
     elif reply:
         send_kb(cid, reply)
 
@@ -1583,6 +1601,9 @@ def handle_message(m, state, asked):
     private = chat.get("type") == "private" and bool(m.get("text"))
     if private:
         CHAT.setdefault(cid, []).append(m.get("message_id"))
+    if private and (m.get("text") or "").strip() == LIKE_BTN:   # 按讚訂閱：感謝訊息顯示幾秒，之後連同點按的訊息一起清掉（不走下面的即時清理）
+        _handle_message(m, state, asked)
+        return
     before = LAST_BOT.get(cid)
     MENU_WAIT.pop(cid, None)
     _handle_message(m, state, asked)
@@ -2078,7 +2099,7 @@ def quote_report(codes):
 
 def holdings_report(h, q, title="📋 追蹤清單"):
     if not h:
-        return "追蹤清單是空的。"
+        return EMPTY_TRACK_MSG
     return board_text(h, q, None, title)
 
 
