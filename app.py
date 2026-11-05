@@ -748,8 +748,7 @@ def rec_buttons(prefix, strategy, items, limit=None):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
         _sub(f"現價 {px(it['close'])}" + (f"｜{vs}" if vs else ""))
-    st.caption(L("追價＝盤中漲到這個價就是追價點　🔴壓＝近 65 交易日第 1 大量當天最高點在現價之上（短線壓力）",
-                 "🟢撐＝最低點在現價之下（支撐、出場參考）"))
+    _sub("追價：盤中漲到這個價就追<br>🔴壓：上方有大量壓力　🟢撐：下方有支撐")
 
 
 def absorb_buttons(items, limit=None):
