@@ -132,9 +132,13 @@ def prescreen(df, ratios):
     pre["breakout"] = ((c > neck) & (v >= cfg.BO_VOL_MULT * mav20) & (c >= ema60) & (ema20 > ema20.shift(1))
                        & (c <= (1 + cfg.BO_MAX_RISE) * l.rolling(60).min())
                        & (l.shift(1).rolling(cfg.BO_BOX_DAYS).min() >= cfg.BO_BOX_RATIO * h.shift(1).rolling(cfg.BO_BOX_DAYS).max()))
-    vol3 = v.rolling(k).mean()
     prior_low = l.rolling(n).min().shift(k)
-    pre["dry"] = ((vol3 <= cfg.DRY_VOL_RATIO * mav20) & (l.rolling(k).min() > prior_low))
+    B = cfg.DRY_BOX_DAYS
+    box_pct = (h.rolling(B).max() - l.rolling(B).min()) / h.rolling(B).max()        # 盤整：近 20 日高低差
+    vol20 = v.rolling(B).mean()
+    vol_base = v.rolling(cfg.DRY_VOL_BASE_DAYS).mean().shift(B)                     # 量縮基準：前 60 日
+    pre["dry"] = ((box_pct <= cfg.DRY_BOX_PCT) & (vol20 <= cfg.DRY_VOL_NEW * vol_base)
+                  & (l.rolling(k).min() > prior_low))
     burst = ((c / c.shift(3) - 1) >= cfg.FLAG_BURST_3D) | ((c / c.shift(1) - 1) >= cfg.FLAG_BURST_1D)
     span = cfg.FLAG_WINDOW - cfg.FLAG_MIN_CONSOL
     had_burst = burst.astype(float).rolling(span + 2).max().shift(cfg.FLAG_MIN_CONSOL + 1).fillna(0) > 0
@@ -144,8 +148,18 @@ def prescreen(df, ratios):
 
 
 
+# ================= 量縮抗跌：每天的族群排名（沒有傳入排名就不算抗跌）=================
+def _resilient(code, inv, top_by_date, day):
+    """None＝沒有排名資料（抗跌這項不算過）；True/False＝依當天前 5 名族群判斷"""
+    if top_by_date is None or inv is None:
+        return None
+    from dry_groups import is_resilient
+    return is_resilient(inv.get(code, []), {"top": list(top_by_date.get(day, []))})
+
+
 # ================= 單一股票回測 =================
-def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_active=False, entry_mode="chase"):
+def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_active=False, entry_mode="chase",
+              code=None, inv=None, top_by_date=None):
     """raw：個股日線（不還原）；mkt：加權指數日線；mstate：market_states(mkt)。
     entry_mode（只影響強勢續攻）：
       chase＝你的習慣：盤整條件成立時，盤中漲到 4% 且突破盤整高點就追（不管收盤是不是攻擊日）
@@ -161,7 +175,8 @@ def run_stock(raw, mkt, mstate, ratios, mode="ladder_avg", start=None, only_acti
     pre = prescreen(df, ratios)
     busy, rows = {}, []
     funcs = {"pullback": lambda i: st.check_pullback(df, i, ratios), "flag": lambda i: st.check_flag(df, i),
-             "breakout": lambda i: st.check_breakout(df, i), "dry": lambda i: st.check_dry(df, i, mkt)}
+             "breakout": lambda i: st.check_breakout(df, i),
+             "dry": lambda i: st.check_dry(df, i, mkt, resilient=_resilient(code, inv, top_by_date, dates[i]))}
     for i in range(69, n - 1):
         if not liq[i] or (start is not None and dates[i] < start):
             continue
