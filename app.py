@@ -732,15 +732,24 @@ def pick(item):
     st.session_state["_scroll_diag"] = True
 
 
+def _sub(text):
+    """按鈕下方的小字（現價、距離等）"""
+    st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">{text}</div>',
+                unsafe_allow_html=True)
+
+
 def rec_buttons(prefix, strategy, items, limit=None):
+    """按鈕上直接寫追價與出場價（手機一行看完）；現價與壓撐放在下方小字"""
     for it in items[:limit]:
         arrow = "↑" if it.get("broke") else ""
-        vs = {"壓": "　🔴壓", "撐": "　🟢撐"}.get(it.get("vl_side"), "")
-        if st.button(f"{it['code']} {it['name']}{arrow}　現價 {px(it['close'])}｜突破價 {px(it['key'])}{vs}",
+        vs = {"壓": "🔴壓", "撐": "🟢撐"}.get(it.get("vl_side"), "")
+        if st.button(f"{it['code']} {it['name']}{arrow}　追價 {px(it['key'])}｜出場 {px(it['stop1'])}",
                      key=f"{prefix}_{strategy}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()      # 清單在可收合區塊（fragment）裡，要整頁重跑才會帶入下方診斷並捲動
-    st.caption(L("🔴壓＝近 65 交易日第 1 大量當天最高點在現價之上（短線壓力）", "🟢撐＝最低點在現價之下（支撐、出場參考）"))
+        _sub(f"現價 {px(it['close'])}" + (f"｜{vs}" if vs else ""))
+    st.caption(L("追價＝盤中漲到這個價就是追價點　🔴壓＝近 65 交易日第 1 大量當天最高點在現價之上（短線壓力）",
+                 "🟢撐＝最低點在現價之下（支撐、出場參考）"))
 
 
 def absorb_buttons(items, limit=None):
@@ -756,14 +765,14 @@ def absorb_buttons(items, limit=None):
 
 
 def watch_buttons(name, items, limit=None):
+    """明日追價名單：按鈕上寫追價與出場價，下方小字寫現價與距離（同一套格式，跟推薦清單一致）"""
     for it in items[:limit]:
         up = (it["chase"] / it["close"] - 1) * 100 if it["close"] else 0
-        if st.button(f"{it['code']} {it['name']}", key=f"watch_{name}_{it['code']}", use_container_width=True):
+        if st.button(f"{it['code']} {it['name']}　追價 {px(it['chase'])}｜出場 {px(it['stop1'])}",
+                     key=f"watch_{name}_{it['code']}", use_container_width=True):
             pick(it)
             st.rerun()
-        st.markdown(f'<div style="text-align:center;opacity:.65;font-size:.85rem;margin:-4px 0 6px;">'
-                    f'現價 {px(it["close"])}｜追價點 {px(it["chase"])}（{up:+.1f}%）｜出場價 {px(it["stop1"])}</div>',
-                    unsafe_allow_html=True)
+        _sub(f"現價 {px(it['close'])}｜距追價 {up:+.1f}%")
 
 
 st.divider()
