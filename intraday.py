@@ -1186,7 +1186,7 @@ def guided(cid, text, h):
     if t == "取消":
         SESSIONS.pop(cid, None)
         delete_msgs(cid, TRACK.pop(cid, []))          # 這一次操作的問答全部清掉
-        return "持股"                                  # 取消後回到持股畫面
+        return "持股" if h else None                   # 取消後回到持股畫面；清單是空的就不再回空清單提示（不然會一直循環）
     if t == "追蹤":
         SESSIONS[cid] = {"flow": "track", "step": "code"}
         send_kb(cid, "要追蹤哪一檔？\n請輸入股票名稱或代號\n例：台積電、2330", _kb([["取消"]]))
