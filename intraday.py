@@ -783,7 +783,7 @@ def _levels_for(code, suffix, price):
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "追蹤清單": "持股", "清單": "持股",
          "track": "追蹤", "remove": "移除", "buy": "買", "set": "設", "quote": "查價", "price": "查價"}
-KEYBOARD = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "追蹤清單"}, {"text": "調價"}], [{"text": "查價"}],
+KEYBOARD = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "追蹤清單"}, {"text": "調價"}], [{"text": "查價"}, {"text": "說明"}],
                          [{"text": "清畫面"}]],
             "resize_keyboard": True, "is_persistent": True}
 KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
@@ -1202,8 +1202,7 @@ def guided(cid, text, h):
     if t == "查價":
         SESSIONS[cid] = {"flow": "quote", "step": "code"}
         rows = [["各國指數行情", "追蹤的股票"], ["取消"]]
-        send_kb(cid, "要查哪一類？\n按「各國指數行情」：加權指數＋晨報的各國指數與期貨\n"
-                     "按「追蹤的股票」：追蹤清單的股票\n或直接輸入名稱或代號，可以多檔\n例：台積電 2317", _kb(rows))
+        send_kb(cid, "要查什麼呢？😊\n可以按下面的按鍵，也可以直接輸入股票名稱或代號（可以多檔）\n例：台積電 2317", _kb(rows))
         return None
     if t == "調價":
         if not h:
@@ -2117,16 +2116,15 @@ def quote_report(codes):
         q.update(intl_quotes(intl, 10))
     esc = lambda v: html.escape(str(v), quote=False)
     out = [f"🔎 <b>查價</b>　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
-    t_end = time.time() + 8                                   # 分價量表最多花 8 秒，超過就不查
-    for c in codes:
+    for c in codes:                                          # 只顯示：名稱、現價、漲跌點、漲跌幅（不顯示代號）
         x = q.get(c)
         if not x:
-            out += ["", f"－ {c}　查不到"]
+            out += ["", f"－ {esc(_dir_name(c) or c)}　查不到"]
             continue
         last, prev = x["last"], x.get("prev")
         name = esc(x.get("name") or _dir_name(c) or c)
         if x.get("notrade"):
-            out += ["", f"－ <b>{name}</b>　{c}", f"今天還沒成交（昨收 {_n(last)}）"]
+            out += ["", f"－ <b>{name}</b>", f"今天還沒成交（昨收 {_n(last)}）"]
             continue
         lamp, chg = "－", ""
         if prev:
@@ -2134,30 +2132,7 @@ def quote_report(codes):
             sg = "+" if diff > 0 else "−"
             lamp = "▲" if diff > 0 else "▼" if diff < 0 else "－"
             chg = f"　{sg}{_n(round(abs(diff), 2))}　{sg}{abs(diff / prev * 100):,.2f}%" if diff else "　平盤"
-        out += ["", f"{lamp} <b>{name}</b>　{c}", f"<b>{_n(last)}</b>{chg}"]
-        rows = ([("昨收", _n(prev))] if prev else []) + [("最高", _n(x.get("high"))), ("最低", _n(x.get("low")))]
-        w = max(len(v) for _, v in rows)
-        body = [f"{k}  {v:>{w}}" for k, v in rows]
-        pos = range_pos(last, x.get("high"), x.get("low"))
-        if pos is not None:
-            body.append(range_bar(pos))
-        out.append(pre(body))
-        if pos is not None:
-            vp = volume_profile(c, last) if (not is_intl(c) and time.time() < t_end) else None
-            if vp:
-                ps, poc = vp
-                where = "之上" if last > poc else "之下" if last < poc else "剛好在"
-                out.append(f"今天買的人 <b>{ps:.0f}%</b> 賺錢")
-                out.append(f"POC <b>{_n(poc)}</b>（成交最集中）")
-                out.append(f"現價在 POC {where}" if where != "剛好在" else "現價剛好在 POC")
-            else:
-                tag = ("高檔" if pos >= 80 else "偏高" if pos >= 60 else "中間" if pos > 40 else "偏低" if pos > 20 else "低檔")
-                out.append(f"區間位置 <b>{pos:.0f}%</b>・{tag}")
-                out.append("（今日最低＝0%，最高＝100%）")
-        if x.get("delayed"):
-            out.append("⚠️ 備用來源，約延遲 20 分")
-        if x.get("intl"):
-            out.append("🌐 國際行情（Yahoo），可能延遲")
+        out += ["", f"{lamp} <b>{name}</b>", f"<b>{_n(last)}</b>{chg}"]
     return "\n".join(out)
 
 
