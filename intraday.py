@@ -1616,6 +1616,11 @@ def _handle_message(m, state, asked):
         return
     if cid in SESSIONS and text in ("持股", "說明"):            # 做到一半按了別的功能：先中止目前這一串
         SESSIONS.pop(cid, None)
+    if text == "取消" and cid not in SESSIONS and not me[0]:          # 清單是空的時按取消：收起空清單提示，看板重送（帶主按鍵）
+        gone = [m.get("message_id"), EMPTY_VIEW.pop(cid, None)] + TRACK.pop(cid, [])
+        delete_msgs(cid, [i for i in gone if i])
+        me[1] = save_holdings(cid, me[0], None, owner[2] if cid == OWNER else None, rotate=True)
+        return
     if text in ("追蹤", "移除", "調價", "查價", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
         if text == "取消" and cid not in SESSIONS:
             TRACK.setdefault(cid, []).append(m.get("message_id"))   # 管理者選單的取消：連同選單一起清掉
