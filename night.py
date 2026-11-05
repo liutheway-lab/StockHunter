@@ -22,7 +22,7 @@ LINE = "━━━━━━━━━━━━━━"
 LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
 ORDER = ["pullback", "flag", "breakout", "dry"]
 TITLES = {"pullback": "📈 強勢續攻（創高拉回）", "flag": "🚀 強勢續攻（噴出後整理）",
-          "breakout": "🌱 低位階起漲", "dry": "🛡 量縮抗跌"}
+          "breakout": "🌱 低位起漲", "dry": "🛡 量縮抗跌"}
 DIAG = os.getenv("DIAG", "").strip().lower() in ("1", "true", "yes")
 
 
