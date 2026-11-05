@@ -1,548 +1,120 @@
-"""night.py — 收盤後個股掃描（台灣時間 14:35 開始，資料沒更新會每 5 分鐘再抓，最多等到 15:15）
-流程：加權指數 → 判斷大盤五層 → 依層級決定啟用哪些策略 → 掃描全上市櫃 → Telegram 通知。
-沒有符合的股票也會發訊息（確認系統有在跑）。
-所有策略數字都在 config.py。
+"""config.py — 所有可調參數（想改策略數字，只要改這個小檔案）"""
 
-診斷模式：手動執行時把 diag 勾起來（或環境變數 DIAG=true），會不管大盤層級、
-列出四套策略各自符合的股票，並顯示每個條件各有幾檔通過，用來判斷哪個條件太嚴格。
-"""
-import json
-import os
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-import config as cfg
-import strategies as st
-from data import apply_twse_volume, fetch_market, fetch_prices, get_directory
-from notify import send_photo, send_telegram
-
-MAX_LIST = 12   # 每套策略最多列出幾檔（依符合程度由高到低，同分才比 20 日均成交金額）
-WEEKDAY = "一二三四五六日"
-LINE = "━━━━━━━━━━━━━━"
-LAYER_ICON = {0: "⚪", 1: "🟢", 2: "🟢", 3: "🟡", 4: "🔴", 5: "🔴"}
-ORDER = ["pullback", "flag", "breakout", "dry"]
-TITLES = {"pullback": "📈 強勢續攻（創高拉回）", "flag": "🚀 強勢續攻（噴出後整理）",
-          "breakout": "🌱 低位階起漲", "dry": "🛡 量縮抗跌"}
-DIAG = os.getenv("DIAG", "").strip().lower() in ("1", "true", "yes")
+# ---------- 名稱 ----------
+LAYER_NAMES = {0: "資料不足", 1: "強多頭", 2: "多頭", 3: "盤整／轉折", 4: "空頭", 5: "強空頭"}
+# 對外只有三種策略：低位階起漲、量縮抗跌、強勢續攻（強勢續攻有兩種型態：創高拉回、噴出後整理）
+STRATEGY_NAMES = {
+    "pullback": "強勢續攻（創高拉回）",
+    "breakout": "低位階起漲",
+    "dry": "量縮抗跌",
+    "flag": "強勢續攻（噴出後整理）",
+}
+SUB_NAMES = {"pullback": "創高拉回", "flag": "噴出後整理"}                    # 強勢續攻底下的型態名
+GROUP_NAMES = {"pullback": "強勢續攻", "flag": "強勢續攻"}                    # 列清單時兩種型態合併成一個名字
 
 
-def fp(x):
-    """價格格式：依台股升降單位（tick）對齊，只留必要的小數，不補零。
-    例：33.30→33.3、227.0→227、124.5→124.5、2820→2,820"""
-    tick = 0.01 if x < 10 else 0.05 if x < 50 else 0.1 if x < 100 else 0.5 if x < 500 else 1 if x < 1000 else 5
-    x = round(round(x / tick) * tick, 2)
-    if abs(x - round(x)) < 1e-9:
-        return f"{x:,.0f}"
-    if abs(x * 10 - round(x * 10)) < 1e-9:
-        return f"{x:.1f}"
-    return f"{x:.2f}"
+def names_join(keys):
+    """多個策略合併成一句話（創高拉回、噴出後整理都叫「強勢續攻」，只列一次）"""
+    out = []
+    for k in keys:
+        n = GROUP_NAMES.get(k, STRATEGY_NAMES[k])
+        if n not in out:
+            out.append(n)
+    return "、".join(out)
 
+# ---------- 流動性 ----------
+MIN_LOTS = 1000            # 5 日均量 >= 1000 張
+MIN_AVG_TURNOVER = 5e7     # 20 日均成交金額 >= 5000 萬
 
-def code_block(lines, header=False, lang=""):
-    # 行尾補「看不見的空格」，避免 Telegram 右上角的 </> 複製鈕蓋到最後一個字
-    # header=True：第一行是表頭，不補空格（表頭本來就比資料行寬，再補會被切到下一行）
-    return "```" + lang + "\n" + "\n".join(ln + ("" if header and k == 0 else "⠀" * 3) for k, ln in enumerate(lines)) + "\n```"
+# ---------- 通用分批（四套策略共用）----------
+TRANCHES = (0.30, 0.40, 0.30)   # 第 1/2/3 筆投入資金比例
+EXT_RATIO = 1.08                # 第 3 筆：突破價 x 1.08
+STOP_ADD_PCT = 0.05             # 第 2 筆防守：突破價下方 5%
+COST_BY_MONEY = True            # True: 比例=資金比例（平均成本用金額加權）；False: 比例=股數比例
+FEE_RT = 0.006                  # 回測用：來回手續費+證交稅約 0.6%
 
+# ---------- 大盤分層與止跌確認 ----------
+USE_REGIME = True               # 依大盤階段決定啟用哪些策略
+SLOPE_DAYS = 5                  # 看均線方向：和幾天前比
+DROP_WARN = 0.10                # 大盤離近 60 日高點跌超過 10%，多加一行警示（只提醒，不影響層級）
+LAYER_CONFIRM_DAYS = 2          # 換層要連續幾天都在新的位置才算（過濾一天的假動作）
+LAYER3_ACTIVE = ["pullback"]    # 第 3 層（盤整轉折）只開最保守的策略：強勢續攻（創高拉回）
+LAYER_SIZE = {1: "強多頭，部位可比平常加大", 2: "多頭，正常部位", 3: "方向未明，部位減半",
+              4: "空頭，止跌確認後才佈局", 5: "強空頭，止跌確認後才佈局"}   # 各層的建議部位說明
+STAB_LOOKBACK = 30              # 找爆量下跌日：訊號日之前 30 個交易日；量縮抗跌的前低、比大盤抗跌也用它
+STAB_DAYS = 3                   # 訊號日之後，連續幾天不破訊號日最低點
+STAB_SHADOW = 0.5               # 反彈日 K 棒（二選一）：長下影線＝下影線 ≥ 當天高低差的 1/2
+STAB_RED_BODY = 0.80            # 　　　　　　　　　　　或長紅＝收紅且實體 ≥ 當天最高到最低的 80%
+STAB_MAX_AGE = 10               # 訊號日最多是幾個交易日以前（再久就當作過期）
 
-# ---------- 大盤區塊 ----------
-def market_block(mk):
-    ma = mk["ma"]
-    head = f"🌐 *大盤｜第 {mk['layer']} 層・{mk['layer_name']}* {LAYER_ICON[mk['layer']]}"
-    if mk.get("tag"):
-        head += f"\n{'🔥' if mk['tag'] == '過熱' else '😱'} *{mk['tag']}*"
+# ---------- 強勢續攻的攻擊日（創高拉回、噴出後整理共用的進出場）----------
+# 盤整之後，收盤第一次站上盤整高點、收紅 K、量能跟前高那天差不多 → 攻擊日買 50%
+# 股價再站上前波高點（突破日）→ 再買 50%
+ATTACK_SPLIT = (0.50, 0.50)     # 攻擊日 / 突破日 各投入多少資金
+ATTACK_MIN_CONSOL = 4           # 前波高點之後至少盤整 4 天
+ATTACK_MAX_CONSOL = 10          # 最多盤整 10 天（強勢股不會整理太久）
+ATTACK_MIN_GAIN = 0.05          # 攻擊日漲幅 >= 5%
+ATTACK_CLOSE_POS = 2 / 3        # 攻擊日收盤在當天高低區間的上 1/3（上影線短）
+CHASE_MAX_DIST = 0.05           # 明日追價名單：追價點離今天收盤最多 5%（再遠盤中幾乎過不了）
+CHASE_GAIN = 0.04               # 你的習慣：盤中漲到 4% 且突破盤整高點就追
+WATCH_MAX_CONSOL = 15           # 明日追價名單（觀察用）：盤整天數放寬到 15 天
+ATTACK_MAX_DEPTH = 0.10         # 盤整最低點離前高超過 10% → 盤整失敗，不列入（強勢股不會盤那麼深）
+ATTACK_VOL_VS_PEAK = 0.90       # 攻擊日量 >= 前高那天成交量的 9 成
+ATTACK_MAX_LOSS = 0.10          # 出場價＝盤整最低點；太遠時最多只賠 10%（買價下 10%）
+ATTACK_STOP2_PCT = 0.05         # 突破日買進第 2 筆後，出場價上移到前波高點下 5%
+# 目標價＝盤整最低點 + 整段漲幅（前波高點 − 前高之前 30 日內最低點）
 
-    def lab(t, w=5):                                          # 中文字占 2 格，用顯示寬度補空白才會對齊
-        return t + " " * max(0, w - sum(2 if ord(ch) > 0x2E80 else 1 for ch in t))
+# ---------- 強勢續攻：創高拉回 ----------
+PB_LOOKBACK = 30                # 前波高點：近 30 日內的最高點
+PB_CONS_VOL_RATIO = 0.70        # 盤整期均量 <= 前高那天成交量的 70%（量縮）
+PB_LEG_LOOKBACK = 30            # 前一波起漲點：前高之前 30 日內的最低點
+PB_MAX_AVG_RATIO = 0.94         # （舊規則，保留給相容用）
 
-    def two(l1, v1, l2="", v2=None):
-        s = f"{lab(l1)}{v1:>8,.0f}"
-        return s + (f"   {lab(l2)}{v2:>8,.0f}" if v2 is not None else "")
+# ---------- 低位階起漲（低檔爆量起漲）----------
+BO_PLATFORM = 30                # 頸線天數
+BO_BOX_DAYS = 10                # 盤整：突破前近 10 日
+BO_BOX_RATIO = 0.90             # 近 10 日最低點不得低於最高點的 90%（區間夠窄才算盤整）
+BO_MAX_RISE = 0.18              # 離 60 日低點不超過 18%
+BO_VOL_MULT = 2.0               # 今日量 >= 20 日均量 2 倍
+BO_STOP_PCT = 0.07              # 停損：頸線下 2% 或買價下 7%，取較低
+BO_TARGET_PCT = 0.20            # 目標 +20%
 
-    tbl = [two("5日", ma[5], "10日", ma[10]),
-           two("月線", ma[20], "季線", ma[60])]
-    cc = mk["df"]["Close"]
-    chg = float(cc.iloc[-1] - cc.iloc[-2]) if len(cc) > 1 else 0.0
-    pct = chg / float(cc.iloc[-2]) * 100 if len(cc) > 1 else 0.0
-    arrow = "▲" if chg > 0 else "▼" if chg < 0 else "─"          # 只用箭頭，不用紅綠燈（紅綠燈留給利多／利空，避免搞混）
-    out = [head, f"收盤　{mk['close']:,.0f}\n{arrow} {abs(chg):,.0f} 點（{pct:+.2f}%）", code_block(tbl)]
-    if mk.get("why"):
-        out.append("\n".join(mk["why"]))
-    if mk.get("tag"):
-        out.append(st.SHORT_TAG_NOTE[mk["tag"]])
-    if mk.get("dd") is not None and mk["dd"] <= -cfg.DROP_WARN:
-        out.append(f"⚠️ 離近 60 日高點\n已經跌了 {abs(mk['dd']) * 100:.1f}%")
+# ---------- 量縮抗跌 ----------
+DRY_VOL_RATIO = 0.50            # 3 日平均量 <= 20 日均量的 50%
+DRY_RS_RATIO = 0.80             # 同一段期間（從大盤高點起算），個股最大回檔 <= 大盤跌幅的 80%
+DRY_RRR = 2.5                   # （舊規則，保留給相容用）
+DRY_MAX_PRESSURE_DIST = 0.10    # 65 日第 1 大量日的最高點若在現價之上（壓力），現價離它最多 10%，再遠就不入選
+DRY_STOP_DAYS = 5               # 出場價＝近 5 日最低點
+DRY_T2_HIGH_DAYS = 65          # 第二目標：找不到壓力時，用近 65 日高點（跟圖上看得到的 65 根 K 線、壓／撐的 65 日一致）
+DRY_T2_R = 2.5                  # 第二目標：上方都沒有壓力時，買價＋2.5 倍風險（賺的空間＝賠的空間 2.5 倍）
+RR_MIN = 1.5                    # 風報比低於 1.5 就提示（賺的空間不到賠的 1.5 倍）
+DRY_KEY_LOOKBACK = 20           # 突破價 = 近 20 日高點
 
-    if mk["layer"] in (4, 5):
-        s = mk["stab"]
-        if s is None:
-            out.append("🧱 止跌確認：資料不足")
-        elif s["vol_missing"]:
-            out.append("🧱 止跌確認：❌ 無法確認\n大盤成交金額抓不到")
-        else:
-            ok = lambda b: "✅" if b else "❌"
-            ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
-            da, nd = s["days_after"], s["need_days"]
-            state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
-            out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 都過才算止跌")
-            cmp_ = lambda b, ge="≥", lt="<": ge if b else lt
-            low_ok = "✅" if s["no_break"] else "⏳" if da == 0 else "❌"
-            sig = s["vol_ok"] and s["shape_ok"]
-            blk1 = [f"量能　{ratio:>4.0f}%　要 ≥ 100%　{ok(s['vol_ok'])}"]
-            if da == 0:
-                blk1.append("不破低　　　待觀察　　　　❌")
-            else:
-                blk1.append(f"不破低 {s['recent_low']:,.0f} 要 > {s['prior_low']:,.0f}　{low_ok}")
-            blk2 = [f"下影線 {s['shadow'] * 100:>4.0f}%　要 ≥ {cfg.STAB_SHADOW * 100:.0f}%　{ok(s['shadow_ok'])}",
-                    "",
-                    f"長　紅 {s['body'] * 100:>4.0f}%　要 ≥ {cfg.STAB_RED_BODY * 100:.0f}%　{ok(s['red_ok'])}"]
-            out.append(f"爆量日：{s['dump_date']:%m/%d}\n（這波成交額最大的下跌日）\n"
-                       f"低點日：{s['signal_date']:%m/%d}\n（最近 3 天股價最低的那天）")
-            out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝低點日成交額\n　　　÷爆量日成交額\n不破低＝低點日之後的最低點\n　　　　要高於低點日最低點")
-            out.append(code_block(blk1, lang="text"))
-            if da == 0:
-                out.append("今天為近3日最低點，待後續觀察")
-            out.append("⠀\n⠀")
-            out.append("*② K棒*　二擇一，有一項 ✅ 就過")
-            out.append(code_block(blk2, lang="text"))
-            out.append("％＝占當天整根K棒的比例")
-            if s["ok"]:
-                out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
-    if mk["active"]:
-        names = cfg.names_join(mk["active"])
-        out.append(f"✅ 啟用策略：{names}" + ("\n⚠️ 第 3 層方向未明\n只開最保守的策略，部位減半" if mk["risk"] else ""))
-        out.append(f"💰 部位：{('過熱，維持正常部位，不加碼' if mk.get('tag') == '過熱' else cfg.LAYER_SIZE.get(mk['layer'], ''))}")
-    else:
-        out.append("🔴 尚未止跌，不建議建立多頭部位" if mk["layer"] in (4, 5) else "🔴 沒有啟用的策略")
-    return "\n".join(out)
+# ---------- 強勢續攻：噴出後整理 ----------
+FLAG_WINDOW = 20                # 近 20 日內要有噴出
+FLAG_BURST_3D = 0.15            # 3 日漲幅 >= 15%
+FLAG_BURST_1D = 0.04            # 或單日漲幅 >= 4%
+FLAG_BURST_VOL = 1.5            # 噴出日量 >= 20 日均量 1.5 倍
+FLAG_MIN_CONSOL = 4             # 噴出高點後至少整理 4 天
+FLAG_MAX_PULLBACK = 0.50        # 回檔不超過噴出漲幅的 1/2
+FLAG_VOL_RATIO = 0.70           # 整理期均量 <= 噴出期均量的 70%
+# 進出場改用上面的「攻擊日」規則
 
+BATCH = 60
+FALLBACK = ["2330.TW", "2317.TW", "2454.TW", "2382.TW", "3231.TW", "2603.TW"]
 
-# ---------- 掃描 ----------
-def dedupe_similar(lists, active):
-    """強勢續攻的兩種型態（創高拉回、噴出後整理）攻擊日進場規則一樣，同一檔常常兩邊都符合。
-    兩邊都有的股票只留一份：預設留在「噴出後整理」，並標上也符合創高拉回；
-    如果只有「創高拉回」是啟用的型態（例如大盤第 3 層），就留在創高拉回。"""
-    a, b = lists.get("pullback"), lists.get("flag")
-    if a is None or b is None:
-        return
-    keep_flag = "flag" in active or "pullback" not in active
-    keep, drop, kname, dname = (b, a, "flag", "pullback") if keep_flag else (a, b, "pullback", "flag")
-    dsyms = {h["sym"] for h in drop}
-    for h in keep:
-        if h["sym"] in dsyms:
-            h["also"] = cfg.SUB_NAMES[dname]
-    ksyms = {h["sym"] for h in keep}
-    lists[dname][:] = [h for h in drop if h["sym"] not in ksyms]
-
-
-ABSORB_BASE = {}      # {代號.TW: (20 日均量（股）, 收盤價, 日線三層數字)}：給盤中 13:00 恐慌承接預判用
-
-
-def absorb_avg_poc(sym, day):
-    """恐慌承接發現日的均價與 POC（用 Yahoo 5 分 K）。抓不到回傳 (None, None)，盤中就只看跌停與破低"""
-    try:
-        import yfinance as yf
-        bars = yf.download(sym, period="60d", interval="5m", progress=False, auto_adjust=False)
-        if bars is None or bars.empty:
-            return None, None
-        if hasattr(bars.columns, "levels"):                   # 多層欄位（yfinance 新版）→ 只留欄位名稱
-            bars.columns = bars.columns.get_level_values(0)
-        return st.day_avg_poc(bars, day)
-    except Exception as e:
-        print(f"{sym} 發現日均價／POC 抓不到：{repr(e)[:80]}")
-        return None, None
-
-
-def scan(prices, mk, ratios):
-    """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數, 明日追價名單, 恐慌承接名單)"""
-    hits = {k: [] for k in ORDER}
-    watch = {"pullback": [], "flag": []}       # 明日追價名單
-    funnel = {k: {"checks": {}, "ok": 0} for k in ORDER}
-    absorb = []                                # 恐慌承接觀察名單（今天先殺後拉：長下影且帶量）
-    liquid = stale = 0
-    ABSORB_BASE.clear()
-    last_date = mk["date"]
-    for sym, raw in prices.items():
-        try:
-            if raw.index[-1] < last_date:        # 停牌或資料沒更新到最新一天
-                stale += 1
-                continue
-            df = st.add_indicators(raw)
-            i = len(df) - 1
-            if i < 69:
-                continue
-            if not st._liq(df.iloc[i])[1]:
-                continue
-            liquid += 1
-            mav = float(df["MAV20"].iloc[i])
-            if mav == mav and mav > 0:
-                ABSORB_BASE[sym] = (mav, float(df["Close"].iloc[i]), st.absorb_levels(df.iloc[:i]))
-            results = {
-                "pullback": st.check_pullback(df, i, ratios),
-                "flag": st.check_flag(df, i),
-                "breakout": st.check_breakout(df, i),
-                "dry": st.check_dry(df, i, mk["df"]),
-            }
-            ab = st.check_absorb(df, i)
-            if ab:
-                avg, poc = absorb_avg_poc(sym, df.index[i])          # 發現日的均價＋POC：盤中用來判斷警示與站回
-                absorb.append({"sym": sym, "r": ab, "turnover": ab["turnover"], "score": st.rank_absorb(ab),
-                               "avg": avg, "poc": poc})
-            for name, r in results.items():
-                if r is None:
-                    continue
-                for cname, cok, _ in r["checks"]:
-                    funnel[name]["checks"][cname] = funnel[name]["checks"].get(cname, 0) + (1 if cok else 0)
-                if r["ok"]:
-                    funnel[name]["ok"] += 1
-                    plan = st.plan_for(name, r, ratios)
-                    hits[name].append({"sym": sym, "r": r, "plan": plan, "turnover": r["turnover"], "vl": st.vol_low(df),
-                                        "score": st.rank_score(name, r, plan)})
-            for name in watch:                    # 今天還沒攻擊、但盤整條件已成立 → 明天的追價點
-                if results[name] is not None and results[name]["ok"]:
-                    continue
-                w = st.watch_tomorrow(raw, name)
-                if w:
-                    plan = st.attack_plan(w, entry=w["chase_px"])
-                    watch[name].append({"sym": sym, "r": w, "plan": plan, "turnover": w["turnover"],
-                                        "score": st.rank_score(name, w, plan, watch=True),
-                                        "prev": float(raw["Close"].iloc[-2]) if len(raw) >= 2 else None})
-        except Exception as e:   # 單一股票出錯不影響整體
-            print(f"{sym} 分析失敗：{e!r}")
-    by_score = lambda x: (-x["score"], -x["turnover"])        # 越符合規則越前面；同分才比成交金額
-    for k in hits:
-        hits[k].sort(key=by_score)
-    for k in watch:
-        watch[k].sort(key=by_score)
-    absorb.sort(key=by_score)
-    dedupe_similar(hits, mk["active"])
-    dedupe_similar(watch, mk["active"])
-    return hits, liquid, stale, funnel, watch, absorb
-
-
-def funnel_lines(funnel, liquid):
-    """各策略每個條件各有幾檔通過（診斷用）"""
-    out = [f"今天流動性合格共 {liquid} 檔。",
-           "下面每個條件是『單獨』計算有幾檔過關；全部條件同時過關才會入選。"]
-    for name in ORDER:
-        f = funnel[name]
-        out.append("")
-        out.append(f"{TITLES[name]}　最後入選 {f['ok']} 檔")
-        for c, k in f["checks"].items():
-            if c != "流動性":
-                out.append(f"・{c}　{k}／{liquid}")
-    return out
-
-
-def _w(t):
-    """估算顯示寬度：中文約 1.68 個半形字寬（iPhone 的等寬字型），其他 1"""
-    return sum(1.68 if ord(c) > 0x2E80 else 1 for c in t)
-
-
-def _padr(t, width):
-    """靠左對齊，用全形空白＋半形空白把寬度補到 width"""
-    d = width - _w(t)
-    if d <= 0:
-        return t
-    n = int(d // 1.68)
-    return t + "\u3000" * n + " " * round(d - n * 1.68)
-
-
-def tv_link(sym):
-    """TradingView 連結（台股：上市 TWSE、上櫃 TPEX）"""
-    code = sym.split(".")[0]
-    ex = "TPEX" if sym.endswith(".TWO") else "TWSE"
-    return f"[{code}](https://www.tradingview.com/chart/?symbol={ex}%3A{code})"
-
-
-def inactive_note(mk):
-    """策略目前沒有被大盤走勢啟用時，標題下面加的說明（每行都短，手機上不會被切斷）"""
-    return (f"\n⚠️ 大盤走勢篩選：未啟用"
-            f"\n大盤現在是第 {mk['layer']} 層・{mk['layer_name']}"
-            f"\n這套策略目前不建議進場"
-            f"\n名單只供參考")
-
-
-def strategy_block(name, items, names, risk, note=""):
-    title = f"*{TITLES[name]}*　{len(items)} 檔" + ("　⚠️標示風險" if risk else "") + note
-    shown = items[:MAX_LIST]
-    labels = []
-    for h in shown:
-        code = h["sym"].split(".")[0]
-        broke = name == "flag" and h["r"].get("status", "").startswith("已突破")
-        vl = h.get("vl")
-        labels.append(f"{code} {names.get(h['sym'], code)}" + ("↑" if broke else "") + (f" {vl['side']}" if vl else "")
-                      + ("◆" if h.get("also") else ""))
-    W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    cols = [("現價", 3), ("突破價", 1), ("出場價", 1), ("目標", 1)]          # 表頭縮短，整行才不會被切成兩行
-    lines = [_padr("代號 名稱", W) + "".join(" " * pad + c for c, pad in cols)]
-    for h, lab in zip(shown, labels):
-        p = h["plan"]
-        nums = [h["r"]["close"], p["key"], p["stop1"], p["targets"][0][1]]
-        lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
-    links = "　".join(tv_link(h["sym"]) for h in shown)
-    more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
-    low_rr = [(names.get(h["sym"], h["sym"].split(".")[0]), h["plan"]["rr"]) for h in shown
-              if h["plan"].get("rr") is not None and h["plan"]["rr"] < cfg.RR_MIN]
-    rr_txt = ""
-    if low_rr:
-        pairs = [f"{n} {r:.1f}" for n, r in low_rr]
-        rr_txt = f"\n⚠️ 風報比低於 {cfg.RR_MIN}：\n" + "\n".join("　" + "　".join(pairs[k:k + 2]) for k in range(0, len(pairs), 2))
-    t2 = [(names.get(h["sym"], h["sym"].split(".")[0]), h["plan"]["targets"][1][1]) for h in shown
-          if len(h["plan"]["targets"]) > 1]
-    if t2:
-        pairs = [f"{n} {fp(v)}" for n, v in t2]
-        rr_txt += "\n🎯 第二目標（參考）：\n" + "\n".join("　" + "　".join(pairs[k:k + 2]) for k in range(0, len(pairs), 2))
-    legend = ("\n排序：越符合規則越前面"
-              "\n壓＝第1大量日最高點在現價上"
-              "\n撐＝第1大量日最低點在現價下"
-              "\n（65 日內成交量最大的那天）")
-    also = sorted({h["also"] for h in shown if h.get("also")})
-    if also:
-        legend += f"\n◆＝也符合{'、'.join(also)}"
-    return title + "\n" + code_block(lines, header=True) + rr_txt + legend + more + "\n📊 TradingView 線圖：" + links
-
-
-def watch_block(name, items, names, note="", icon="🎯"):
-    """明日追價名單：明天盤中漲 4% 且突破盤整高點，就是追價點"""
-    title = f"*{icon} 明日追價名單・{cfg.STRATEGY_NAMES[name]}*　{len(items)} 檔" + note
-    shown = items[:MAX_LIST]
-    labels = [f"{h['sym'].split('.')[0]} {names.get(h['sym'], h['sym'].split('.')[0])}" + ("◆" if h.get("also") else "")
-              for h in shown]
-    W = max([_w("代號 名稱")] + [_w(x) for x in labels])
-    cols = [("現價", 3), ("追價點", 1), ("出場價", 1), ("目標", 1)]
-    lines = [_padr("代號 名稱", W) + "".join(" " * pad + c for c, pad in cols)]
-    for h, lab in zip(shown, labels):
-        p = h["plan"]
-        nums = [h["r"]["close"], p["e"], p["stop1"], p["targets"][0][1]]
-        lines.append(_padr(lab, W) + "".join(f" {fp(v):>5}" for v in nums))
-    more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
-    legend = (f"\n排序：越符合規則越前面"
-              f"\n追價點＝明天盤中要漲到的價格"
-              f"\n（漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點）"
-              f"\n盤整 {cfg.ATTACK_MIN_CONSOL}～{cfg.WATCH_MAX_CONSOL} 天、離前高 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%"
-              f"\n追價點離現價最多 {cfg.CHASE_MAX_DIST * 100:.0f}%"
-              f"\n盤中看強弱再決定追不追")
-    also = sorted({h["also"] for h in shown if h.get("also")})
-    if also:
-        legend += f"\n◆＝也符合{'、'.join(also)}"
-    links = "　".join(tv_link(h["sym"]) for h in shown)
-    return title + "\n" + code_block(lines, header=True) + legend + more + "\n📊 TradingView 線圖：" + links
-
-
-RESULT_FILE = "scan_results.json"
-BASE_FILE = "absorb_base.json"          # 全市場基準（盤中 13:00 預判要讀）
-PRE_FILE = "absorb_1300.json"           # 盤中 13:00 通知過的名單（intraday.py 存，這裡對照收盤結果）
-
-
-def load_pre1300(mk):
-    """今天 13:00 預判通知過的代號集合；檔案不是今天的就當作沒有"""
-    try:
-        with open(PRE_FILE, encoding="utf-8") as f:
-            j = json.load(f)
-        if j.get("date") == f"{mk['date']:%Y-%m-%d}":
-            return set(j.get("codes") or [])
-    except Exception:
-        pass
-    return set()
-
-
-def absorb_block(items, names, note="", pre=None):
-    """恐慌承接觀察名單：今天殺低後被買回來、而且有量。只列股票，沒有追價點"""
-    title = f"*🧺{cfg.ABSORB_NAME}　{len(items)}檔*\n說明（今日帶量先殺後拉）" + note
-    shown = items[:MAX_LIST]
-    pre = pre or set()
-    # 表格只放「純半形」的數字欄，名稱放最後一欄：
-    # 中文字在不同手機／電腦的寬度不一樣，放在最後就不會把數字欄推歪（朋友的畫面不會空很大）
-    rows = [(h["sym"].split(".")[0], fp(h["r"]["close"]), fp(h["r"]["low"]), f"{h['r']['vol_mult']:.1f}",
-             names.get(h["sym"], h["sym"].split(".")[0]) + ("◆" if h["sym"].split(".")[0] in pre else ""))
-            for h in shown]
-    cw = [max(len(r[k]) for r in rows) for k in (1, 2, 3)] if rows else [0, 0, 0]
-    lines = [f"{code} {c:>{cw[0]}} {lo:>{cw[1]}} {v:>{cw[2]}}  {nm}" for code, c, lo, v, nm in rows]
-    more = f"\n（完整 {len(items)} 檔請到 App 查看）" if len(items) > MAX_LIST else ""
-    legend = (f"\n欄位：代號、現價、今日最低、量能（倍）、名稱"
-              f"\n排序：量能越大、振幅越大越前面"
-              f"\n先殺：當天最低價跌破昨收"
-              f"\n長下影＝下影線占當天 {cfg.STAB_SHADOW * 100:.0f}% 以上"
-              f"\n量能＝今天量 ÷ 20 日均量"
-              f"\n要 {cfg.ABSORB_VOL_MULT} 倍以上"
-              f"\n當天振幅要 {cfg.ABSORB_MIN_RANGE * 100:.0f}% 以上"
-              f"\n距 20 日高點已跌 {cfg.ABSORB_DROP_MIN * 100:.0f}%～{cfg.ABSORB_DROP_MAX * 100:.0f}%"
-              f"\n收盤守住 65 日大量日的低點"
-              f"\n收盤要收回最低 {cfg.ABSORB_RECOVER * 100:.0f}% 以上"
-              f"\n只供追蹤，沒有追價點"
-              f"\n隔天不破發現日最低，才比較可信")
-    if pre:
-        legend += "\n◆＝13:00 已預判通知過"
-        codes_now = {h["sym"].split(".")[0] for h in items}
-        gone = sorted(c for c in pre if c not in codes_now)
-        if gone:
-            nm = {k.split(".")[0]: v for k, v in names.items()}
-            legend += "\n13:00 預判、收盤沒成立：" + "、".join(f"{c} {nm.get(c, '')}".strip() for c in gone)
-    links = "　".join(tv_link(h["sym"]) for h in shown)
-    return title + "\n" + code_block(lines) + legend + more + "\n📊 TradingView 線圖：" + links
-
-
-def save_results(mk, hits, names, directory, now, watch=None, absorb=None, pre=None):
-    """把今晚的掃描結果存成 JSON，網頁 app 的『今日推薦』直接讀它"""
-    info = {r.sym: (r.industry, r.market) for r in directory.itertuples()}
-    out = {
-        "generated_at": f"{now:%Y-%m-%d %H:%M}",
-        "data_date": f"{mk['date']:%Y-%m-%d}",
-        "layer": mk["layer"], "layer_name": mk["layer_name"],
-        "active": list(mk["active"]), "risk": bool(mk["risk"]),
-        "stab_ok": bool(mk["stab_ok"]),
-        "hits": {},
-    }
-    for name in ORDER:
-        rows = []
-        for h in hits[name]:
-            code = h["sym"].split(".")[0]
-            ind, mkt = info.get(h["sym"], ("", ""))
-            rows.append({
-                "code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
-                "industry": ind or "", "market": mkt or "",
-                "close": round(h["r"]["close"], 2), "key": h["plan"]["key"], "stop1": h["plan"]["stop1"],
-                "target": h["plan"]["targets"][0][1], "turnover": round(h["turnover"]), "score": h["score"],
-                "broke": bool(name == "flag" and h["r"].get("status", "").startswith("已突破")),
-                **({"also": h["also"]} if h.get("also") else {}),
-                **({"vl_low": h["vl"]["level"], "vl_date": f"{h['vl']['date']:%m/%d}", "vl_vol": round(h["vl"]["vol"]),
-                    "vl_side": h["vl"]["side"]} if h.get("vl") else {}),
-            })
-        out["hits"][name] = rows
-    out["watch"] = {}
-    for name, items in (watch or {}).items():
-        rows = []
-        for h in items:
-            code = h["sym"].split(".")[0]
-            ind, mkt = info.get(h["sym"], ("", ""))
-            rows.append({"code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
-                         "industry": ind or "", "market": mkt or "", "close": round(h["r"]["close"], 2),
-                         "chase": h["plan"]["e"], "stop1": h["plan"]["stop1"], "target": h["plan"]["targets"][0][1],
-                         "key": h["plan"]["key"], "days": int(h["r"].get("n_cons", 0)), "turnover": round(h["turnover"]), "score": h["score"],
-                         **({"prev": round(h["prev"], 2)} if h.get("prev") else {})})
-        out["watch"][name] = rows
-    out["absorb"] = []
-    for h in (absorb or []):
-        code = h["sym"].split(".")[0]
-        ind, mkt = info.get(h["sym"], ("", ""))
-        r = h["r"]
-        out["absorb"].append({"code": code, "name": names.get(h["sym"], code), "suffix": "." + h["sym"].split(".")[1],
-                              "industry": ind or "", "market": mkt or "", "close": round(r["close"], 2),
-                              "low": round(r["low"], 2), "high": round(r["high"], 2), "kind": r["kind"],
-                              "vol_mult": round(r["vol_mult"], 1), "chg": round(r["chg"] * 100, 2),
-                              "turnover": round(h["turnover"]), "score": h["score"],
-                              "avg": h.get("avg"), "poc": h.get("poc"),
-                              "sup": round(h["r"]["sup"], 2) if h["r"].get("sup") is not None else None,   # 大量支撐（盤中跌破＝承接失敗）
-                              **({"pre": True} if code in (pre or set()) else {})})
-    with open(RESULT_FILE, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1)
-    base = {}                                          # 全市場基準：盤中 13:00 恐慌承接預判用（20 日均量、昨收）
-    for sym, (mav, prev, lv) in ABSORB_BASE.items():
-        code, sfx = sym.split(".")[0], "." + sym.split(".")[1]
-        row = {"s": sfx, "n": names.get(sym, code), "m": round(mav), "p": round(prev, 2)}
-        if lv:                                         # 日線三層數字：h=近19日最高、l=近19日最低、x=65日大量日最低（支撐）
-            row.update({"h": round(lv["hi19"], 2), "l": round(lv["lo19"], 2),
-                        "x": round(lv["sup"], 2) if lv["sup"] is not None else None})
-        base[code] = row
-    with open(BASE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"date": f"{mk['date']:%Y-%m-%d}", "stocks": base}, f, ensure_ascii=False, separators=(",", ":"))
-
-
-def wait_market(now, max_wait_min=40, step_min=5):
-    """收盤後資料不一定馬上更新：資料日不是今天，就每 5 分鐘再抓一次，最多等 40 分鐘。
-    等不到就用最新的（報告會標示「資料為最近交易日」）。週末不等"""
-    import time
-    tries = max_wait_min // step_min
-    for i in range(tries + 1):
-        mk = st.market_summary(fetch_market())
-        if mk["date"].date() == now.date() or now.weekday() >= 5 or i == tries:
-            return mk
-        print(f"大盤資料還是 {mk['date']:%m/%d}，{step_min} 分鐘後再抓（第 {i + 1} 次）")
-        time.sleep(step_min * 60)
-        now = datetime.now(ZoneInfo("Asia/Taipei"))
-
-
-def run():
-    now = datetime.now(ZoneInfo("Asia/Taipei"))
-    ratios = cfg.TRANCHES
-
-    if now.weekday() == 0:       # 每週一：掃描前先附上說明書（新加入的人才看得到）
-        try:
-            from guide import build
-            send_telegram(build())
-        except Exception as e:
-            print("說明書傳送失敗：", repr(e))
-
-    try:
-        mk = wait_market(now)
-    except Exception as e:
-        send_telegram([f"🌙 *台股夜間掃描*\n⚠️ 大盤資料抓取失敗\n今晚無法掃描：{e}"])
-        raise SystemExit(str(e))
-
-    directory = get_directory()
-    directory = directory.assign(sym=directory["code"] + directory["suffix"])
-    names = dict(zip(directory["sym"], directory["name"]))
-    prices, failed = fetch_prices(list(directory["sym"]))
-    prices, _ = apply_twse_volume(prices, list(mk["df"].index[-70:]))   # 上市股票的成交量改用證交所官方（跟券商一致）
-    hits, liquid, stale, funnel, watch, absorb = scan(prices, mk, ratios)
-
-    print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
-    pre = load_pre1300(mk)
-    try:
-        save_results(mk, hits, names, directory, now, watch, absorb, pre)
-    except Exception as e:
-        print("掃描結果存檔失敗：", repr(e))
-
-    data_date = mk["date"]
-    head = [
-        "🌙 *台股夜間掃描*" + ("　🔬診斷模式" if DIAG else ""),
-        f"{now:%m/%d}（{WEEKDAY[now.weekday()]}）{now:%H:%M}　資料日 {data_date:%m/%d}",
-    ]
-    if data_date.date() != now.date():
-        head.append("📌 資料為最近交易日")
-
-    parts = ["\n".join(head) + "\n" + LINE, market_block(mk) + "\n" + LINE]
-
-    active = mk["active"]
-    shown = False
-    if active or DIAG:
-        for name in ORDER:
-            if not hits[name]:
-                continue
-            if name in active:
-                parts.append(strategy_block(name, hits[name], names, mk["risk"]))
-                shown = True
-            elif DIAG:
-                parts.append(strategy_block(name, hits[name], names, False, inactive_note(mk)))
-                shown = True
-        if not shown:
-            parts.append("今晚沒有符合的股票。")
-    for name in ("pullback", "flag"):              # 明日追價名單（大盤啟用這套策略時才推播）
-        if watch[name] and (name in active or DIAG):
-            parts.append(watch_block(name, watch[name], names, "" if name in active else inactive_note(mk),
-                                     icon="🎯" if name in active else "👀"))
-    if absorb:                                     # 恐慌承接觀察名單：不管大盤層級，只供追蹤
-        parts.append(absorb_block(absorb, names, "" if active else inactive_note(mk), pre))
-    # 只有出問題時才顯示提醒
-    warn = []
-    if directory.attrs.get("fallback"):
-        warn.append("⚠️ 官方股票清單抓取失敗\n只掃描備用的幾檔")
-    elif failed and len(failed) > 0.15 * len(directory):
-        warn.append(f"⚠️ 有 {len(failed)} 檔沒抓到資料\n結果可能不完整")
-    if warn:
-        parts.append("\n".join(warn))
-
-    if parts[-1].endswith(LINE):       # 後面沒有內容時，不要留一條多餘的分隔線
-        parts[-1] = parts[-1][:-len(LINE)].rstrip()
-    send_telegram(parts)
-
-    # 每天都傳一張大盤線圖；空頭層級會多標出前低、爆量下跌日、近 3 日
-    try:
-        from chart_png import market_chart
-        send_photo(market_chart(mk))
-    except Exception as e:
-        print("線圖產生失敗：", repr(e))
-
-
-if __name__ == "__main__":
-    run()
+# ---- 恐慌承接（只做觀察名單，不給追價點、不試算）----
+ABSORB_NAME = "恐慌承接"
+ABSORB_VOL_MULT = 2.0            # 今天量 >= 20 日均量 2 倍（比支撐壓力的「帶量」1.5 倍更嚴，只留真的異常放量）
+ABSORB_MIN_RANGE = 0.10          # 今天高低差至少是前一天收盤的 10%（要夠恐慌才算殺低）
+# 日線三層（2026-11-05 加入）：距高點跌 15%～35% → 守住支撐 → 收回（盤中版也要）
+ABSORB_DROP_MIN = 0.15           # 收盤離近 20 日高點跌 ≥ 15%（跌不到 15% 多半是高檔震盪，不進恐慌承接）
+ABSORB_DROP_MAX = 0.35           # 收盤離近 20 日高點跌 ≤ 35%（跌超過 35% 先不列，待回測確認）
+ABSORB_RECOVER = 0.05            # 收盤 ≥ 今日最低 × 1.05（盤中收回，不是殺低後就收在最低）
+ABSORB_SUCCESS_RECOVER = 0.05    # 盤中承接成功：現價 ≥ 發現日最低 × 1.05，且站上發現日均價與 POC（只提醒，不給追價點）
+# 守住支撐：收盤 ≥ 近 65 日成交量最大那天的最低點（沿用壓／撐的計算）
+ABSORB_PRE_SCAN = (12, 50)      # 恐慌承接預判：12:50 起抓數字、判斷一次（12:50～12:59 之間）
+ABSORB_PRE_AT = (13, 0)          # 到 13:00 才推播，收盤前還有 30 分鐘決定
+# 盤中換算全日量：12:50 的累計量約佔全日的比例（用 volume_profile.py 量測後填入；目前 0.90 是估計值，還沒量）
+VOL_SHARE_PRE = 0.90
+ABSORB_PRE_MAX = 10              # 13:00 通知最多列幾檔
