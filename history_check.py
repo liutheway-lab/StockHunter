@@ -25,7 +25,14 @@ text = "\n".join(lines)
 print(text)
 
 try:
-    from notify import send_telegram
-    send_telegram(text)
+    import os
+    import requests
+    owner = os.getenv("TG_OWNER_ID", "").strip()
+    tok = os.getenv("TG_BOT_TOKEN", "").strip()
+    if owner and tok:          # 只私訊管理者，不發到群組
+        requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                      json={"chat_id": owner, "text": text}, timeout=20)
+    else:
+        print("沒有設定 TG_OWNER_ID，只印在日誌，不傳到群組")
 except Exception as e:
     print("傳到 Telegram 失敗：", repr(e))
