@@ -2374,19 +2374,15 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
             to_group(f"🧺 *恐慌承接警示*　{a['code']} {a['name']}\n跌破發現日 {'、'.join(broke)}\n{tail}")
         if back:
             to_group(f"🧺 *恐慌承接站回*　{a['code']} {a['name']}\n又站回發現日 {'、'.join(back)}\n{tail}")
-        # 承接成功（只提醒）：盤中殺低後，現價反彈 ≥ 5%，且均價、POC 兩條都站回（都先跌破過）
-        # 成功後，若現價跌破當時的殺低點 → 發「承接失效」（一天一次）
-        code, kill, day_key = a["code"], v.get("low"), (today, a["code"])
-        if day_key in ABSORB_OK:
-            if v["last"] < ABSORB_OK[day_key] and ("absorb", "void", code) not in sent:
-                sent.add(("absorb", "void", code))
-                to_group(f"🧺 *恐慌承接失效*　{code} {a['name']}\n跌破盤中殺低點 {ABSORB_OK[day_key]:g}\n{tail}")
-        elif (kill and a.get("avg") and a.get("poc") and v["last"] >= kill * (1 + cfg.ABSORB_SUCCESS_RECOVER)
-              and v["last"] >= a["avg"] and v["last"] >= a["poc"]
-              and ("absorb", "below", code, "avg") in sent and ("absorb", "below", code, "poc") in sent):
+        # 承接成功（只提醒，一天一次）：殺低點＝發現日的最低價（昨天殺出來的低點，不是今天盤中的低點）
+        # 條件：現價 ≥ 發現日最低 × 1.05，且站上發現日均價與 POC（今天不需要再殺一次）
+        code, kill, day_key = a["code"], a["low"], (today, a["code"])
+        if (day_key not in ABSORB_OK and kill and a.get("avg") and a.get("poc")
+                and v["last"] >= kill * (1 + cfg.ABSORB_SUCCESS_RECOVER)
+                and v["last"] >= a["avg"] and v["last"] >= a["poc"]):
             ABSORB_OK[day_key] = kill
-            to_group(f"🧺 *恐慌承接成功*　{code} {a['name']}\n盤中殺低點 {kill:g}，現價已反彈 {(v['last'] / kill - 1) * 100:.1f}%\n"
-                     f"站回發現日均價 {a['avg']:g}、POC {a['poc']:g}\n停損參考：跌破殺低點 {kill:g}\n{tail}")
+            to_group(f"🧺 *恐慌承接成功*　{code} {a['name']}\n發現日最低 {kill:g}，現價已反彈 {(v['last'] / kill - 1) * 100:.1f}%\n"
+                     f"站上發現日均價 {a['avg']:g}、POC {a['poc']:g}\n停損參考：跌破發現日最低 {kill:g}\n{tail}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
             v = q.get(code)
