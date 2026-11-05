@@ -1619,7 +1619,7 @@ def _handle_message(m, state, asked):
     if text == "取消" and cid not in SESSIONS and not me[0]:          # 清單是空的時按取消：收起空清單提示，看板重送（帶主按鍵）
         gone = [m.get("message_id"), EMPTY_VIEW.pop(cid, None)] + TRACK.pop(cid, [])
         delete_msgs(cid, [i for i in gone if i])
-        me[1] = save_holdings(cid, me[0], None, owner[2] if cid == OWNER else None, rotate=True)
+        me[1] = save_holdings(cid, me[0], me[1], owner[2] if cid == OWNER else None, rotate=True)   # 帶舊看板的編號：新的置頂後舊的會被刪掉
         return
     if text in ("追蹤", "移除", "調價", "查價", "取消") or cid in SESSIONS:   # 按鈕一步一步輸入
         if text == "取消" and cid not in SESSIONS:
