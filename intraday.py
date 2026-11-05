@@ -764,7 +764,7 @@ HELP = ("🤖 *股票追蹤*\n"
         "移除　→ 不再追蹤這檔\n"
         "追蹤清單　→ 看目前追蹤的股票\n"
         "調價　→ 選股票、調整價位\n"
-        "查價　→ 輸入名稱或代號看成交價\n"
+        "查價　→ 輸入代號看成交價（台股 2330；晨報的 那斯達克、日經 等也查得到）\n"
         "清畫面　→ 只留釘選的追蹤清單\n"
         "\n"
         "價位碰到時，機器人會私訊你。")
@@ -815,9 +815,10 @@ def handle(text, h, cid=None):
     if cmd in FORMAT and len(w) < (2 if cmd in ("追蹤", "移除") else 4):
         return FORMAT[cmd], False                    # 只打了指令、沒打完 → 告訴你格式
     if cmd == "查價":
-        codes = list(dict.fromkeys(re.findall(r"\d{4,6}", " ".join(w[1:]))))[:10]
+        codes = parse_quote_codes(w[1:])
         if not codes:
-            return "查價格式：查價 2330\n一次查多檔：查價 2330 2317\n也可以按下方「查價」按鈕", False
+            return ("查價格式：查價 2330\n一次查多檔：查價 2330 2317\n"
+                    "晨報的指數期貨：查價 那斯達克 日經\n也可以按下方「查價」按鈕"), False
         return quote_report(codes), False
     if cmd == "持股":
         q = quotes_quick(h, 10)
@@ -1132,8 +1133,9 @@ def guided(cid, text, h):
         return None
     if t == "查價":
         SESSIONS[cid] = {"flow": "quote", "step": "code"}
-        rows = [[f"{c} {x['name']}"] for c, x in sorted(h.items())] + [["取消"]]
-        send_kb(cid, "要查哪幾檔？\n輸入名稱或代號，可以多檔\n例：台積電 2317" + ("\n或按下面的追蹤股票" if h else ""), _kb(rows))
+        rows = [["台灣及國際行情", "追蹤的股票"], ["取消"]]
+        send_kb(cid, "要查哪一類？\n按「台灣及國際行情」：加權指數＋晨報的指數與期貨\n"
+                     "按「追蹤的股票」：追蹤清單的股票\n或直接輸入名稱或代號，可以多檔\n例：台積電 2317", _kb(rows))
         return None
     if t == "調價":
         if not h:
@@ -1170,6 +1172,15 @@ def guided(cid, text, h):
         send_kb(cid, f"確定要移除 {s_['code']} {h[s_['code']]['name']} 嗎？", _kb([["確定移除"], ["取消"]]))
         return None
     if s_["flow"] == "quote":
+        if t == "台灣及國際行情":                              # 按鍵：加權指數＋晨報上的指數與期貨
+            SESSIONS.pop(cid, None)
+            return "查價 加權指數 " + " ".join(INTL_GROUP)
+        if t == "追蹤的股票":                                  # 按鍵：追蹤清單的股票
+            if not h:
+                send_kb(cid, "追蹤清單是空的，先按「追蹤」加一檔吧", _kb([["台灣及國際行情", "追蹤的股票"], ["取消"]]))
+                return None
+            SESSIONS.pop(cid, None)
+            return "查價 " + " ".join(sorted(h))
         codes, note, rows = pick_stock(cid, t, "quote")
         if not codes or note:                                 # 有一個認不得就先停下來，不要默默少查一檔
             send_kb(cid, (note + "\n請重新輸入") if note and codes else (note or "請輸入股票名稱或代號\n例：台積電、2330"),
@@ -1936,9 +1947,89 @@ def volume_profile(code, last):
         return None
 
 
+# ---------- 國際行情（查價用）----------
+# 只認晨報上列的指數與期貨（同一組 Yahoo 代號），不開放任意國際代號
+INTL_ALIAS = {"那斯達克": "NQ=F", "標普五百": "ES=F", "標普": "ES=F", "道瓊工業": "YM=F", "道瓊": "YM=F",
+              "日經指數": "^N225", "日經": "^N225", "韓國綜合": "^KS11", "韓國": "^KS11",
+              "恐慌指數": "^VIX", "VIX": "^VIX", "加權指數": "^TWII"}
+INTL_NAME = {"NQ=F": "那斯達克期貨", "ES=F": "標普五百期貨", "YM=F": "道瓊期貨",
+             "^N225": "日經指數", "^KS11": "韓國綜合", "^VIX": "恐慌指數", "^TWII": "加權指數"}
+# 「國際行情」按鍵查的那一組（跟晨報一樣：美股期貨、亞洲股市、恐慌指數）
+INTL_GROUP = ["那斯達克", "標普五百", "道瓊工業", "日經指數", "韓國綜合", "恐慌指數"]
+
+
+def intl_symbol(tok):
+    """一個輸入字詞 → 晨報上的指數或期貨代號；不是就回傳 None（台股代號另外判斷）"""
+    return INTL_ALIAS.get(tok)
+
+
+def parse_quote_codes(tokens):
+    """查價的輸入：4～6 位數字＝台股代號；其餘能認出的＝國際代號。最多 10 個，重複的只留一個"""
+    out = []
+    for t in tokens:
+        t = t.strip()
+        c = t if re.fullmatch(r"\d{4,6}", t) else intl_symbol(t)
+        if c and c not in out:
+            out.append(c)
+    return out[:10]
+
+
+def is_intl(code):
+    return not code.isdigit()
+
+
+def _fi(fi, key):
+    try:
+        v = fi[key]
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def intl_quote(sym):
+    """用 yfinance 查國際行情：成交價、昨收、今日高低。查不到回 None"""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(sym)
+        fi = t.fast_info
+        last, prev = _fi(fi, "last_price"), _fi(fi, "previous_close")
+        hi, lo = _fi(fi, "day_high"), _fi(fi, "day_low")
+        if last is None:                                      # fast_info 沒有就用最近 5 日 K 線
+            h = t.history(period="5d")
+            if h is None or h.empty:
+                return None
+            last = float(h["Close"].iloc[-1])
+            prev = float(h["Close"].iloc[-2]) if len(h) > 1 else None
+            hi, lo = float(h["High"].iloc[-1]), float(h["Low"].iloc[-1])
+        return {"last": last, "prev": prev, "high": hi, "low": lo, "name": INTL_NAME.get(sym, sym), "intl": True}
+    except Exception as e:
+        print(f"{sym} 國際行情失敗：{e!r}")
+        return None
+
+
+def intl_quotes(codes, wait=10):
+    """國際行情一起查，最多等 wait 秒（同台股查價的做法，機器人不會卡住）"""
+    box = {}
+
+    def run():
+        for c in codes:
+            r = intl_quote(c)
+            if r:
+                box[c] = r
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    th.join(wait)
+    return dict(box)
+
+
 def quote_report(codes):
-    """查價（HTML 格式）：成交價、漲跌、昨收、今日高低、位置條、今天買的人幾 % 賺錢（最多 10 檔）"""
-    q = quotes_quick({c: {"suffix": None} for c in codes}, 10)
+    """查價（HTML 格式）：成交價、漲跌、昨收、今日高低、位置條、今天買的人幾 % 賺錢（最多 10 檔）。
+    台股與國際行情混合查也可以；國際行情沒有分價量表"""
+    tw = [c for c in codes if not is_intl(c)]
+    intl = [c for c in codes if is_intl(c)]
+    q = quotes_quick({c: {"suffix": None} for c in tw}, 10) if tw else {}
+    if intl:
+        q.update(intl_quotes(intl, 10))
     esc = lambda v: html.escape(str(v), quote=False)
     out = [f"🔎 <b>查價</b>　{datetime.now(TZ).strftime('%m/%d %H:%M')}"]
     t_end = time.time() + 8                                   # 分價量表最多花 8 秒，超過就不查
@@ -1967,7 +2058,7 @@ def quote_report(codes):
             body.append(range_bar(pos))
         out.append(pre(body))
         if pos is not None:
-            vp = volume_profile(c, last) if time.time() < t_end else None
+            vp = volume_profile(c, last) if (not is_intl(c) and time.time() < t_end) else None
             if vp:
                 ps, poc = vp
                 where = "之上" if last > poc else "之下" if last < poc else "剛好在"
@@ -1980,6 +2071,8 @@ def quote_report(codes):
                 out.append("（今日最低＝0%，最高＝100%）")
         if x.get("delayed"):
             out.append("⚠️ 備用來源，約延遲 20 分")
+        if x.get("intl"):
+            out.append("🌐 國際行情（Yahoo），可能延遲")
     return "\n".join(out)
 
 
