@@ -294,6 +294,26 @@ def absorb_levels(prev_df):
             "sup": float(vl["low"]) if vl else None}
 
 
+def day_avg_poc(bars, day):
+    """恐慌承接的「發現日」成本區：用 5 分 K 算當天的均價（成交量加權，等於 成交金額÷成交量）與 POC（成交量最大的價位）。
+    bars：5 分 K（欄位 High／Low／Close／Volume，索引是時間）；day：發現日（Timestamp）。
+    每根 K 棒的價格取 (高＋低＋收)÷3，量歸到對應的台股升降單位；沒有資料回傳 (None, None)。"""
+    if bars is None or len(bars) == 0:
+        return None, None
+    d = bars[bars.index.strftime("%Y-%m-%d") == pd.Timestamp(day).strftime("%Y-%m-%d")]
+    if d.empty:
+        return None, None
+    v = d["Volume"].astype(float).fillna(0.0)
+    typ = ((d["High"].astype(float) + d["Low"].astype(float) + d["Close"].astype(float)) / 3.0)
+    tot = float(v.sum())
+    if tot <= 0:
+        return None, None
+    avg = float((typ * v).sum() / tot)
+    by_price = v.groupby(typ.map(lambda p: tick(p))).sum()
+    poc = float(by_price.idxmax())
+    return round(avg, 2), poc
+
+
 def absorb_extra(c, h, l, lv):
     """恐慌承接的日線三層（收盤版、盤中版共用）。c＝收盤（盤中＝現價）；h／l＝今天最高／最低；lv＝absorb_levels（不含今天）。
     1 距高點回落：近 20 日（含今天）最高點 → 收盤，跌幅在 ABSORB_DROP_MIN ～ ABSORB_DROP_MAX 之間
@@ -570,8 +590,20 @@ def check_pullback(df, i, ratios=None, max_consol=None):
     return r
 
 
-def check_breakout(df, i):
-    """低位階起漲（低檔爆量起漲，突破 30 日頸線）"""
+LOW_CHECK = "低檔："
+
+
+def bo_needs_zone(r):
+    """低位階：其他條件都過、只差「低檔」這一項 → 要再去抓十年月線高低（只有這些候選股才抓，省時間）"""
+    if r is None or r["ok"]:
+        return False
+    low = [c for c in r["checks"] if c[0].startswith(LOW_CHECK)]
+    return bool(low) and not low[0][1] and all(c[1] for c in r["checks"] if not c[0].startswith(LOW_CHECK))
+
+
+def check_breakout(df, i, zone=None):
+    """低位階起漲（低檔爆量起漲，突破 30 日頸線）。
+    zone：十年月線高低 {"lo": 最低, "hi": 最高}。沒有（還沒抓）時「低檔」這項先不算過"""
     if i < 69 or i >= len(df):
         return None
     row = df.iloc[i]
@@ -579,19 +611,25 @@ def check_breakout(df, i):
     mav20 = float(row["MAV20"])
     ema20, ema60 = float(row["MA20"]), float(row["MA60"])
     ema20_prev = float(df["MA20"].iloc[i - 1])
-    low60 = float(df["Low"].iloc[i - 59:i + 1].min())
     neck = float(df["High"].iloc[i - cfg.BO_PLATFORM:i].max())
-    rise = (close - low60) / low60 if low60 > 0 else float("nan")
     volx = _ratio(vol, mav20)
     bd = cfg.BO_BOX_DAYS
     box_hi = float(df["High"].iloc[i - bd:i].max())
     box_lo = float(df["Low"].iloc[i - bd:i].min())
+    pos = None
+    if zone and zone["hi"] > zone["lo"]:
+        pos = (close - zone["lo"]) / (zone["hi"] - zone["lo"])
+    if pos is None:
+        low_txt = "十年資料還沒抓（只對候選股才抓）"
+    else:
+        line = zone["lo"] + cfg.BO_LOW_ZONE * (zone["hi"] - zone["lo"])
+        low_txt = f"十年高 {_fp(zone['hi'])}、低 {_fp(zone['lo'])}，低檔線 {_fp(line)}，收盤 {_fp(close)}（位在 {pos * 100:.0f}%）"
 
     checks = [
         _liq(row),
         (f"盤整：近 {bd} 日低點 ≥ 高點 {cfg.BO_BOX_RATIO * 100:.0f}%", bool(box_lo >= cfg.BO_BOX_RATIO * box_hi),
          f"近 {bd} 日高 {_fp(box_hi)}、低 {_fp(box_lo)}（低點是高點的 {box_lo / box_hi * 100:.0f}%）"),
-        (f"離60日低點漲幅 ≤ {cfg.BO_MAX_RISE * 100:.0f}%", bool(rise <= cfg.BO_MAX_RISE), f"目前 +{rise * 100:.1f}%"),
+        (f"{LOW_CHECK}收盤在十年高低的下 {cfg.BO_LOW_ZONE * 100:.0f}%", bool(pos is not None and pos <= cfg.BO_LOW_ZONE), low_txt),
         (f"突破 {cfg.BO_PLATFORM} 日頸線", close > neck, f"頸線 {_fp(neck)}、收盤 {_fp(close)}"),
         (f"爆量 ≥ {cfg.BO_VOL_MULT:.1f} 倍", bool(volx >= cfg.BO_VOL_MULT), f"今日 {volx:.1f} 倍 20 日均量"),
         ("站上季線且月線翻揚", bool(close >= ema60 and ema20 > ema20_prev),
@@ -603,7 +641,8 @@ def check_breakout(df, i):
                    stop1=stop1, target=tick(E * (1 + cfg.BO_TARGET_PCT)),
                    stop1_note=f"頸線下 2%（{tick(neck * 0.98)}）與買價下 {cfg.BO_STOP_PCT * 100:.0f}%（{tick(E * (1 - cfg.BO_STOP_PCT))}）取較低",
                    date=df.index[i], turnover=float(row["TURN20"]),
-                   q={"volx": volx, "rise": rise, "box": box_lo / box_hi if box_hi > 0 else 0.0,
+                   q={"volx": volx, "pos": pos if pos is not None else cfg.BO_LOW_ZONE,
+                      "box": box_lo / box_hi if box_hi > 0 else 0.0,
                       "over": close / neck - 1 if neck > 0 else 0.0})
 
 
@@ -889,7 +928,7 @@ def rank_score(name, r, plan=None, watch=False):
             parts.append(_m(cfg.CHASE_MAX_DIST - (r["chase_px"] / r["close"] - 1), 0.0, cfg.CHASE_MAX_DIST))
     elif name == "breakout":
         parts += [_m(q.get("volx"), cfg.BO_VOL_MULT, 4.0),                                 # 爆量 2 倍 → 4 倍
-                  _m(cfg.BO_MAX_RISE - q.get("rise", cfg.BO_MAX_RISE), 0.0, cfg.BO_MAX_RISE),   # 離低點漲幅越小越好
+                  _m(cfg.BO_LOW_ZONE - q.get("pos", cfg.BO_LOW_ZONE), 0.0, cfg.BO_LOW_ZONE),   # 位置越低越好（十年高低的下 20% 之內）
                   _m(q.get("box"), cfg.BO_BOX_RATIO, 1.0),                                 # 盤整越窄越好
                   _m(q.get("over"), 0.0, 0.05)]                                            # 突破頸線的幅度
     elif name == "dry":
