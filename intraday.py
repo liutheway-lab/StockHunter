@@ -783,7 +783,7 @@ def _levels_for(code, suffix, price):
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "追蹤清單": "持股", "清單": "持股",
          "track": "追蹤", "remove": "移除", "buy": "買", "set": "設", "quote": "查價", "price": "查價"}
-KEYBOARD = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "追蹤清單"}, {"text": "調價"}], [{"text": "查價"}, {"text": "說明"}],
+KEYBOARD = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "追蹤清單"}, {"text": "調價"}], [{"text": "查價"}],
                          [{"text": "清畫面"}]],
             "resize_keyboard": True, "is_persistent": True}
 KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
@@ -1201,8 +1201,8 @@ def guided(cid, text, h):
         return None
     if t == "查價":
         SESSIONS[cid] = {"flow": "quote", "step": "code"}
-        rows = [["台灣及國際行情", "追蹤的股票"], ["取消"]]
-        send_kb(cid, "要查哪一類？\n按「台灣及國際行情」：加權指數＋晨報的指數與期貨\n"
+        rows = [["各國指數行情", "追蹤的股票"], ["取消"]]
+        send_kb(cid, "要查哪一類？\n按「各國指數行情」：加權指數＋晨報的各國指數與期貨\n"
                      "按「追蹤的股票」：追蹤清單的股票\n或直接輸入名稱或代號，可以多檔\n例：台積電 2317", _kb(rows))
         return None
     if t == "調價":
@@ -1240,12 +1240,12 @@ def guided(cid, text, h):
         send_kb(cid, f"確定要移除 {s_['code']} {h[s_['code']]['name']} 嗎？", _kb([["確定移除"], ["取消"]]))
         return None
     if s_["flow"] == "quote":
-        if t == "台灣及國際行情":                              # 按鍵：加權指數＋晨報上的指數與期貨
+        if t in ("各國指數行情", "台灣及國際行情"):              # 按鍵：加權指數＋晨報上的各國指數與期貨（舊名稱也認得）
             SESSIONS.pop(cid, None)
             return "查價 加權指數 " + " ".join(INTL_GROUP)
         if t == "追蹤的股票":                                  # 按鍵：追蹤清單的股票
             if not h:
-                send_kb(cid, EMPTY_TRACK_MSG, _kb([["台灣及國際行情", "追蹤"], [LIKE_BTN], ["取消"]]))
+                send_kb(cid, EMPTY_TRACK_MSG, _kb([["各國指數行情", "追蹤"], [LIKE_BTN], ["取消"]]))
                 return None
             SESSIONS.pop(cid, None)
             return "查價 " + " ".join(sorted(h))
