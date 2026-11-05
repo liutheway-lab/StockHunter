@@ -1127,10 +1127,10 @@ def empty_kb():
     return kb
 
 
-def _like_done(cid, mids):
+def _like_done(state, cid, mids):
     """按讚感謝顯示完：清掉點按的訊息與感謝；若清單還是空的，重新顯示空清單提示與按鍵"""
     delete_msgs(cid, mids)
-    if not get(cid)[0]:
+    if not (state.get(cid) or [{}])[0]:
         send_kb(cid, EMPTY_TRACK_MSG, empty_kb())
 
 
@@ -1512,7 +1512,7 @@ def _handle_message(m, state, asked):
         mid_user = m.get("message_id")
         j = tg("sendMessage", chat_id=cid, text=random.choice(THANKS), reply_markup=empty_kb())   # 感謝訊息也帶按鍵，按鍵才不會跟著不見
         mid_thanks = (j.get("result") or {}).get("message_id")
-        threading.Timer(LIKE_CLEAN_SEC, _like_done, args=(cid, [mid_user, mid_thanks])).start()
+        threading.Timer(LIKE_CLEAN_SEC, _like_done, args=(state, cid, [mid_user, mid_thanks])).start()
         return
     if cid == OWNER:
         mid0 = m.get("message_id")
