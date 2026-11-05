@@ -177,6 +177,7 @@ FIELD_RES = (("avg", re.compile(r"均價 ([\d,.]+)")), ("stop", re.compile(r"出
 _LASTQ = {}
 _LAST_Z = {}     # {代號: (日期, 最近一次成交價)}：證交所有時一瞬間沒回成交價，就用這個
 _STATUS = {}    # {chat id: 「⏱ 盤中監控…」那一行}，跟著置頂看板一起保存
+EMPTY_VIEW = {} # {chat id: 空清單提示的訊息編號}：只留一則，有按鍵（追蹤、按讚訂閱），不自動消失
 LOST_REPLIES = [
     "謝謝你傳訊息給我～😊\n不過哲哲老師看不太懂這句\n請用下方按鍵上的指令唷～",
     "哇～收到你的訊息了！🥰\n可是這句超出老師的功力\n麻煩點下面的按鈕吧～",
@@ -1100,6 +1101,13 @@ def send_kb(cid, text, kb=None, html_mode=False):
     else:
         j = tg("sendMessage", chat_id=cid, text=text.replace("*", ""), reply_markup=kb)
     mid = (j.get("result") or {}).get("message_id")
+    if mid and kb.get("keyboard") == empty_kb()["keyboard"]:
+        # 空清單的提示（附「追蹤」「按讚訂閱」按鍵）：不自動消失，按鍵才不會跟著不見；下一次出現空清單時再換掉舊的
+        old = EMPTY_VIEW.pop(cid, None)
+        if old:
+            delete_msgs(cid, [old])
+        EMPTY_VIEW[cid] = mid
+        return mid
     if mid:
         CHAT.setdefault(cid, []).append(mid)
         LAST_BOT[cid] = mid
@@ -2164,6 +2172,16 @@ def load_absorb():
     return [dict(it) for it in (scan.get("absorb") or []) if it.get("low")]
 
 
+def _twse_fetch_retry(ex):
+    """證交所偶爾斷一下：失敗就換新連線、等 3 秒再問一次；還是失敗才丟出錯誤"""
+    try:
+        return _twse_fetch(ex)
+    except Exception:
+        _TWSE_SESS.clear()
+        time.sleep(3)
+        return _twse_fetch(ex)
+
+
 def absorb_scan(today_iso):
     """13:00 恐慌承接預判的計算（12:50～12:59 跑一次）：用盤中開高低現價和累計量套型態規則。
     回傳 {"hits": 全部符合的, "shown": 要通知的, "seen": 檢查幾檔}；沒做成回傳 None"""
@@ -2184,9 +2202,9 @@ def absorb_scan(today_iso):
         chunk = codes[i:i + 80]
         parts = [f"{'otc' if stocks[c]['s'] == '.TWO' else 'tse'}_{c}.tw" for c in chunk]
         try:
-            quotes.update(_twse_fetch("|".join(parts)))
+            quotes.update(_twse_fetch_retry("|".join(parts)))
         except Exception as e:
-            print("13:00 預判：證交所連不上", repr(e)[:80])
+            print("13:00 預判：證交所連不上（重試後仍失敗）", repr(e)[:80])
             SRC["twse_off_until"] = time.time() + TWSE_PAUSE
             to_owner("⚠️ 13:00 恐慌承接預判失敗：證交所報價連不上")
             return None
@@ -2346,10 +2364,17 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
             continue
         dn = v.get("dn")                                    # 跌停價（證交所 w）
         limit_dn = bool(dn) and v["last"] <= dn + 1e-9
-        if limit_dn or v["last"] < a["low"]:
+        sup = a.get("sup")                                  # 大量支撐（發現日那天的 65 日大量支撐價位）
+        below_sup = bool(sup) and v["last"] < sup
+        if limit_dn or v["last"] < a["low"] or below_sup:
             sent.add(("absorb", "fail", a["code"]))
             chg = (v["last"] / v["prev"] - 1) * 100 if v.get("prev") else 0
-            why = (f"盤中跌停（跌停價 {dn:g}）" if limit_dn else f"盤中跌破發現日最低 {a['low']:g}")
+            if limit_dn:
+                why = f"盤中跌停（跌停價 {dn:g}）"
+            elif v["last"] < a["low"]:
+                why = f"盤中跌破發現日最低 {a['low']:g}"
+            else:
+                why = f"盤中跌破大量支撐 {sup:g}"
             to_group(f"🧺 *恐慌承接失敗*　{a['code']} {a['name']}\n"
                      f"{why}\n"
                      f"成交價 {v['last']:g}（{chg:+.1f}%）\n"
