@@ -423,6 +423,25 @@ def load_twse_stock_vol(code):
     return data.fetch_twse_stock_volume(code, months=4)
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def load_live(code, suffix):
+    """即時成交價（證交所）：快取 10 秒，標題的現價跟著券商走；抓不到就回傳 None"""
+    return data.fetch_live_quote(code, suffix)
+
+
+@st.fragment(run_every=20)
+def live_price_line(code, sfx, fb_close, fb_prev):
+    """標題的現價與漲跌：每 20 秒自動更新（只重跑這一小塊，不會整頁重跑）。
+    抓不到即時價時，退回日線收盤。注意：下面的日線圖、策略判斷仍用日線收盤"""
+    live = load_live(code, sfx)
+    close, pv = (live["last"], live["prev"]) if live else (fb_close, fb_prev)
+    chg = (close / pv - 1) * 100
+    clr = "red" if chg > 0 else "green" if chg < 0 else "gray"        # 紅漲綠跌
+    ar = "▲" if chg > 0 else "▼" if chg < 0 else "─"
+    st.markdown(f"#### :{clr}[{px(close)}　{ar} {abs(close - pv):.2f}（{chg:+.2f}%）]")
+    st.caption("即時報價（每 20 秒更新）" if live else "即時報價暫時抓不到，先用日線收盤")
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def load_stock(code, suffix):
     # auto_adjust=False：價格不還原股利，跟看盤軟體、夜間掃描一致
@@ -1141,12 +1160,9 @@ if target:
         ev = S.evaluate(df, mkt_df, ratios)
         name = target["name"] or code
         close = float(df["Close"].iloc[-1])
-        chg = (close / float(df["Close"].iloc[-2]) - 1) * 100
         pv = float(df["Close"].iloc[-2])
-        clr = "red" if chg > 0 else "green" if chg < 0 else "gray"        # 紅漲綠跌
-        ar = "▲" if chg > 0 else "▼" if chg < 0 else "─"
         st.markdown(f"### {code} {name}")
-        st.markdown(f"#### :{clr}[{px(close)}　{ar} {abs(close - pv):.2f}（{chg:+.2f}%）]")
+        live_price_line(code, sfx, close, pv)                              # 現價即時更新（每 20 秒）
         if target["industry"]:
             st.caption(f"產業別：{target['industry']}")
         ex = "TPEX" if target.get("suffix") == ".TWO" else "TWSE"
