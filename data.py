@@ -87,6 +87,46 @@ def fetch_twse_turnover(months=4):
     return fetch_twse_daily(months)["amount"].dropna()
 
 
+_MIS_HEAD = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+             "Referer": "https://mis.twse.com.tw/stock/index.jsp", "Accept": "application/json, text/javascript, */*; q=0.01"}
+_MIS_SESS = {}
+
+
+def fetch_live_quote(code, suffix):
+    """即時成交價（證交所 MIS，跟券商看盤同一個來源）。回傳 {"last", "prev", "time"}；抓不到回傳 None，呼叫端改用日線收盤"""
+    ex = ("tse_" if suffix == ".TW" else "otc_") + f"{code}.tw"
+    try:
+        if "s" not in _MIS_SESS:
+            ss = requests.Session()
+            try:
+                ss.get("https://mis.twse.com.tw/stock/index.jsp", headers=_MIS_HEAD, timeout=4)
+            except Exception:
+                pass
+            _MIS_SESS["s"] = ss
+        r = _MIS_SESS["s"].get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+                               params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
+                               headers=_MIS_HEAD, timeout=4)
+        arr = (r.json() or {}).get("msgArray") or []
+        if not arr:
+            return None
+        q = arr[0]
+
+        def num(k):
+            try:
+                return float(str(q.get(k, "")).split("_")[0])
+            except ValueError:
+                return None
+        last = num("z") or num("o") or num("y")               # z＝最新成交價；這一瞬間沒成交時退回開盤或昨收
+        prev = num("y")                                       # y＝昨收（漲跌的基準）
+        if not last or not prev:
+            return None
+        return {"last": last, "prev": prev, "time": f"{q.get('d', '')} {q.get('t', '')}"}
+    except Exception as e:
+        print(f"{code} 即時報價抓不到：{repr(e)[:80]}")
+        _MIS_SESS.clear()
+        return None
+
+
 def fetch_twse_stock_volume(code, months=4):
     """證交所官方：上市個股每日成交股數（股）。回傳 Series（索引是日期）。
     跟看盤軟體、券商用同一份數字；Yahoo 的台股量有時會跟它對不上。上櫃股票這裡抓不到（會丟例外）。"""
