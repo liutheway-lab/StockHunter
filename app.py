@@ -34,7 +34,7 @@ except Exception:
 for _m in (cfg, lookup, data, S, backtest, guide, chart_png) + ((events,) if events else ()):
     importlib.reload(_m)
 
-st.set_page_config(page_title="台股戰情室", page_icon="📈", layout="wide")
+st.set_page_config(page_title="台股盤後戰情室", page_icon="📈", layout="wide")
 
 # 載入中的小卡片：第一次進來、資料還在更新時顯示；整頁跑完會自動拿掉（之後切換功能不再出現）
 _SPLASH = """
