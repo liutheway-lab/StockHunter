@@ -155,8 +155,8 @@ def build():
 低檔盤整後，爆量突破
 ① 近 {cfg.BO_BOX_DAYS} 日低點
 　≥ 高點的 {pct(cfg.BO_BOX_RATIO)}（區間夠窄）
-② 離 60 日低點漲幅
-　≤ {pct(cfg.BO_MAX_RISE)}（還在低檔）
+② 低檔：收盤在十年高低的下 {pct(cfg.BO_LOW_ZONE)}
+　（十年高低＝月線的最高與最低）
 ③ 收盤突破 {cfg.BO_PLATFORM} 日高點（頸線）
 ④ 量 ≥ 20 日均量 {cfg.BO_VOL_MULT:g} 倍
 ⑤ 站上季線，月線翻揚
