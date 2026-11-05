@@ -62,6 +62,12 @@ else:
     # 2.5 台積電：即時報價的全日累計（看盤軟體的「總量」應該對這個）
     code, j = get("/intraday/quote/2330")
     print("2330 quote", code, json.dumps(j, ensure_ascii=False)[:800])
+    if code == 200 and isinstance(j, dict):                  # 完整欄位清單（找有沒有 avgPrice／均價欄位，不被上面的 800 字截掉）
+        print("2330 quote 所有欄位：", list(j.keys()))
+        for k, v in j.items():
+            if isinstance(v, dict):
+                print("  ", k, "→", list(v.keys()))
+        print("2330 avgPrice / 均價相關：", {k: v for k, v in j.items() if "avg" in k.lower()})
     if code == 200 and isinstance(j, dict):
         tot = j.get("total") or {}
         out.append("\n【台積電 2330・即時報價】")
