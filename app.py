@@ -1,4 +1,4 @@
-"""app.py — 台股戰情室（Streamlit 網頁）
+"""app.py — 台股盤後戰情室（Streamlit 網頁）
 功能：大盤位階（五層＋止跌確認）、個股診斷（四套策略＋分批計畫）。
 資料口徑跟夜間掃描完全相同（data.py、strategies.py 共用）。
 """
