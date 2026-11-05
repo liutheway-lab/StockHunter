@@ -134,7 +134,7 @@ def dedupe_similar(lists, active):
     lists[dname][:] = [h for h in drop if h["sym"] not in ksyms]
 
 
-ABSORB_BASE = {}      # {代號.TW: (20 日均量（股）, 收盤價)}：給盤中 13:00 恐慌承接預判用
+ABSORB_BASE = {}      # {代號.TW: (20 日均量（股）, 收盤價, 日線三層數字)}：給盤中 13:00 恐慌承接預判用
 
 
 def scan(prices, mk, ratios):
@@ -160,7 +160,7 @@ def scan(prices, mk, ratios):
             liquid += 1
             mav = float(df["MAV20"].iloc[i])
             if mav == mav and mav > 0:
-                ABSORB_BASE[sym] = (mav, float(df["Close"].iloc[i]))
+                ABSORB_BASE[sym] = (mav, float(df["Close"].iloc[i]), st.absorb_levels(df.iloc[:i]))
             results = {
                 "pullback": st.check_pullback(df, i, ratios),
                 "flag": st.check_flag(df, i),
@@ -349,6 +349,9 @@ def absorb_block(items, names, note="", pre=None):
               f"\n量能＝今天量 ÷ 20 日均量"
               f"\n要 {cfg.ABSORB_VOL_MULT} 倍以上"
               f"\n當天振幅要 {cfg.ABSORB_MIN_RANGE * 100:.0f}% 以上"
+              f"\n距 20 日高點已跌 {cfg.ABSORB_DROP_MIN * 100:.0f}%～{cfg.ABSORB_DROP_MAX * 100:.0f}%"
+              f"\n收盤守住 65 日大量日的低點"
+              f"\n收盤要收回最低 {cfg.ABSORB_RECOVER * 100:.0f}% 以上"
               f"\n只供追蹤，沒有追價點"
               f"\n隔天不破發現日最低，才比較可信")
     if pre:
@@ -415,9 +418,13 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None, pre=N
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     base = {}                                          # 全市場基準：盤中 13:00 恐慌承接預判用（20 日均量、昨收）
-    for sym, (mav, prev) in ABSORB_BASE.items():
+    for sym, (mav, prev, lv) in ABSORB_BASE.items():
         code, sfx = sym.split(".")[0], "." + sym.split(".")[1]
-        base[code] = {"s": sfx, "n": names.get(sym, code), "m": round(mav), "p": round(prev, 2)}
+        row = {"s": sfx, "n": names.get(sym, code), "m": round(mav), "p": round(prev, 2)}
+        if lv:                                         # 日線三層數字：h=近19日最高、l=近19日最低、x=65日大量日最低（支撐）
+            row.update({"h": round(lv["hi19"], 2), "l": round(lv["lo19"], 2),
+                        "x": round(lv["sup"], 2) if lv["sup"] is not None else None})
+        base[code] = row
     with open(BASE_FILE, "w", encoding="utf-8") as f:
         json.dump({"date": f"{mk['date']:%Y-%m-%d}", "stocks": base}, f, ensure_ascii=False, separators=(",", ":"))
 
