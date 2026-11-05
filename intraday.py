@@ -758,7 +758,8 @@ THANKS = ["謝謝你的支持，哲哲老師超開心的！🥰",
           "感謝你按讚訂閱，哲哲老師會更努力喔！💪",
           "有你陪著一起看盤，真的好溫暖！💖",
           "謝謝你開啟小鈴噹，重要訊息都不會漏掉囉！🔔✨"]
-LIKE_CLEAN_SEC = 4                                   # 感謝訊息顯示幾秒後，連同點按的那一則一起清掉
+RESULT_SEC = 3                                       # 所有回覆顯示幾秒後自動消失（只留置頂的持股清單）
+LIKE_CLEAN_SEC = RESULT_SEC                          # 感謝訊息也是同樣的秒數
 FORMAT = {
     "追蹤": "追蹤格式：追蹤 代號\n例：追蹤 2330\n（未持股，系統自動算價位）\n也可以按下方「追蹤」按鈕",
     "買": "已持股格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 壓力 1100",
@@ -1604,18 +1605,16 @@ def handle_message(m, state, asked):
     if private and (m.get("text") or "").strip() == LIKE_BTN:   # 按讚訂閱：感謝訊息顯示幾秒，之後連同點按的訊息一起清掉（不走下面的即時清理）
         _handle_message(m, state, asked)
         return
-    before = LAST_BOT.get(cid)
     MENU_WAIT.pop(cid, None)
     _handle_message(m, state, asked)
     if not private or cid not in state or cid in SESSIONS or MENU_WAIT.get(cid):
         return                                        # 還沒開通、或這串操作還沒做完：先不清
     ensure_pinned(cid, state[cid], (state.get(OWNER) or [0, 0, None])[2] if cid == OWNER else None)
-    new = LAST_BOT.get(cid)
-    if not new or new == before:
-        return
-    keep = {state[cid][1], (state.get(OWNER) or [None, None])[1], new}      # 釘選的持股清單不能刪
-    delete_msgs(cid, [i for i in CHAT.get(cid, []) if i not in keep])
-    CHAT[cid] = [new]
+    keep = {state[cid][1], (state.get(OWNER) or [None, None])[1]}          # 只留釘選的持股清單
+    doomed = [i for i in CHAT.get(cid, []) if i not in keep]               # 這一串的結果與使用者的訊息
+    CHAT[cid] = []
+    if doomed:                                                              # 顯示 RESULT_SEC 秒後自動消失
+        threading.Timer(RESULT_SEC, delete_msgs, args=(cid, doomed)).start()
 
 
 def handle_callback(cq, state, asked):
@@ -1768,7 +1767,7 @@ def _twse_fetch(ex):
             last, notrade = f("y"), True           # 今天還沒有任何成交 → 先放昨收（不會拿來觸發提醒）
         if last:
             vol = f("v")                               # 證交所的 v ＝ 累計成交量（張）
-            res[q["c"]] = {"open": f("o"), "vol": vol * 1000 if vol else None, "up": f("u"),
+            res[q["c"]] = {"open": f("o"), "vol": vol * 1000 if vol else None, "up": f("u"), "dn": f("w"),
                            "last": last, "high": f("h") or last, "low": f("l") or last, "prev": f("y"), "date": q.get("d", ""),
                            "name": (q.get("n") or "").strip() or None, "notrade": notrade, "src": "證交所",
                            "suffix": {"otc": ".TWO", "emg": ".EMG"}.get(q.get("ex"), ".TW")}
@@ -2300,18 +2299,42 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
                      f"成交價 {v['last']:g}（{chg:+.1f}%）{back}\n"
                      f"出場 {w['stop1']:g}｜壓力 {w['target']:g}｜{cfg.STRATEGY_NAMES.get(w['strat'], '')}\n"
                      f"📊 {tv(w['code'], w['suffix'])}")
-    for a in (absorb or []):                                # 👀 恐慌承接：跌破發現日最低 ＝ 承接失敗（群組）
+    for a in (absorb or []):                                # 👀 恐慌承接（群組）
+        # 失敗：盤中跌停（跌停鎖住，沒人接）或跌破發現日最低 → 一天只通知一次，之後不再提醒這檔
+        # 警示：跌破發現日均價或 POC（成本區）→ 通知；之後又站回該價位上 → 再通知一次「站回」
         v = q.get(a["code"])
-        if not v or v.get("date") != today or v.get("notrade") or ("absorb", "group", a["code"]) in sent:
+        if not v or v.get("date") != today or v.get("notrade") or ("absorb", "fail", a["code"]) in sent:
             continue
-        if v["last"] < a["low"]:
-            sent.add(("absorb", "group", a["code"]))
+        dn = v.get("dn")                                    # 跌停價（證交所 w）
+        limit_dn = bool(dn) and v["last"] <= dn + 1e-9
+        if limit_dn or v["last"] < a["low"]:
+            sent.add(("absorb", "fail", a["code"]))
             chg = (v["last"] / v["prev"] - 1) * 100 if v.get("prev") else 0
+            why = (f"盤中跌停（跌停價 {dn:g}）" if limit_dn else f"盤中跌破發現日最低 {a['low']:g}")
             to_group(f"🧺 *恐慌承接失敗*　{a['code']} {a['name']}\n"
-                     f"盤中跌破發現日最低 {a['low']:g}\n"
+                     f"{why}\n"
                      f"成交價 {v['last']:g}（{chg:+.1f}%）\n"
                      f"發現日收盤 {a['close']:g}｜量能 {a['vol_mult']:g} 倍\n"
                      f"📊 {tv(a['code'], a.get('suffix') or guess_suffix(a['code']))}")
+            continue
+        chg = (v["last"] / v["prev"] - 1) * 100 if v.get("prev") else 0
+        broke, back = [], []                                 # 這一輪新跌破／新站回的價位（同一輪合併成一則）
+        for lname, key in (("均價", "avg"), ("POC", "poc")):
+            lv = a.get(key)
+            if not lv:                                       # 夜間沒算到（抓不到 5 分 K）→ 這一項略過
+                continue
+            k_below, k_back = ("absorb", "below", a["code"], key), ("absorb", "back", a["code"], key)
+            if v["last"] < lv and k_below not in sent:
+                sent.add(k_below)
+                broke.append(f"{lname} {lv:g}")
+            elif v["last"] >= lv and k_below in sent and k_back not in sent:
+                sent.add(k_back)
+                back.append(f"{lname} {lv:g}")
+        tail = f"成交價 {v['last']:g}（{chg:+.1f}%）\n📊 {tv(a['code'], a.get('suffix') or guess_suffix(a['code']))}"
+        if broke:
+            to_group(f"🧺 *恐慌承接警示*　{a['code']} {a['name']}\n跌破發現日 {'、'.join(broke)}\n{tail}")
+        if back:
+            to_group(f"🧺 *恐慌承接站回*　{a['code']} {a['name']}\n又站回發現日 {'、'.join(back)}\n{tail}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
             v = q.get(code)
