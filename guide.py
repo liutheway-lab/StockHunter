@@ -234,6 +234,10 @@ def build():
 　　≥ 20 日均量 {cfg.ABSORB_VOL_MULT} 倍
 　　且當天振幅 ≥ {pct(cfg.ABSORB_MIN_RANGE)}
 　直接漲停、跳空高開不算（沒有殺到昨收）
+日線條件（三項都要過）：
+　距高點已跌：收盤離近 20 日高點跌 {pct(cfg.ABSORB_DROP_MIN)}～{pct(cfg.ABSORB_DROP_MAX)}
+　守住支撐：收盤不低於近 65 日量最大那天的最低點
+　收回：收盤 ≥ 當天最低 × {1 + cfg.ABSORB_RECOVER:.2f}
 沒有追價點、不試算資金
 隔天不破發現日最低，才比較可信
 （發現日＝出現這個型態的那天）
