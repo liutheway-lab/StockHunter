@@ -2051,7 +2051,8 @@ def absorb_scan(today_iso):
         if not all([o, h, l, px]) or not q.get("vol"):
             continue
         seen += 1
-        r = st.check_absorb_live(o, h, l, px, q.get("prev") or b["p"], q["vol"], b["m"], q.get("up"))
+        lv = {"hi19": b.get("h"), "lo19": b.get("l"), "sup": b.get("x")}     # 夜間掃描存的日線三層數字（沒有就不列）
+        r = st.check_absorb_live(o, h, l, px, q.get("prev") or b["p"], q["vol"], b["m"], q.get("up"), lv)
         if r is None:                                          # 漲停鎖住、量不夠、型態不對都直接不列
             continue
         hits.append({"code": c, "sfx": b["s"], "name": q.get("name") or b["n"], **r})
