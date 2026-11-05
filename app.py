@@ -914,7 +914,7 @@ capital_atk = capital_all * atk_tot / 100
 atk_split = (a1 / 100, a2 / 100)
 
 if fund_open:
-    st.markdown(L("**低位階起漲、量縮抗跌　適用**",
+    st.markdown(L("**低位起漲、量縮抗跌　適用**",
                   f"第 1 筆　{capital * ratios[0]:,.0f} 元（{w1}%）",
                   f"第 2 筆　{capital * ratios[1]:,.0f} 元（{w2}%）",
                   f"第 3 筆　{capital * ratios[2]:,.0f} 元（{w3}%）",
@@ -930,7 +930,7 @@ if fund_open:
     st.button("✅ 設定好了，收起來", key="fund_close", use_container_width=True, on_click=set_fund_open, args=(False,))
 else:
     st.caption(L(f"可用資金 {capital_all:,.0f} 元",
-                 f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}（投入 {tot}%）",
+                 f"低位起漲、量縮抗跌　{w1}/{w2}/{w3}（投入 {tot}%）",
                  f"強勢續攻　攻擊日 {a1}／突破日 {a2}（投入 {atk_tot}%）"))
     st.button("調整資金比例", key="fund_open_btn", use_container_width=True, on_click=set_fund_open, args=(True,))
 
@@ -939,7 +939,7 @@ BT_MODE = {"ladder_avg": "分 3 次買｜買到第 2 筆後，出場價上移到
            "ladder_stop2": "分 3 次買｜買到第 2 筆後，出場價上移到突破價下 5%",
            "ladder_stop1": "分 3 次買｜出場價一直不動",
            "single": "一次全部買進｜出場價不動"}
-BT_SHORT = {"pullback": "續攻・創高拉回", "flag": "續攻・噴出後整理", "breakout": "低位階起漲", "dry": "量縮抗跌"}
+BT_SHORT = {"pullback": "續攻・創高拉回", "flag": "續攻・噴出後整理", "breakout": "低位起漲", "dry": "量縮抗跌"}
 BT_REASON = {"target": "🎯", "stop": "🛑", "time": "⏰"}
 CRASH_NOTE = {
     "2020 疫情崩盤": "新冠肺炎全球爆發，各國封城，全球股市恐慌性崩跌",
@@ -969,7 +969,7 @@ def stock_bt_body(code, suffix, capital):
     st.caption(L(f"強勢續攻：盤中漲 {cfg.CHASE_GAIN * 100:.0f}% 且突破盤整高點就追（你的習慣）",
                  f"攻擊日買 {cfg.ATTACK_SPLIT[0] * 100:.0f}%、突破日買 {cfg.ATTACK_SPLIT[1] * 100:.0f}%",
                  f"跌破盤整低點出場（最多賠 {cfg.ATTACK_MAX_LOSS * 100:.0f}%），突破後出場價移到前高下 {cfg.ATTACK_STOP2_PCT * 100:.0f}%",
-                 f"低位階起漲、量縮抗跌：分 3 次買（{w1}/{w2}/{w3}），買到第 2 筆後出場價拉到平均成本"))
+                 f"低位起漲、量縮抗跌：分 3 次買（{w1}/{w2}/{w3}），買到第 2 筆後出場價拉到平均成本"))
     periods = {"近 5 年": None, **{k: v for k, v in CRASHES.items()}}
     period = st.selectbox("期間", list(periods), key="sbt_period")
     with st.spinner("回測中…第一次要載入 8 年的大盤資料，約需 30 秒"):
@@ -1218,7 +1218,7 @@ if target:
                 st.rerun()
             st.divider()                         # 策略診斷、回測放在兩欄下面，整行寬度各自一區
             st.markdown("**策略診斷**")
-            st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位階起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
+            st.caption(L(f"以下依可用資金 {capital_all:,.0f} 元試算", f"低位起漲、量縮抗跌　{w1}/{w2}/{w3}", f"強勢續攻　攻擊日 {a1}／突破日 {a2}"))
             for sname in ("pullback", "flag", "breakout", "dry"):
                 r = ev["results"][sname]
                 label = cfg.STRATEGY_NAMES[sname]
