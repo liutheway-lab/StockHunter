@@ -37,10 +37,14 @@
 
 | 策略 | 重點 |
 |---|---|
-| 低位階起漲 | 低檔盤整後帶量突破頸線 |
-| 量縮抗跌 | 3 日均量縮到 20 日均量一半以下，回檔小於大盤 |
+| 低位起漲 | 收盤在十年月線高低的下 20%（低檔），盤整後帶量突破 30 日頸線；突破當天上影線不超過整根 K 棒的 20% |
+| 量縮抗跌 | 近 20 日高低差 ≤ 20%（盤整）；近 20 日均量 ≤ 前 60 日的 80%（量縮）；不破前低；所屬族群在大盤不好時排前 5 名（抗跌） |
 | 強勢續攻 | 創高拉回、或噴出後整理，再度站上盤整高點 |
 | 恐慌承接（觀察） | 先殺後拉、長下影、帶量、振幅夠大；只供追蹤，沒有追價點 |
+
+**大盤不好的定義**：加權指數收盤在 20 日均線之下。量縮抗跌的族群排名，只看最近 20 個交易日內大盤不好的日子。
+
+**族群排名**：用 Yahoo 概念分類頁的成分股，每個族群取中位數的累計跌幅，排前 5 名。每個分類頁只抓得到約 34 檔，所以排名是用部分成分股算的。
 
 分批進場比例可以在網頁 App 調整。
 
@@ -54,9 +58,12 @@
 |---|---|
 | `config.py` | 所有可調參數（門檻、比例、時間），想改策略數字只改這個檔 |
 | `night.py` | 夜間掃描主程式 |
+| `night_gate.py` | 夜間掃描的閘門：判斷今天要不要真的掃描（證交所成交資料、假日、16:30 強制執行） |
 | `morning.py` | 盤前晨報 |
-| `intraday.py` | 盤中監控與持股／追蹤清單提醒 |
-| `strategies.py` | 四套策略的判斷邏輯 |
+| `intraday.py` | 盤中監控與追蹤清單提醒 |
+| `strategies.py` | 三套選股策略與恐慌承接的判斷邏輯 |
+| `dry_groups.py` | 量縮抗跌的族群排名（每天算一次，抓失敗就沿用上一次並私訊管理者） |
+| `concept_lookup.py` | 查個股所屬的概念（Yahoo 個股頁），只用在候選股 |
 | `data.py` | 資料抓取（Yahoo、證交所、富果） |
 | `notify.py` | Telegram 傳送 |
 | `chart_png.py` | 大盤與個股線圖 |
@@ -76,6 +83,8 @@
 |---|---|
 | `volume_probe.py` | 大盤成交金額量測（每 2 分鐘抓一次，抓到就停） |
 | `volume_profile.py` | 盤中各時段成交量比例量測（一次性） |
+| `history_check.py` | 檢查股價資料最長能抓到幾年（一次性，結果私訊管理者） |
+| `group_probe.py` | 探測 Yahoo 族群與個股頁的資料結構（一次性，結果私訊管理者） |
 | `futures_test.py` | 台指期貨報價測試（TAIFEX MIS） |
 | `fugle_test.py` | 富果報價測試 |
 | `backtest.py` | 回測 |
@@ -83,7 +92,7 @@
 
 **GitHub Actions 排程**（`.github/workflows/`）
 
-`morning.yml`、`intraday.yml`、`night.yml`、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`
+`morning.yml`、`intraday.yml`、`night.yml`、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`、`history_check.yml`、`group_probe.yml`（後兩個是一次性探測，用完可以刪）
 
 **部署設定**
 
@@ -99,7 +108,7 @@
 在 GitHub 的 **Settings → Secrets and variables → Actions** 設定：
 
 - `TG_BOT_TOKEN`：Telegram 機器人 token
-- `TG_OWNER_ID`：管理者的 Telegram 數字 ID
+- `TG_OWNER_ID`：管理者的 Telegram 數字 ID（檢查與提醒只私訊這個 ID）
 - `TG_CHAT_ID`：群組通知的 chat id
 - `FUGLE_API_KEY`：富果行情 API 金鑰
 
@@ -120,6 +129,7 @@ Render 上另外需要 `GH_TOKEN`（備援排程用）與 `FUGLE_API_KEY`。
 | 11/02 | Telegram 機器人即時提醒上線；啟用 UptimeRobot 讓 Render 不休眠 |
 | 11/03 | 選股策略重新定義為三套；報價系統改為富果 |
 | 11/04 | 修正大盤位階判斷模型；Telegram 機器人新增追蹤清單（取代持股清單）；期貨報價測試 |
+| 11/05 | 低位起漲改用十年月線高低判斷位階，並加上上影線條件；量縮抗跌改為盤整、量縮、族群抗跌三條件；族群排名與個股概念查詢上線；追蹤清單取消按鈕修正；網頁 App 按鈕顯示追價與出場價 |
 
 ---
 
@@ -127,6 +137,8 @@ Render 上另外需要 `GH_TOKEN`（備援排程用）與 `FUGLE_API_KEY`。
 
 - GitHub 排程有時會延遲或沒有執行，所以 Render 上有備援排程，沒有跑就補跑一次。
 - 證交所與 Yahoo 偶爾連不上時，程式會改用備用來源或顯示警告，結果可能不完整。
+- 族群成分股每頁只抓得到約 34 檔（部分名單），族群排名與抗跌判斷會有偏差。
+- 量縮抗跌的回測還沒接上族群排名，回測結果目前不含抗跌條件；族群回測也會因為用今天的成分股回看過去，有一點偏差。
 - 大盤成交金額在 13:25 之後才開始量測，正式的通知時間還在確認中。
 - 策略門檻是依照目前的觀察設定，尚未經過完整回測驗證。
 
