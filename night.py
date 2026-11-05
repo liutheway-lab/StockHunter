@@ -2,8 +2,14 @@ name: night
 
 on:
   schedule:
-    - cron: "35 7 * * 1-5"    # 台灣時間 週一到週五 15:35（GitHub 用 UTC，所以是 07:35）。收盤 13:30、大盤成交金額約 15:00 出來，15:35 才開始掃。GitHub 排程常會延遲，實際時間可能晚一些
-  workflow_dispatch:          # 也可以手動執行：Actions → night → Run workflow
+    # 台灣時間 週一到週五 14:30、15:00、15:30、16:00、16:30（GitHub 用 UTC，所以減 8 小時）
+    # 每次都會先跑 night_gate.py 判斷要不要真的掃描，不需要的會直接結束
+    - cron: "30 6 * * 1-5"
+    - cron: "0 7 * * 1-5"
+    - cron: "30 7 * * 1-5"
+    - cron: "0 8 * * 1-5"
+    - cron: "30 8 * * 1-5"
+  workflow_dispatch:          # 也可以手動執行：Actions → night → Run workflow（一定會跑）
     inputs:
       diag:
         description: "診斷模式：不管大盤層級，列出所有策略符合的股票與各條件通過檔數"
@@ -19,20 +25,29 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: 判斷這次要不要跑（night_gate）
+        id: gate
+        run: python3 night_gate.py
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.11"
           cache: pip
       - name: 安裝中文字型（畫圖用）
+        if: steps.gate.outputs.go == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
-      - run: pip install -r requirements.txt
+      - name: 安裝套件
+        if: steps.gate.outputs.go == 'true'
+        run: pip install -r requirements.txt
       - name: Run
+        if: steps.gate.outputs.go == 'true'
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           DIAG: ${{ inputs.diag }}
         run: python night.py
       - name: 存下掃描結果（給網頁 app 的今日推薦）
+        if: steps.gate.outputs.go == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
