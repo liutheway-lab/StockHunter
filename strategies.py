@@ -402,7 +402,7 @@ def active_strategies(layer, stab_ok):
     if not cfg.USE_REGIME:
         return ["pullback", "breakout", "dry", "flag"], False
     if layer in (1, 2):
-        return ["pullback", "flag", "breakout"], False       # 低位階起漲：底部起漲不限空頭，各種行情都可能出現
+        return ["pullback", "flag", "breakout"], False       # 低位起漲：底部起漲不限空頭，各種行情都可能出現
     if layer == 3:
         return list(cfg.LAYER3_ACTIVE), True                 # 方向未明：只開最保守的，部位減半
     if layer in (4, 5):
@@ -602,7 +602,7 @@ def bo_needs_zone(r):
 
 
 def check_breakout(df, i, zone=None):
-    """低位階起漲（低檔爆量起漲，突破 30 日頸線）。
+    """低位起漲（低檔爆量起漲，突破 30 日頸線）。
     zone：十年月線高低 {"lo": 最低, "hi": 最高}。沒有（還沒抓）時「低檔」這項先不算過"""
     if i < 69 or i >= len(df):
         return None
