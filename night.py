@@ -152,6 +152,19 @@ def absorb_avg_poc(sym, day):
         return None, None
 
 
+def monthly_zone(sym):
+    """十年月線的最高、最低（低位階用）。抓不到回傳 None，這檔就先不算低檔"""
+    try:
+        import yfinance as yf
+        h = yf.Ticker(sym).history(period="10y", interval="1mo", auto_adjust=False)
+        if h is None or h.empty:
+            return None
+        return {"lo": float(h["Low"].min()), "hi": float(h["High"].max())}
+    except Exception as e:
+        print(f"{sym} 十年月線抓不到：{repr(e)[:80]}")
+        return None
+
+
 def scan(prices, mk, ratios):
     """回傳 (命中 {策略: [項目]}, 流動性合格檔數, 資料過舊略過檔數, 各條件通過檔數, 明日追價名單, 恐慌承接名單)"""
     hits = {k: [] for k in ORDER}
@@ -182,6 +195,10 @@ def scan(prices, mk, ratios):
                 "breakout": st.check_breakout(df, i),
                 "dry": st.check_dry(df, i, mk["df"]),
             }
+            if st.bo_needs_zone(results["breakout"]):          # 候選股：只差低檔一項 → 再抓十年月線算位置
+                zone = monthly_zone(sym)
+                if zone:
+                    results["breakout"] = st.check_breakout(df, i, zone)
             ab = st.check_absorb(df, i)
             if ab:
                 avg, poc = absorb_avg_poc(sym, df.index[i])          # 發現日的均價＋POC：盤中用來判斷警示與站回
