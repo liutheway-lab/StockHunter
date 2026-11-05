@@ -75,7 +75,11 @@ def earlier_run_exists():
     base = f"https://api.github.com/repos/{repo}"
     me = rq.get(f"{base}/actions/runs/{rid}", headers=h, timeout=20).json()
     runs = rq.get(f"{base}/actions/workflows/volume_probe.yml/runs?per_page=20", headers=h, timeout=20).json()
+    today = datetime.now(TZ).date()
     for w in runs.get("workflow_runs", []):
+        created = datetime.fromisoformat(w["created_at"].replace("Z", "+00:00")).astimezone(TZ)
+        if created.date() != today:                       # 只看今天的紀錄，昨天成功的不能擋住今天的量測
+            continue
         if str(w["id"]) != str(rid) and w["created_at"] < me["created_at"] and \
                 (w["status"] != "completed" or w["conclusion"] == "success"):
             return True
@@ -83,7 +87,8 @@ def earlier_run_exists():
 
 
 if __name__ == "__main__":
-    if earlier_run_exists():
+    manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"     # 手動執行（測試用）不擋，想跑幾次都可以
+    if not manual and earlier_run_exists():
         print("已經有更早的量測在跑或已完成，本次結束")
     else:
         main()
