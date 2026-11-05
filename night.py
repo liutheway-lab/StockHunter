@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 import config as cfg
 import strategies as st
+import dry_groups as dg
+import concept_lookup as cl
 from data import apply_twse_volume, fetch_market, fetch_prices, get_directory
 from notify import send_photo, send_telegram
 
@@ -174,6 +176,20 @@ def scan(prices, mk, ratios):
     liquid = stale = 0
     ABSORB_BASE.clear()
     last_date = mk["date"]
+    # 量縮抗跌的族群排名（大盤不好時，族群中位數跌幅前 5 名）：每次掃描算一次；抓失敗就沿用上一次並提醒
+    rank, rank_stale = None, False
+    try:
+        members = dg.fetch_all_members()
+        if members:
+            rank = dg.rank_groups({s.split(".")[0]: r["Close"] for s, r in prices.items()}, mk["df"]["Close"], members)
+            if rank:
+                dg.save_rank(rank)
+    except Exception as e:
+        print("族群排名失敗：", repr(e)[:120])
+    if not rank:
+        rank, rank_stale = dg.load_rank(), True
+        dg.notify_owner("⚠️ 族群排名這次沒算出來，用的是上一次的排名（" + str((rank or {}).get("date", "沒有紀錄")) +
+                        "），請檢查 Yahoo 族群頁")
     for sym, raw in prices.items():
         try:
             if raw.index[-1] < last_date:        # 停牌或資料沒更新到最新一天
@@ -195,6 +211,9 @@ def scan(prices, mk, ratios):
                 "breakout": st.check_breakout(df, i),
                 "dry": st.check_dry(df, i, mk["df"]),
             }
+            if st.dry_needs_group(results["dry"]):                 # 候選股：盤整＋量縮都過 → 查它的概念，看族群是不是前 5 名
+                concepts = cl.concepts_of(sym.split(".")[0])
+                results["dry"] = st.check_dry(df, i, mk["df"], resilient=dg.is_resilient(concepts, rank))
             if st.bo_needs_zone(results["breakout"]):          # 候選股：只差低檔一項 → 再抓十年月線算位置
                 zone = monthly_zone(sym)
                 if zone:
