@@ -1,0 +1,24 @@
+name: history_check
+
+on:
+  workflow_dispatch:          # 只有手動執行：Actions → history_check → Run workflow
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安裝套件
+        run: pip install requests pandas numpy yfinance lxml
+      - name: 檢查股價資料長度
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python history_check.py
