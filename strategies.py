@@ -619,6 +619,9 @@ def check_breakout(df, i, zone=None):
     pos = None
     if zone and zone["hi"] > zone["lo"]:
         pos = (close - zone["lo"]) / (zone["hi"] - zone["lo"])
+    hi_d, lo_d, op_d = float(row["High"]), float(row["Low"]), float(row["Open"])
+    rng = hi_d - lo_d
+    up_ratio = (hi_d - max(op_d, close)) / rng if rng > 0 else 0.0      # 上影線佔整根 K 棒的比例
     if pos is None:
         low_txt = "十年資料還沒抓（只對候選股才抓）"
     else:
@@ -634,6 +637,8 @@ def check_breakout(df, i, zone=None):
         (f"爆量 ≥ {cfg.BO_VOL_MULT:.1f} 倍", bool(volx >= cfg.BO_VOL_MULT), f"今日 {volx:.1f} 倍 20 日均量"),
         ("站上季線且月線翻揚", bool(close >= ema60 and ema20 > ema20_prev),
          f"月線 {_fp(ema20)}（昨 {_fp(ema20_prev)}）、季線 {_fp(ema60)}"),
+        (f"上影線 ≤ 整根 K 棒 {cfg.BO_MAX_UPPER_SHADOW * 100:.0f}%", bool(up_ratio <= cfg.BO_MAX_UPPER_SHADOW),
+         f"上影線佔整根 K 棒 {up_ratio * 100:.0f}%（賣壓{'小' if up_ratio <= cfg.BO_MAX_UPPER_SHADOW else '大'}）"),
     ]
     E = tick(close)
     stop1 = tick(min(neck * 0.98, E * (1 - cfg.BO_STOP_PCT)))
