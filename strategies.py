@@ -651,8 +651,20 @@ def check_breakout(df, i, zone=None):
                       "over": close / neck - 1 if neck > 0 else 0.0})
 
 
-def check_dry(df, i, mkt=None):
-    """量縮抗跌。mkt：加權指數日線 DataFrame（用來比較抗跌）"""
+DRY_GROUP_PREFIX = "抗跌："
+
+
+def dry_needs_group(r):
+    """量縮抗跌：其他條件都過、只差「抗跌（族群）」一項 → 才去查個股概念（只查候選股）"""
+    if r is None or r["ok"]:
+        return False
+    grp = [c for c in r["checks"] if c[0].startswith(DRY_GROUP_PREFIX)]
+    return bool(grp) and not grp[0][1] and all(c[1] for c in r["checks"] if not c[0].startswith(DRY_GROUP_PREFIX))
+
+
+def check_dry(df, i, mkt=None, resilient=None):
+    """量縮抗跌（盤整＋量縮＋所屬族群在大盤不好時排前 5）。
+    resilient：True/False＝族群排名結果；None＝還沒查（這一項先不算過）"""
     if i < 69 or i >= len(df):
         return None
     row = df.iloc[i]
@@ -664,30 +676,33 @@ def check_dry(df, i, mkt=None):
     low3 = float(df["Low"].iloc[hi:i + 1].min())
     vol3 = float(df["Volume"].iloc[hi:i + 1].mean())
 
+    B = cfg.DRY_BOX_DAYS
+    bx = df.iloc[i - B + 1:i + 1]
+    box_hi, box_lo = float(bx["High"].max()), float(bx["Low"].min())
+    box_pct = (box_hi - box_lo) / box_hi if box_hi > 0 else 1.0
+    vol_now = float(df["Volume"].iloc[i - B + 1:i + 1].mean())
+    base_lo, base_hi = i - B + 1 - cfg.DRY_VOL_BASE_DAYS, i - B + 1
+    vol_base = float(df["Volume"].iloc[base_lo:base_hi].mean()) if base_lo >= 0 else 0.0
+    vol_ratio_new = vol_now / vol_base if vol_base > 0 else float("nan")
+    if resilient is None:
+        grp_ok, grp_txt = False, "族群排名還沒查（只對候選股才查）"
+    elif resilient:
+        grp_ok, grp_txt = True, "所屬族群在大盤不好時排前 5 名"
+    else:
+        grp_ok, grp_txt = False, "所屬族群不在大盤不好時的前 5 名"
+
     checks = [
         _liq(row),
-        ("量縮", bool(mav20 > 0 and vol3 <= cfg.DRY_VOL_RATIO * mav20),
-         f"3日均量 = 20日均量的 {_ratio(vol3, mav20) * 100:.0f}%（需 ≤ {cfg.DRY_VOL_RATIO * 100:.0f}%）"),
+        (f"盤整：近 {B} 日高低差 ≤ {cfg.DRY_BOX_PCT * 100:.0f}%", bool(box_pct <= cfg.DRY_BOX_PCT),
+         f"近 {B} 日高 {_fp(box_hi)}、低 {_fp(box_lo)}（差 {box_pct * 100:.1f}%）"),
+        (f"量縮：近 {B} 日均量 ≤ 前 {cfg.DRY_VOL_BASE_DAYS} 日的 {cfg.DRY_VOL_NEW * 100:.0f}%",
+         bool(vol_base > 0 and vol_now <= cfg.DRY_VOL_NEW * vol_base),
+         (f"近 {B} 日均量是前 {cfg.DRY_VOL_BASE_DAYS} 日的 {vol_ratio_new * 100:.0f}%" if vol_base > 0 else "歷史量資料不足")),
         (f"{k}日不破前低", low3 > L, f"最近{k}日最低 {_fp(low3)}，前低 {_fp(L)}"),
+        (f"{DRY_GROUP_PREFIX}所屬族群前 5 名", grp_ok, grp_txt),
     ]
-    q = {"vol_ratio": _ratio(vol3, mav20), "hold": low3 / L - 1 if L > 0 else 0.0}
-    rs_ok, rs_detail = False, "大盤資料不足，無法比較"
-    if mkt is not None and len(mkt):
-        d = df.index[i]
-        m = _naive(mkt)["Close"].loc[:d].iloc[-cfg.STAB_LOOKBACK:]
-        if len(m) >= 5:
-            m_high, m_date, m_now = float(m.max()), m.idxmax(), float(m.iloc[-1])
-            m_drop = max(0.0, 1 - m_now / m_high)
-            seg = df["Close"].loc[m_date:]                                   # 大盤高點那天起，個股的走勢
-            if len(seg) >= 2:
-                peak = seg.cummax()
-                s_dd = float(((peak - seg) / peak).max())                    # 同一段期間的最大回檔（中間跌很深再反彈也算）
-                rs_ok = bool(s_dd <= cfg.DRY_RS_RATIO * m_drop)
-                if m_drop > 0:
-                    q["rs"] = s_dd / (cfg.DRY_RS_RATIO * m_drop)          # 越小越抗跌（<1 才過關）
-                rs_detail = (f"大盤自 {m_date:%m/%d} 高點跌 {m_drop * 100:.1f}%，個股同期最大回檔 {s_dd * 100:.1f}%"
-                             f"（需 ≤ 大盤的 {cfg.DRY_RS_RATIO * 100:.0f}%）")
-    checks.append(("比大盤抗跌", rs_ok, rs_detail))
+    q = {"vol_ratio": vol_ratio_new if vol_ratio_new == vol_ratio_new else 1.0,
+         "hold": low3 / L - 1 if L > 0 else 0.0}
 
     E = tick(close)
     w20 = df.iloc[i - cfg.DRY_KEY_LOOKBACK + 1:i + 1]
@@ -695,14 +710,6 @@ def check_dry(df, i, mkt=None):
     low20 = float(w20["Low"].min())
     stop1 = tick(float(df["Low"].iloc[i - cfg.DRY_STOP_DAYS + 1:i + 1].min()))        # 出場價＝近 5 日最低點
     below = (key - close) / key if key > 0 else 1.0
-    vl0 = vol_low(df.iloc[:i + 1])
-    if vl0 and vl0["side"] == "壓":
-        dist = (vl0["high"] - close) / vl0["high"]
-        checks.append((f"離上方大量壓力 ≤ {cfg.DRY_MAX_PRESSURE_DIST * 100:.0f}%", bool(dist <= cfg.DRY_MAX_PRESSURE_DIST),
-                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {_fp(vl0['high'])}、現價 {_fp(close)}（差 {dist * 100:.1f}%）"))
-    elif vl0:
-        checks.append((f"離上方大量壓力 ≤ {cfg.DRY_MAX_PRESSURE_DIST * 100:.0f}%", True,
-                       f"65日第1大量日（{vl0['date']:%m/%d}）最高點 {_fp(vl0['high'])} 已在現價之下，上方沒有這個壓力"))
     checks.append(("出場價低於買價", bool(stop1 < E), f"出場 {stop1}、買價 {E}"))
     target = tick(key)                                                                # 第一目標＝前高（突破價）
     # 第二目標（參考）：依序找上方最近的壓力 → 65 日第 1 大量日最高點（要在前高之上）→ 近 60 日高點 → 買價＋2.5 倍風險
@@ -937,10 +944,8 @@ def rank_score(name, r, plan=None, watch=False):
                   _m(q.get("box"), cfg.BO_BOX_RATIO, 1.0),                                 # 盤整越窄越好
                   _m(q.get("over"), 0.0, 0.05)]                                            # 突破頸線的幅度
     elif name == "dry":
-        parts += [_m(cfg.DRY_VOL_RATIO - q.get("vol_ratio", cfg.DRY_VOL_RATIO), 0.0, cfg.DRY_VOL_RATIO),   # 越量縮越好
+        parts += [_m(cfg.DRY_VOL_NEW - q.get("vol_ratio", cfg.DRY_VOL_NEW), 0.0, cfg.DRY_VOL_NEW),   # 越量縮越好
                   _m(q.get("hold"), 0.0, 0.05)]                                            # 離前低越遠越好
-        if q.get("rs") is not None:
-            parts.append(_m(1.0 - q["rs"], 0.0, 0.8))                                      # 比大盤越抗跌越好
     base = sum(parts) / len(parts) if parts else 0.0
     rr = plan_rr(plan) if plan else None
     rr_part = _m(rr, 1.0, 3.0) if rr is not None else 0.0                                  # 風報比 1 → 3
