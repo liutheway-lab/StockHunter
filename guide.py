@@ -160,6 +160,7 @@ def build():
 ③ 收盤突破 {cfg.BO_PLATFORM} 日高點（頸線）
 ④ 量 ≥ 20 日均量 {cfg.BO_VOL_MULT:g} 倍
 ⑤ 站上季線，月線翻揚
+⑥ 上影線 ≤ 整根 K 棒 {pct(cfg.BO_MAX_UPPER_SHADOW)}（上面賣壓要小）
 出場：頸線下 2%
 　與買價下 {pct(cfg.BO_STOP_PCT)} 取較低
 目標：買價 +{pct(cfg.BO_TARGET_PCT)}
