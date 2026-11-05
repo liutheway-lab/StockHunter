@@ -34,7 +34,7 @@ def _chunks(blocks, limit=3500):
 
 
 _BOT_KB = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "追蹤清單"}, {"text": "調價"}],
-                        [{"text": "查價"}], [{"text": "清畫面"}]],
+                        [{"text": "查價"}, {"text": "說明"}], [{"text": "清畫面"}]],
            "resize_keyboard": True, "is_persistent": True}
 _OWNER_KB = {"keyboard": _BOT_KB["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],
              "resize_keyboard": True, "is_persistent": True}
