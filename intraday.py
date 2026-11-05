@@ -415,7 +415,7 @@ def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
     （看板在你手機上被刪或取消置頂時，新的一則會讓置頂列重新出現）"""
     q = quotes_quick(h) if q is None else q
     apply_quote_info(h, q)
-    text = board_text(h, q, users, status=_STATUS.get(cid))
+    text = board_text(h, q, users, status=monitor_status() or _STATUS.get(cid))   # 真實狀態優先；查不到才用看板上記的
     hidden = bool(users) and _HIDE_OK["v"]
     mid = None
     if msg_id and not rotate:
@@ -443,6 +443,42 @@ def save_holdings(cid, h, msg_id, users=None, q=None, rotate=False):
             _post_board("editMessageText", cid, mid, text, users, False)
     _BOOK[cid] = (copy.deepcopy(h), mid, copy.deepcopy(users))
     return mid
+
+
+_MON_CACHE = {"at": 0.0, "text": None}
+
+
+def monitor_status():
+    """盤中監控的真實狀態：直接問 GitHub 今天的 intraday 執行紀錄（有 GH_TOKEN 才查，約 30 秒快取）。
+    有在跑 → 監控中；今天的已結束 → 已停止；今天沒有紀錄 → 尚未啟動。查不到回傳 None（退回看板上記的狀態）"""
+    tok = os.getenv("GH_TOKEN", "").strip()
+    if not tok:
+        return None
+    if time.time() - _MON_CACHE["at"] < 30:
+        return _MON_CACHE["text"]
+    text = None
+    try:
+        repo = os.getenv("GH_REPO", "liutheway-lab/StockHunter")
+        r = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/intraday.yml/runs",
+                         params={"per_page": 5},
+                         headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}, timeout=10)
+        today = datetime.now(TZ).date()
+        for w in r.json().get("workflow_runs", []):
+            t = datetime.fromisoformat(w["created_at"].replace("Z", "+00:00")).astimezone(TZ)
+            if t.date() != today:
+                continue
+            if w.get("status") != "completed":
+                text = f"{STATUS_TAG}已啟動　{t:%H:%M}"
+            else:
+                t_end = datetime.fromisoformat(w["updated_at"].replace("Z", "+00:00")).astimezone(TZ)
+                text = f"{STATUS_TAG}已停止　{t_end:%H:%M}"
+            break
+        else:
+            text = f"{STATUS_TAG}今天尚未啟動"
+    except Exception as e:
+        print("查盤中監控狀態失敗：", repr(e)[:100])
+    _MON_CACHE.update(at=time.time(), text=text)
+    return text
 
 
 def set_monitor_status(text):
@@ -2272,6 +2308,9 @@ def spike_check(books, q, today, now, sent):
                     print("放量急殺提醒失敗", repr(e)[:120])
 
 
+ABSORB_OK = {}     # {(日期, 代號): 承接成功當時的盤中殺低點}：成功後才用來判斷「承接失效」
+
+
 def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
     """查一次報價，送出該送的提醒。books：{chat id: 持股}；sent：今天已經送過的 (種類, 對象, 代號)
     absorb：恐慌承接名單（跌破發現日最低＝承接失敗，通知群組一次）"""
@@ -2335,6 +2374,19 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
             to_group(f"🧺 *恐慌承接警示*　{a['code']} {a['name']}\n跌破發現日 {'、'.join(broke)}\n{tail}")
         if back:
             to_group(f"🧺 *恐慌承接站回*　{a['code']} {a['name']}\n又站回發現日 {'、'.join(back)}\n{tail}")
+        # 承接成功（只提醒）：盤中殺低後，現價反彈 ≥ 5%，且均價、POC 兩條都站回（都先跌破過）
+        # 成功後，若現價跌破當時的殺低點 → 發「承接失效」（一天一次）
+        code, kill, day_key = a["code"], v.get("low"), (today, a["code"])
+        if day_key in ABSORB_OK:
+            if v["last"] < ABSORB_OK[day_key] and ("absorb", "void", code) not in sent:
+                sent.add(("absorb", "void", code))
+                to_group(f"🧺 *恐慌承接失效*　{code} {a['name']}\n跌破盤中殺低點 {ABSORB_OK[day_key]:g}\n{tail}")
+        elif (kill and a.get("avg") and a.get("poc") and v["last"] >= kill * (1 + cfg.ABSORB_SUCCESS_RECOVER)
+              and v["last"] >= a["avg"] and v["last"] >= a["poc"]
+              and ("absorb", "below", code, "avg") in sent and ("absorb", "below", code, "poc") in sent):
+            ABSORB_OK[day_key] = kill
+            to_group(f"🧺 *恐慌承接成功*　{code} {a['name']}\n盤中殺低點 {kill:g}，現價已反彈 {(v['last'] / kill - 1) * 100:.1f}%\n"
+                     f"站回發現日均價 {a['avg']:g}、POC {a['poc']:g}\n停損參考：跌破殺低點 {kill:g}\n{tail}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
             v = q.get(code)
