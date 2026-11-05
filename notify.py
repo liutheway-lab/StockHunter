@@ -33,22 +33,39 @@ def _chunks(blocks, limit=3500):
     return out
 
 
+_BOT_KB = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "追蹤清單"}, {"text": "調價"}],
+                        [{"text": "查價"}, {"text": "說明"}], [{"text": "清畫面"}]],
+           "resize_keyboard": True, "is_persistent": True}
+_OWNER_KB = {"keyboard": _BOT_KB["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],
+             "resize_keyboard": True, "is_persistent": True}
+
+
+def _markup(chat_id):
+    """推播到私人對話時一起附上下方按鍵（跟機器人平常的按鍵一樣），推播不會把按鍵收掉；群組不附"""
+    cid = str(chat_id)
+    if cid.startswith("-"):
+        return None
+    return _OWNER_KB if cid == os.getenv("TG_OWNER_ID", "").strip() else _BOT_KB
+
+
 def tg_send(chat_id, blocks):
     """傳給單一 chat。回傳是否全部成功"""
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     all_ok = True
+    kb = _markup(chat_id)
     for c in _chunks(blocks):
         try:
+            extra = {"reply_markup": kb} if kb else {}
             r = requests.post(
                 url,
                 json={"chat_id": chat_id, "text": c, "parse_mode": "Markdown",
-                      "disable_web_page_preview": True},
+                      "disable_web_page_preview": True, **extra},
                 timeout=20,
             )
             if not r.ok:
                 r = requests.post(
                     url,
-                    json={"chat_id": chat_id, "text": c.replace("*", "").replace("`", "")},
+                    json={"chat_id": chat_id, "text": c.replace("*", "").replace("`", ""), **extra},
                     timeout=20,
                 )
             if not r.ok:
