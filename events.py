@@ -466,11 +466,23 @@ def event_rows(today=None, n=5):
     return rows
 
 
+IMP_TG = {3: "!!", 2: "! ", 1: "  "}     # 晨報用的重要度標記（半形，才對得齊）
+
+
+def _tg_row(it):
+    """晨報的一行：日期(星期) 時間 重要度 事件。時間沒有就用 --:--（不用中文，才不會歪）。事件名稱放最後，長短不影響對齊"""
+    d, t, name, imp = it
+    return f"{d:%m/%d}({WEEKDAY[d.weekday()]}) {t or '--:--'}  {IMP_TG.get(imp, '  ')}  {name}"
+
+
 def telegram_block(today=None, n=5):
-    """晨報用的文字（Telegram Markdown）"""
-    lines = event_lines(today, n)
+    """晨報用的文字：程式碼區塊對齊（跟上面的夜盤、美股區塊同一種排版）"""
+    items = upcoming(today or today_tw(), n)
+    lines = [_tg_row(it) for it in items] or ["沒有列入的重大事件"]
     note = stale_note(today or today_tw(), n)
-    return f"*🔔 未來 {n} 個交易日重大事件*\n" + "\n".join(lines) + ("\n⚠️ " + note if note else "")
+    body = "```\n" + "\n".join(ln + "⠀" * 3 for ln in lines) + "\n```"   # 行尾補看不見的空格，避免 </> 按鈕蓋到字
+    return (f"*🔔 未來 {n} 個交易日重大事件*\n" + body
+            + "\n!!＝非常重要　!＝重要" + ("\n⚠️ " + note if note else ""))
 
 
 if __name__ == "__main__":
