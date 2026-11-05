@@ -93,7 +93,7 @@ _missing = [f for f, ok in (("config.py", hasattr(cfg, "names_join")),
 if _missing:
     st.error("⚠️ GitHub 上這幾個檔案還是舊版，請重新上傳：" + "、".join(_missing))
     st.stop()
-st.title("📈 台股戰情室")
+st.title("📈 台股盤後戰情室")
 try:                                                    # 程式更新時間＝app.py 這個檔案最後一次更新（重新部署）的時間
     _upd = datetime.fromtimestamp(os.path.getmtime(__file__), ZoneInfo("Asia/Taipei"))
     _upd_txt = f"｜程式更新 {_upd:%m-%d %H:%M}"
