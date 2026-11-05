@@ -166,16 +166,14 @@ def build():
 目標：買價 +{pct(cfg.BO_TARGET_PCT)}
 
 🛡 *量縮抗跌*
-大盤跌時，它不跌也沒量
-① 3 日均量
-　≤ 20 日均量的 {pct(cfg.DRY_VOL_RATIO)}
-② {cfg.STAB_DAYS} 日不破前低
-③ 比大盤抗跌：
-　大盤自高點起算的跌幅，
-　個股最大回檔 ≤ 它的 {pct(cfg.DRY_RS_RATIO)}
-④ 離上方大量壓力
-　≤ {pct(cfg.DRY_MAX_PRESSURE_DIST)}
-　（上方沒有大量壓力就算過）
+大盤不好時，它跌得比族群少
+① 盤整：近 {cfg.DRY_BOX_DAYS} 日高低差
+　≤ {pct(cfg.DRY_BOX_PCT)}
+② 量縮：近 {cfg.DRY_BOX_DAYS} 日均量
+　≤ 前 {cfg.DRY_VOL_BASE_DAYS} 日的 {pct(cfg.DRY_VOL_NEW)}
+③ {cfg.STAB_DAYS} 日不破前低
+④ 所屬族群（中位數跌幅）
+　在大盤不好時排前 5 名
 ⑤ 出場價低於買價
 出場：近 {cfg.DRY_STOP_DAYS} 日最低點
 目標：近 {cfg.DRY_KEY_LOOKBACK} 日高點（突破價）
