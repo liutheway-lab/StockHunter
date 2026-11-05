@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-05 15:58",
+ "generated_at": "2026-11-05 17:24",
  "data_date": "2026-11-05",
  "layer": 4,
  "layer_name": "空頭",
@@ -9,44 +9,7 @@
  "hits": {
   "pullback": [],
   "flag": [],
-  "breakout": [
-   {
-    "code": "2610",
-    "name": "華航",
-    "suffix": ".TW",
-    "industry": "航運業",
-    "market": "上市",
-    "close": 21.65,
-    "key": 22.15,
-    "stop1": 20.15,
-    "target": 26.0,
-    "turnover": 432151133,
-    "score": 71.3,
-    "broke": false,
-    "vl_low": 20.299999237060547,
-    "vl_date": "08/10",
-    "vl_vol": 126311,
-    "vl_side": "撐"
-   },
-   {
-    "code": "2618",
-    "name": "長榮航",
-    "suffix": ".TW",
-    "industry": "航運業",
-    "market": "上市",
-    "close": 45.1,
-    "key": 46.75,
-    "stop1": 41.95,
-    "target": 54.1,
-    "turnover": 762108865,
-    "score": 54.8,
-    "broke": false,
-    "vl_low": 42.29999923706055,
-    "vl_date": "07/31",
-    "vl_vol": 70267,
-    "vl_side": "撐"
-   }
-  ],
+  "breakout": [],
   "dry": [
    {
     "code": "1907",
