@@ -96,7 +96,7 @@ if _missing:
 st.markdown('<h1 style="white-space:nowrap;font-size:clamp(1.3rem,6vw,2.4rem);margin:0.2em 0">📈 台股盤後戰情室</h1>', unsafe_allow_html=True)
 try:                                                    # 程式更新時間＝app.py 這個檔案最後一次更新（重新部署）的時間
     _upd = datetime.fromtimestamp(os.path.getmtime(__file__), ZoneInfo("Asia/Taipei"))
-    _upd_txt = f"｜程式更新 {_upd:%m-%d %H:%M}"
+    _upd_txt = f"｜程式更新 {_upd:%Y-%m-%d %H:%M}"
 except Exception:
     _upd_txt = ""
 st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}{_upd_txt}")
@@ -112,7 +112,7 @@ def _data_status():
     except Exception:
         pass
     if tn.weekday() >= 5:
-        state = "📅 今天休市，顯示的是最近一個交易日的資料"
+        state = "🏖️ 今天休市，顯示的是最近一個交易日的資料"
     elif gen.startswith(today):
         state = f"✅ 今天已更新（{gen[:16]}）"
     elif (tn.hour, tn.minute) < (sh, sm):
@@ -120,7 +120,7 @@ def _data_status():
     else:
         state = "⏳ 今天更新中，16:30 前沒完成會強制更新"
     return (
-        "**📅 盤後資料更新時間**\n\n"
+        "**🕒 盤後資料更新時間**\n\n"
         "- 13:30 收盤\n"
         "- 15:00 左右 大盤成交金額出現\n"
         f"- {sh}:{sm:02d} 開始掃描個股（約 15～20 分鐘）\n"
@@ -130,7 +130,7 @@ def _data_status():
 
 
 try:
-    st.markdown(_data_status())
+    st.info(_data_status())
 except Exception:
     pass
 
