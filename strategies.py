@@ -381,7 +381,7 @@ def check_absorb_live(o, h, l, c, prev, vol, mav20, limit_up=None, lv=None):
         return None
     share = cfg.VOL_SHARE_PRE if cfg.VOL_SHARE_PRE and cfg.VOL_SHARE_PRE > 0 else 1.0
     vm = (vol / share) / mav20                                        # 換算成「全日量 ÷ 20 日均量」
-    if vm < cfg.ABSORB_VOL_MULT or rng / prev < cfg.ABSORB_MIN_RANGE:
+    if vm < cfg.ABSORB_VOL_MULT or (h - l) / h < cfg.ABSORB_KILL_MIN:     # 殺低：當天從高點殺下來至少 5%（不是跌停幅度）
         return None
     shadow, body = (min(o, c) - l) / rng, (c - o) / rng
     if l >= prev:                             # 沒有殺到昨收以下（漲停、跳空高開都是這種），不算恐慌
