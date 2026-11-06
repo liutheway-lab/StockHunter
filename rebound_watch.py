@@ -1,9 +1,9 @@
 """rebound_watch.py — 盤中「瞬間殺低後反彈」偵測（跑在 Render 機器人上，交易時間內每 90 秒掃一次全市場）
 
 重點不是「今天跌多少」，而是「短時間內瞬間殺下去，然後又快速拉回來」。
-做法：每檔股票記住最近 30 分鐘的成交價快照，條件：
+做法：每檔股票記住今天盤中的成交價快照（每 90 秒一輪），條件：
   - 殺低要快：5 分鐘內從高點跌下來至少 DIP_MIN（4%），而且殺低段要出量
-  - 殺低的低點之後，現價反彈 ≥ REBOUND_MIN（4%），反彈最多看 30 分鐘
+  - 殺低的低點之後，現價反彈 ≥ REBOUND_MIN（4%），整個盤中都算
   - 一直往上漲的股票沒有殺低，不會進來
 排序：反彈幅度大的先推；每次最多推 TOP_N 檔；同一檔冷卻 COOLDOWN_SEC 秒才會再推。
 資料來源：證交所 MIS 盤中即時報價（公開、免費、不用金鑰）；股票清單來自 data.get_directory()。
@@ -21,7 +21,7 @@ import data as D
 
 TPE = dt.timezone(dt.timedelta(hours=8))
 DIP_SEC = 300             # 殺低要快：高點到低點在 5 分鐘內
-WINDOW_SEC = 1800         # 反彈可以慢慢來：低點之後最多看 30 分鐘
+WINDOW_SEC = 6 * 3600     # 整個盤中都看：殺低後不管過多久，只要出現符合的樣態就提醒
 DIP_MIN = 0.04            # 殺低：從視窗內前面的高點跌下來至少 4%
 REBOUND_MIN = 0.04        # 殺低低點之後反彈 ≥ 4%
 MIN_POINTS = 3            # 視窗內至少要有 3 個成交價（不然不算）
@@ -60,7 +60,7 @@ def record(q, ts):
     code = str(q.get("c", "")).strip()
     if not (z and code):
         return
-    h = _hist.setdefault(code, deque(maxlen=400))
+    h = _hist.setdefault(code, deque(maxlen=1000))
     h.append((ts, z, str(q.get("n", "")), _cum_vol(q.get("v")), _num(q.get("y"))))
 
 
