@@ -100,11 +100,37 @@ try:                                                    # 程式更新時間＝a
 except Exception:
     _upd_txt = ""
 st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}{_upd_txt}")
-try:                                                    # 盤後資料（大盤、今日推薦）要等夜間掃描完成才會更新：平日在這個時間以前，先講清楚
-    _tn = datetime.now(ZoneInfo("Asia/Taipei"))
-    _sh, _sm = cfg.NIGHT_SCAN_HM
-    if _tn.weekday() < 5 and (_tn.hour, _tn.minute) < (_sh, _sm):
-        st.info(f"🕒 盤後資料 {_sh}:{_sm:02d} 才會更新  \n大盤、今日推薦、掃描結果  \n現在看到的是上一個交易日")
+def _data_status():
+    """盤後資料的更新時間表＋現在的狀態（給頁面最上方顯示）"""
+    tn = datetime.now(ZoneInfo("Asia/Taipei"))
+    sh, sm = cfg.NIGHT_SCAN_HM
+    today = f"{tn:%Y-%m-%d}"
+    gen = ""
+    try:
+        with open(Path(__file__).parent / "scan_results.json", encoding="utf-8") as f:
+            gen = str(json.load(f).get("generated_at", ""))
+    except Exception:
+        pass
+    if tn.weekday() >= 5:
+        state = "📅 今天休市，顯示的是最近一個交易日的資料"
+    elif gen.startswith(today):
+        state = f"✅ 今天的盤後資料已更新（{gen[11:16]}）"
+    elif (tn.hour, tn.minute) < (sh, sm):
+        state = f"⏳ 今天的盤後資料還沒更新，現在顯示的是上一個交易日"
+    else:
+        state = f"⏳ 今天的盤後資料更新中，如果 16:30 前還沒完成，會強制更新"
+    return (
+        "**📅 盤後資料更新時間**\n\n"
+        "・13:30　收盤\n"
+        "・15:00 左右　證交所大盤成交金額出現\n"
+        f"・{sh}:{sm:02d}　開始掃描個股（約 15～20 分鐘）\n"
+        "・完成後　大盤、今日推薦、掃描結果同時更新\n\n"
+        + state
+    )
+
+
+try:
+    st.info(_data_status())
 except Exception:
     pass
 
