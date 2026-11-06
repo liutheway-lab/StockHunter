@@ -35,18 +35,19 @@ FOMC_FALLBACK = [
     "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17", "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
     "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-09", "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08",
 ]
+# 備用表：時間一律用「美東時間」寫，程式會自動換成台灣時間（美國夏令／冬令時間差一小時，自動處理）
 BLS_FALLBACK = [
-    ("2026-11-06", "21:30", "非農就業（10月）", 3),
-    ("2026-11-10", "21:30", "CPI（10月）", 3),
-    ("2026-11-13", "21:30", "PPI（10月）", 2),
-    ("2026-12-01", "23:00", "JOLTS（10月）", 1),
-    ("2026-12-04", "21:30", "非農就業（11月）", 3),
-    ("2026-12-10", "21:30", "CPI（11月）", 3),
-    ("2026-12-15", "21:30", "PPI（11月）", 2),
+    ("2026-11-06", "08:30", "非農就業（10月）", 3),
+    ("2026-11-10", "08:30", "CPI（10月）", 3),
+    ("2026-11-13", "08:30", "PPI（10月）", 2),
+    ("2026-12-01", "10:00", "JOLTS（10月）", 1),
+    ("2026-12-04", "08:30", "非農就業（11月）", 3),
+    ("2026-12-10", "08:30", "CPI（11月）", 3),
+    ("2026-12-15", "08:30", "PPI（11月）", 2),
 ]
-BEA_FALLBACK = [                                # 取自 BEA 官方 JSON（台灣時間）
-    ("2026-11-25", "21:30", "PCE", 2), ("2026-11-25", "21:30", "GDP", 2),
-    ("2026-12-23", "21:30", "PCE", 2), ("2026-12-23", "21:30", "GDP", 2),
+BEA_FALLBACK = [                                # 取自 BEA 官方 JSON（美東時間 08:30）
+    ("2026-11-25", "08:30", "PCE", 2), ("2026-11-25", "08:30", "GDP", 2),
+    ("2026-12-23", "08:30", "PCE", 2), ("2026-12-23", "08:30", "GDP", 2),
 ]
 TW_FALLBACK = {"2026-12-25": "行憲紀念日", "2027-01-01": "開國紀念日"}      # 台股休市的平日（政府辦公日曆抓不到時用）
 
@@ -85,6 +86,13 @@ def _et_to_tw(d, hm=(14, 0)):
     """美東某日某時 → 台灣（日期, 時間）。自動處理夏令／冬令時間"""
     t = datetime(d.year, d.month, d.day, hm[0], hm[1], tzinfo=NY).astimezone(TPE)
     return t.date(), f"{t:%H:%M}"
+
+
+def _fallback_row(a, et_hm, name, imp):
+    """備用表的一筆（美東時間）→ (台灣日期, 台灣時間, 名稱, 重要度)"""
+    hh, mm = (int(x) for x in et_hm.split(":"))
+    td, tt = _et_to_tw(_d(a), (hh, mm))
+    return (td, tt, name, imp)
 
 
 # ───────────────────────── 美股休市（規則計算）─────────────────────────
@@ -392,8 +400,8 @@ def closure_events(start, end):
 def all_events(start, end):
     """所有來源的事件（還沒篩選日期）"""
     bea, bls = bea_events(), bls_events()
-    items = bea if bea is not None else [(_d(a), b, c, e) for a, b, c, e in BEA_FALLBACK]
-    items += bls if bls is not None else [(_d(a), b, c, e) for a, b, c, e in BLS_FALLBACK]
+    items = bea if bea is not None else [_fallback_row(a, b, c, e) for a, b, c, e in BEA_FALLBACK]
+    items += bls if bls is not None else [_fallback_row(a, b, c, e) for a, b, c, e in BLS_FALLBACK]
     items += fomc_events()
     items += cbc_events(start, end)
     items += closure_events(start, end)
