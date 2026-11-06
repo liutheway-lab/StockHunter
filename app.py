@@ -114,23 +114,23 @@ def _data_status():
     if tn.weekday() >= 5:
         state = "📅 今天休市，顯示的是最近一個交易日的資料"
     elif gen.startswith(today):
-        state = f"✅ 今天的盤後資料已更新（{gen[11:16]}）"
+        state = f"✅ 今天已更新（{gen[:16]}）"
     elif (tn.hour, tn.minute) < (sh, sm):
-        state = f"⏳ 今天的盤後資料還沒更新，現在顯示的是上一個交易日"
+        state = "⏳ 今天還沒更新，目前顯示的是上一個交易日"
     else:
-        state = f"⏳ 今天的盤後資料更新中，如果 16:30 前還沒完成，會強制更新"
+        state = "⏳ 今天更新中，16:30 前沒完成會強制更新"
     return (
         "**📅 盤後資料更新時間**\n\n"
-        "・13:30　收盤\n"
-        "・15:00 左右　證交所大盤成交金額出現\n"
-        f"・{sh}:{sm:02d}　開始掃描個股（約 15～20 分鐘）\n"
-        "・完成後　大盤、今日推薦、掃描結果同時更新\n\n"
+        "- 13:30 收盤\n"
+        "- 15:00 左右 大盤成交金額出現\n"
+        f"- {sh}:{sm:02d} 開始掃描個股（約 15～20 分鐘）\n"
+        "- 完成後 大盤、今日推薦、掃描結果同時更新\n\n"
         + state
     )
 
 
 try:
-    st.info(_data_status())
+    st.markdown(_data_status())
 except Exception:
     pass
 
