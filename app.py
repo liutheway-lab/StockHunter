@@ -100,6 +100,13 @@ try:                                                    # 程式更新時間＝a
 except Exception:
     _upd_txt = ""
 st.caption(f"台灣時間 {datetime.now(ZoneInfo('Asia/Taipei')):%Y-%m-%d %H:%M}{_upd_txt}")
+try:                                                    # 盤後資料（大盤、今日推薦）要等夜間掃描完成才會更新：平日在這個時間以前，先講清楚
+    _tn = datetime.now(ZoneInfo("Asia/Taipei"))
+    _sh, _sm = cfg.NIGHT_SCAN_HM
+    if _tn.weekday() < 5 and (_tn.hour, _tn.minute) < (_sh, _sm):
+        st.info(f"🕒 盤後資料 {_sh}:{_sm:02d} 才會更新  \n大盤、今日推薦、掃描結果  \n現在看到的是上一個交易日")
+except Exception:
+    pass
 
 def guide_markdown():
     """說明書原本是 Telegram 格式；轉成網頁 Markdown：*粗體* → **粗體**，每個換行都保留"""
@@ -648,7 +655,7 @@ if mk:
         st.error("🔴 尚未止跌，不建議建立多頭部位")
     try:                                               # 資料日比預期的舊：提醒一聲（休市日除外，所以只是提醒）
         _now = datetime.now(ZoneInfo("Asia/Taipei"))
-        _exp = _now.date() - (timedelta(days=1) if _now.hour < 14 else timedelta(0))      # 14:00 前今天還沒有收盤資料
+        _exp = _now.date() - (timedelta(days=1) if (_now.hour, _now.minute) < cfg.NIGHT_SCAN_HM else timedelta(0))      # 夜間掃描時間（15:30）前，今天的盤後資料還沒更新
         while _exp.weekday() >= 5:
             _exp -= timedelta(days=1)
         _last = mk["date"].date()
@@ -811,11 +818,19 @@ st.divider()
 st.subheader("🌟 今日推薦")
 scan = get_scan()
 if not scan:
-    st.info(L("還沒有夜間掃描資料", "每個交易日晚上 22:00 左右掃描完成後，這裡就會出現推薦"))
+    st.info(L("還沒有夜間掃描資料", f"每個交易日 {cfg.NIGHT_SCAN_HM[0]}:{cfg.NIGHT_SCAN_HM[1]:02d} 開始掃描，完成後這裡就會出現推薦"))
 else:
     hits, active = scan["hits"], scan["active"]
     st.caption(L(f"資料日 {scan['data_date']}｜夜間掃描 {scan['generated_at']}",
                  "越符合規則越前面｜點股票會帶入下方診斷"))
+    try:                                          # 過了掃描時間、但推薦還是昨天的：講清楚是還沒掃完，不是沒有推薦
+        _tn2 = datetime.now(ZoneInfo("Asia/Taipei"))
+        if (_tn2.weekday() < 5 and (_tn2.hour, _tn2.minute) >= cfg.NIGHT_SCAN_HM
+                and str(scan.get("generated_at", ""))[:10] < f"{_tn2:%Y-%m-%d}"):
+            st.caption(L(f"⏳ 今天的掃描還沒完成（{cfg.NIGHT_SCAN_HM[0]}:{cfg.NIGHT_SCAN_HM[1]:02d} 開始，約需十幾分鐘）",
+                         "目前顯示的是上一個交易日｜如果今天休市，這是正常的"))
+    except Exception:
+        pass
     if active:
         names_on = cfg.names_join(active)
         (st.warning if scan["risk"] else st.success)(
