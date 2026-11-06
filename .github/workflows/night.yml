@@ -2,8 +2,13 @@ name: night
 
 on:
   schedule:
-    - cron: "35 6 * * 1-5"    # 台灣時間 週一到週五 14:35（GitHub 用 UTC，所以是 06:35）。GitHub 排程常會延遲，實際時間可能晚一些
-  workflow_dispatch:          # 也可以手動執行：Actions → night → Run workflow
+    # 台灣時間 週一到週五 15:30、16:00、16:30（GitHub 用 UTC，所以減 8 小時）
+    # 15:30 是正式時間（大盤成交金額約 15:00 才抓得到）；16:00、16:30 是萬一 15:30 沒成功時的重試
+    # 每次都會先跑 night_gate.py 判斷要不要真的掃描（今天掃過了、沒開市的會直接結束）
+    - cron: "30 7 * * 1-5"
+    - cron: "0 8 * * 1-5"
+    - cron: "30 8 * * 1-5"
+  workflow_dispatch:          # 也可以手動執行：Actions → night → Run workflow（一定會跑）
     inputs:
       diag:
         description: "診斷模式：不管大盤層級，列出所有策略符合的股票與各條件通過檔數"
@@ -13,26 +18,39 @@ on:
 permissions:
   contents: write            # 讓掃描結果可以存回 repo（網頁 app 的今日推薦要讀）
 
+concurrency:                 # 15:30 的掃描還沒跑完時，16:00 的排程先排隊，等前一個結束再看（那時 scan_results 已是今天，閘門會直接結束）
+  group: night
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: 判斷這次要不要跑（night_gate）
+        id: gate
+        run: python3 night_gate.py
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'true'
         with:
           python-version: "3.11"
           cache: pip
       - name: 安裝中文字型（畫圖用）
+        if: steps.gate.outputs.go == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
-      - run: pip install -r requirements.txt
+      - name: 安裝套件
+        if: steps.gate.outputs.go == 'true'
+        run: pip install -r requirements.txt
       - name: Run
+        if: steps.gate.outputs.go == 'true'
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           DIAG: ${{ inputs.diag }}
         run: python night.py
       - name: 存下掃描結果（給網頁 app 的今日推薦）
+        if: steps.gate.outputs.go == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
