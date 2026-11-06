@@ -82,9 +82,9 @@ def backup_step(now, state, job):
     if [w for w in mine if w["status"] != "completed" or w["conclusion"] == "success"]:
         state["done"] = True
         return f"{job['name']} 這一次已經有跑（或正在跑），不用補"
-    if mine and state["tries"] >= 1:              # 失敗過、已經補跑過一次，就不再重複
+    if mine:                                      # 今天已經有跑過（成功或失敗）：不再自動補跑，失敗原因請到 Actions 看
         state["done"] = True
-        return f"{job['name']} 補跑後仍失敗，不再重試"
+        return f"{job['name']} 今天已經有跑過，不再自動補跑"
     state["tries"] += 1
     state["wait"] = now + dt.timedelta(minutes=5)
     r = _gh("POST", f"/actions/workflows/{job['file']}/dispatches", json={"ref": GH_BRANCH})
@@ -172,6 +172,13 @@ def main():
         print("夜間掃描備援：已啟動（含早報、盤中監控）", flush=True)
     else:
         print("沒有 GH_TOKEN，夜間掃描備援沒有啟動（含早報、盤中監控）", flush=True)
+    if os.getenv("REBOUND_ON", "1") != "0":            # 盤中快速殺低後反彈偵測（交易時間內每 90 秒一次，只私訊管理者）
+        try:
+            import rebound_watch
+            threading.Thread(target=rebound_watch.loop, daemon=True).start()
+            print("盤中反彈偵測：已啟動", flush=True)
+        except Exception as e:
+            print("盤中反彈偵測啟動失敗：", repr(e), flush=True)
     port = int(os.getenv("PORT", "10000"))
     print(f"機器人已啟動，port {port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
