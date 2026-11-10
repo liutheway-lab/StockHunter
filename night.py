@@ -97,7 +97,7 @@ def market_block(mk):
                 blk = [f"天數　{da} 天　要 ≥ {s['need_days']} 天",
                        f"最低 {s['recent_low']:,.0f}　要 > {s['prior_low']:,.0f}　{low_ok}"]
             out.append(code_block(blk, lang="text"))
-            out.append(f"參考（不卡關）\n量能 {ratio:.0f}%（低點日÷爆量日 {s['dump_date']:%m/%d}）\n下影線 {s['shadow'] * 100:.0f}%")
+            out.append(f"參考\n量能 {ratio:.0f}%（低點日÷爆量日 {s['dump_date']:%m/%d}）\n下影線 {s['shadow'] * 100:.0f}%")
             if s["ok"]:
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
