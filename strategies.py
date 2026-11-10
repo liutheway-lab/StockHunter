@@ -467,7 +467,7 @@ def describe_market(mk):
                 f"　{ok(s['reb_ok'])} 反彈：離低點日最低 {s['prior_low']:,.0f} 反彈 {s['rebound'] * 100:+.1f}%（需 ≥{cfg.STAB_REBOUND * 100:.0f}%）\n"
                 f"　{low_mark} 不破低：低點日（{s['signal_date']:%m/%d}）之後 {s['days_after']} 天沒破低"
                 f"（需 ≥{s['need_days']} 天），最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}\n"
-                f"　參考（不卡關）：量能 {ratio:.0f}%（爆量日 {s['dump_date']:%m/%d}），"
+                f"　參考：量能 {ratio:.0f}%（爆量日 {s['dump_date']:%m/%d}），"
                 f"下影線 {s['shadow'] * 100:.0f}%"
             )
             if s["ok"]:
