@@ -94,6 +94,7 @@
 | `group_probe.py` | 探測 Yahoo 族群與個股頁的資料結構（一次性，結果私訊管理者） |
 | `index_probe.py` | 探測證交所指數即時資料有沒有成交量欄位（一次性；結果：沒有） |
 | `turnover_probe.py` | 把全部個股即時報價加總，估算全市場成交金額，跟 App 的總量比對（一次性，盤中手動執行） |
+| `crash_study.py` | 大回檔研究：加權指數跌離 60 日高點 ≥15% 的事件，驗證預警訊號與快速確認條件（一次性，手動執行 `crash_study.yml`，結果私訊管理者） |
 | `futures_test.py` | 台指期貨報價測試（TAIFEX MIS） |
 | `fugle_test.py` | 富果報價測試 |
 | `backtest.py` | 回測 |
@@ -101,7 +102,7 @@
 
 **GitHub Actions 排程**（`.github/workflows/`）
 
-`morning.yml`、`intraday.yml`、`night.yml`（15:30、16:00、16:30，由閘門決定要不要真的掃）、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`、`history_check.yml`、`group_probe.yml`、`index_probe.yml`、`turnover_probe.yml`（最後四個是一次性探測，用完可以刪）
+`morning.yml`、`intraday.yml`、`night.yml`（15:30、16:00、16:30，由閘門決定要不要真的掃）、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`、`history_check.yml`、`group_probe.yml`、`index_probe.yml`、`turnover_probe.yml`、`crash_study.yml`（最後五個是一次性探測，用完可以刪）
 
 **部署設定**
 
