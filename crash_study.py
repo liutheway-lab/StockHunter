@@ -177,6 +177,48 @@ def layer_delay(f, events):
     return rows
 
 
+# ───────────── 轉空確認規則比較（誰比現行更早、又不太誤報）─────────────
+def days_since_high(c):
+    arr = c.values
+    out = np.full(len(arr), np.nan)
+    for i in range(LOOK - 1, len(arr)):
+        out[i] = LOOK - 1 - int(np.argmax(arr[i - LOOK + 1:i + 1]))
+    return pd.Series(out, index=c.index)
+
+
+def rule_signals(f):
+    dh = days_since_high(f["c"])
+    rmin = f["ret1"].rolling(5).min()
+    return {
+        "現行：破月季線且月線下彎": (f["c"] < f["ma20"]) & (f["c"] < f["ma60"]) & f["ma20_dn"],
+        "A 5日內離高點跌5%": (f["dd"] <= -0.05) & (dh <= 5),
+        "B 急跌5%＋單日跌2.5%": (f["dd"] <= -0.05) & (dh <= 7) & (rmin <= -0.025),
+        "C 跌5%且破月線": (f["dd"] <= -0.05) & (f["c"] < f["ma20"]),
+        "D 單純跌7%": f["dd"] <= -0.07,
+        "E 跌4%破月線5<10日": (f["dd"] <= -0.04) & (f["c"] < f["ma20"]) & (f["ma5"] < f["ma10"]),
+    }
+
+
+def eval_rules(f, events, sigs):
+    c, n = f["c"].values, len(f)
+    idx = range(LOOK, n - 40)
+    b_more = np.median([c[i + 1:i + 41].min() / c[i] - 1 for i in idx])
+    b_up = np.mean([c[i + 20] > c[i] for i in idx])
+    rows = []
+    for name, sig in sigs.items():
+        eps = [i for i in episodes(sig) if i + 40 < n]
+        if not eps:
+            continue
+        dd0 = np.array([f["dd"].iloc[i] for i in eps])
+        more = np.array([c[i + 1:i + 41].min() / c[i] - 1 for i in eps])
+        up20 = np.array([c[i + 20] > c[i] for i in eps])
+        caught = sum(1 for e in events if sig.values[e["peak"]:e["hit"] + 1].any())
+        rows.append(dict(name=name, n=len(eps), at=np.median(dd0), more=np.median(more),
+                         false=float(np.mean(more > -0.03)), up=float(up20.mean()),
+                         caught=caught, tot=len(events)))
+    return b_more, b_up, rows
+
+
 # ───────────── 報告（字卡：每段一則訊息，<pre> 區塊不換行）─────────────
 import html as _html
 
@@ -228,6 +270,23 @@ def build(df):
     return msgs
 
 
+def build_rules(df):
+    f = features(df)
+    ev = find_events(f)
+    b_more, b_up, rows = eval_rules(f, ev, rule_signals(f))
+    lines = ["轉空確認規則比較", f"資料 {df.index[0]:%Y}～{df.index[-1]:%Y/%m}", "",
+             "隨便一天當基準：", f"　之後40天再跌 中位{abs(b_more):.1%}", f"　20天後上漲 {b_up:.0%}", ""]
+    for r in rows:
+        lines += [r["name"],
+                  f"　觸發{r['n']}次｜誤報{r['false']:.0%}",
+                  f"　觸發時已跌 中位{abs(r['at']):.1%}",
+                  f"　之後再跌 中位{abs(r['more']):.1%}",
+                  f"　20天後上漲 {r['up']:.0%}",
+                  f"　抓到大回檔 {r['caught']}/{r['tot']}", ""]
+    lines += ["誤報＝之後40天再跌不到3%", "好規則：觸發早、再跌多、誤報少"]
+    return [card(lines)]
+
+
 def push(msgs):
     import requests
     owner = os.getenv("TG_OWNER_ID", "").strip()
@@ -242,7 +301,7 @@ def push(msgs):
 
 if __name__ == "__main__":
     data = load()
-    msgs = build(data)
+    msgs = build_rules(data) if (len(sys.argv) > 1 and sys.argv[1] == "rules") else build(data)
     for m in msgs:
         print(_html.unescape(m.replace("<pre>", "").replace("</pre>", "")))
         print("-" * 20)
