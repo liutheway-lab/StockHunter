@@ -807,7 +807,7 @@ HELP = ("🤖 股票追蹤\n"
         "━━━━━━━━━━━━━━\n"
         "📥 追蹤/買入\n"
         "　輸入股票，之後可以選：\n"
-        "　・還沒買 → 只追蹤\n"
+        "　・還沒買 → 僅追蹤\n"
         "　・已經買了 → 填股數和買價\n"
         "　　（已在追蹤清單的股票再買，會自動算平均成本）\n"
         "📤 取消追蹤/賣出\n"
@@ -1164,7 +1164,12 @@ def guided(cid, text, h):
     if t == "取消":
         SESSIONS.pop(cid, None)
         delete_msgs(cid, TRACK.pop(cid, []))          # 這一次操作的問答全部清掉
-        return "持股" if h else None                   # 取消後回到持股畫面；清單是空的就不再回空清單提示（不然會一直循環）
+        if h:
+            return "持股"                              # 取消後回到持股畫面
+        # 清單是空的：不回空清單提示（不然會一直循環），但要補發一則帶主按鍵的訊息。
+        # 不然問答那幾則（帶「取消」按鍵）被刪掉後，下方按鍵會消失
+        send_kb(cid, "已取消")
+        return None
     if t == "追蹤":
         SESSIONS[cid] = {"flow": "track", "step": "code"}
         send_kb(cid, "要追蹤或買入哪一檔？\n請輸入股票名稱或代號\n例：台積電、2330", _kb([["取消"]]))
@@ -1316,9 +1321,9 @@ def guided(cid, text, h):
             send_kb(cid, f"{s_['code']} 現在查不到價格\n請稍後再試")
             return None
         s_.update({"name": name, "sfx": sfx, "now": now, "step": "qty"})
-        send_kb(cid, f"{s_['code']} {name}\n現價 {_n(now)}\n\n買了幾張或幾股？\n例：2張、500股\n還沒買，就按「只追蹤」", _kb([["只追蹤"], ["取消"]]))
+        send_kb(cid, f"{s_['code']} {name}\n現價 {_n(now)}\n\n買了幾張或幾股？\n例：2張、500股\n還沒買，就按「僅追蹤」", _kb([["僅追蹤"], ["取消"]]))
         return None
-    if s_["step"] == "qty" and t == "只追蹤":          # 還沒買：只加入追蹤，出場價留空，問要不要設定價格
+    if s_["step"] == "qty" and t == "僅追蹤":          # 還沒買：只加入追蹤，出場價留空，問要不要設定價格
         SESSIONS[cid] = {"flow": "choose", "code": s_["code"], "name": s_["name"], "kind": "track"}
         send_kb(cid, _choose_text(s_["code"], s_["name"], None), _kb([["設定價格", "不設定"], ["取消"]]))
         return f"追蹤 {s_['code']} 出場 無"
