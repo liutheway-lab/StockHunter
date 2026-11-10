@@ -424,6 +424,8 @@ def market_summary(df):
     layer = int(layer_series(df).iloc[i])
     stab = stabilization(df, i)
     stab_ok = bool(stab and stab["ok"])
+    if layer == 5 and stab_ok:                  # 止跌確認通過（反彈＋不破低）：強空頭降為空頭（只改顯示，策略不變）
+        layer = 4
     active, risk = active_strategies(layer, stab_ok)
     c = df["Close"]
     return {
@@ -467,8 +469,8 @@ def describe_market(mk):
                 f"　{ok(s['reb_ok'])} 反彈：離低點日最低 {s['prior_low']:,.0f} 反彈 {s['rebound'] * 100:+.1f}%（需 ≥{cfg.STAB_REBOUND * 100:.0f}%）\n"
                 f"　{low_mark} 不破低：低點日（{s['signal_date']:%m/%d}）之後 {s['days_after']} 天沒破低"
                 f"（需 ≥{s['need_days']} 天），最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}\n"
-                f"　參考：量能 {ratio:.0f}%（爆量日 {s['dump_date']:%m/%d}），"
-                f"下影線 {s['shadow'] * 100:.0f}%"
+                f"　參考：量能約為爆量日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%\n"
+                f"　低點日下影線占 {s['shadow'] * 100:.0f}%"
             )
             if s["ok"]:
                 lines.append("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
