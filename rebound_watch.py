@@ -32,7 +32,8 @@ TOP_N = 10                # 每次最多推幾檔
 BATCH = 40
 OPEN_HM, CLOSE_HM = (9, 0), (13, 30)
 
-_hist = {}                # 代號 → deque[(時間戳, 成交價, 名稱)]
+_hist = {}                # 代號 → deque[(時間戳, 成交價, 累計張數, 昨收)]（名稱另存 _names，省記憶體）
+_names = {}               # 代號 → 名稱（每檔只存一次）
 _last_push = {}           # 代號 → 上次推播時間戳
 _day = {"d": None}
 
@@ -60,8 +61,10 @@ def record(q, ts):
     code = str(q.get("c", "")).strip()
     if not (z and code):
         return
+    if code not in _names:
+        _names[code] = str(q.get("n", ""))
     h = _hist.setdefault(code, deque(maxlen=1000))
-    h.append((ts, z, str(q.get("n", "")), _cum_vol(q.get("v")), _num(q.get("y"))))
+    h.append((ts, z, _cum_vol(q.get("v")), _num(q.get("y"))))
 
 
 def check(code, ts):
@@ -72,13 +75,13 @@ def check(code, ts):
     if not h:
         return None
     full = list(h)
-    y = next((row[4] for row in full if row[4]), None)
+    y = next((row[3] for row in full if row[3]), None)
     if y:                                            # 昨收當作開盤時的高點（成交量 0）
-        full = [(_open_ts(ts), y, "", 0.0, None)] + full
-    pts = [(t, p, n, v) for t, p, n, v, _ in full if ts - t <= WINDOW_SEC]
-    if len(pts) < MIN_POINTS or pts[-1][3] is None:
+        full = [(_open_ts(ts), y, 0.0, None)] + full
+    pts = [(t, p, v) for t, p, v, _ in full if ts - t <= WINDOW_SEC]
+    if len(pts) < MIN_POINTS or pts[-1][2] is None:
         return None
-    ts_, prices, vols = [t for t, *_ in pts], [p for _, p, _, _ in pts], [v for *_, v in pts]
+    ts_, prices, vols = [t for t, *_ in pts], [p for _, p, _ in pts], [v for *_, v in pts]
     cur = prices[-1]
     if vols[-1] < LIQ_LOTS:                          # 太冷門，不推
         return None
@@ -100,7 +103,7 @@ def check(code, ts):
         if dip_vol / dip_min < VOL_MULT * base_rate:  # 殺低沒出量，不算
             continue
         if best is None or reb > best[3]:
-            best = (code, pts[-1][2], dip, reb, cur, vols[-1])
+            best = (code, _names.get(code, ""), dip, reb, cur, vols[-1])
     return best
 
 
