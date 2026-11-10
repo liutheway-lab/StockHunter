@@ -725,7 +725,7 @@ if mk:
                      f"收盤離低點日最低點 {s_['prior_low']:,.0f} 反彈 {s_['rebound'] * 100:+.1f}%，需 {cfg.STAB_REBOUND * 100:.0f}% 以上"),
                     ("✅" if s_["no_break"] else ("⏳" if s_["held"] else "❌"), "不破低", low_txt),
                 ])
-                st.caption(f"參考（不卡關）：量能約為爆量日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%；"
+                st.caption(f"參考：量能約為爆量日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%；"
                            f"低點日下影線占 {s_['shadow'] * 100:.0f}%")
                 if s_["ok"]:
                     st.success("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
