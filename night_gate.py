@@ -69,6 +69,14 @@ def already_scanned(today, path=RESULT_FILE):
         return False
 
 
+WINDOW_START = (15, 0)     # 夜間掃描只在這段時間內才可能跑（GitHub 排程偶爾延遲、凌晨補跑，這裡直接擋掉）
+WINDOW_END = (17, 30)
+
+
+def in_window(now):
+    return WINDOW_START <= (now.hour, now.minute) <= WINDOW_END
+
+
 def decide(now, event, scanned, mis_date, ready):
     """純判斷（不連網，方便測試）。回傳 (要不要跑, 原因)"""
     today = now.date()
@@ -76,6 +84,8 @@ def decide(now, event, scanned, mis_date, ready):
         return True, "手動執行，一定跑"
     if now.weekday() >= 5:
         return False, "週末，不跑"
+    if not in_window(now):
+        return False, f"不在夜間掃描時段（{WINDOW_START[0]}:{WINDOW_START[1]:02d}～{WINDOW_END[0]}:{WINDOW_END[1]:02d}），不跑"
     if scanned:
         return False, "今天已經掃描過，不重複跑"
     if mis_date is not None and mis_date != today:
@@ -91,8 +101,8 @@ def main(now=None, event=None):
     now = now or dt.datetime.now(TZ)
     event = event if event is not None else os.getenv("GITHUB_EVENT_NAME", "")
     today = now.date()
-    if event == "workflow_dispatch" or now.weekday() >= 5:
-        scanned, mis_date, ready = False, None, False             # 這兩種情況不需要連網確認
+    if event == "workflow_dispatch" or now.weekday() >= 5 or not in_window(now):
+        scanned, mis_date, ready = False, None, False             # 這幾種情況不需要連網確認（decide 會直接決定）
     else:
         scanned = already_scanned(today)
         mis_date = None if scanned else mis_trading_date()
