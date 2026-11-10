@@ -177,54 +177,78 @@ def layer_delay(f, events):
     return rows
 
 
-# ───────────── 報告 ─────────────
+# ───────────── 報告（字卡：每段一則訊息，<pre> 區塊不換行）─────────────
+import html as _html
+
+
+def card(lines):
+    return "<pre>" + _html.escape("\n".join(lines).rstrip()) + "</pre>"
+
+
+def _fmt(v, spec):
+    return "-" if v is None or np.isnan(v) else format(v, spec)
+
+
 def build(df):
     f = features(df)
     ev = find_events(f)
-    lines = [f"📉 大回檔研究（加權指數 {df.index[0]:%Y}～{df.index[-1]:%Y/%m}）",
-             f"大回檔＝離 {LOOK} 日高點跌 ≥{EVENT_DD:.0%}，共 {len(ev)} 次"]
+    msgs = []
+
+    head = [f"大回檔研究 {df.index[0]:%Y}～{df.index[-1]:%Y/%m}",
+            f"定義：離60日高點跌≥{EVENT_DD:.0%}",
+            f"共 {len(ev)} 次", ""]
     for e in ev[-8:]:
-        lines.append(f"　{f.index[e['peak']]:%Y-%m-%d} 高點 → {f.index[e['hit']]:%m-%d} 跌破 15%（{e['hit'] - e['peak']} 天）")
+        head += [f"{f.index[e['peak']]:%Y-%m-%d} 高點",
+                 f"　{f.index[e['hit']]:%m-%d} 跌破15%（{e['hit'] - e['peak']}天）", ""]
+    msgs.append(card(head))
 
     base, rows = eval_warn(f, ev, warn_signals(f))
-    lines += ["", f"━ 一、崩跌前預警（跌 5% 之前出現）━",
-              f"隨便一天，{HORIZON} 天內開始大回檔的機率：{base:.0%}",
-              "訊號｜波數｜命中率｜倍數｜抓到事件｜中位提前天"]
+    lines = ["一、崩跌前預警", "（跌5%之前出現）", "",
+             f"隨機一天，{HORIZON}天內", f"開始大回檔的機率 {base:.0%}", ""]
     for r in sorted(rows, key=lambda r: -r["lift"]):
-        lead = "-" if np.isnan(r["lead"]) else f"{r['lead']:.0f}"
-        lines.append(f"{r['name']}｜{r['eps']}｜{r['prec']:.0%}｜{r['lift']:.1f}x｜{r['recall']:.0%}｜{lead}")
-    lines.append("倍數＞1.5 且抓到事件比例不低，才值得留")
+        lead = "沒抓到" if np.isnan(r["lead"]) else f"提前{r['lead']:.0f}天"
+        lines += [r["name"],
+                  f"　命中{r['prec']:.0%}｜{r['lift']:.1f}倍",
+                  f"　抓到{r['recall']:.0%}｜{lead}", ""]
+    lines.append("留下條件：倍數>1.5 且抓到夠多")
+    msgs.append(card(lines))
 
     cdf = confirm_study(f)
-    lines += ["", "━ 二、跌 5% 之後怎麼更快確認 ━", "條件｜次數｜之後真的跌到 15% 的比例"]
+    lines = ["二、跌5%之後快速確認", "之後真的跌到15%的比例", ""]
     for name, k, rate in eval_confirm(cdf):
-        lines.append(f"{name}｜{k}｜{'-' if np.isnan(rate) else format(rate, '.0%')}")
+        lines += [name, f"　次數{k}｜{_fmt(rate, '.0%')}", ""]
+    msgs.append(card(lines))
 
-    lines += ["", "━ 三、現行「跌破月季線且月線下彎」何時才確認 ━"]
+    lines = ["三、現行確認要等多久", "（跌破月線、季線且月線下彎）", ""]
     for d, dd, j in layer_delay(f, ev)[-8:]:
-        lines.append(f"{d:%Y-%m-%d} 高點：" + ("到跌 15% 都還沒確認" if np.isnan(dd) else f"高點後第 {int(j)} 天、已跌 {abs(dd):.1%} 才確認"))
-    return "\n".join(lines)
+        lines.append(f"{d:%Y-%m-%d} 高點")
+        lines.append("　跌15%都沒確認" if np.isnan(dd) else f"　第{int(j)}天、跌{abs(dd):.1%}才確認")
+        lines.append("")
+    msgs.append(card(lines))
+    return msgs
 
 
-def push(text):
+def push(msgs):
     import requests
     owner = os.getenv("TG_OWNER_ID", "").strip()
     tok = os.getenv("TG_BOT_TOKEN", "").strip()
     if not (owner and tok):
         print("沒有設定 TG_OWNER_ID，只印在日誌")
         return
-    for i in range(0, len(text), 3800):
+    for m in msgs:
         requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
-                      json={"chat_id": owner, "text": text[i:i + 3800]}, timeout=20)
+                      json={"chat_id": owner, "text": m, "parse_mode": "HTML"}, timeout=20)
 
 
 if __name__ == "__main__":
     data = load()
-    out = build(data)
-    print(out)
+    msgs = build(data)
+    for m in msgs:
+        print(_html.unescape(m.replace("<pre>", "").replace("</pre>", "")))
+        print("-" * 20)
     if not os.getenv("CRASH_CSV"):
         try:
-            push(out)
+            push(msgs)
         except Exception as e:
             print("傳到 Telegram 失敗：", repr(e))
     sys.exit(0)
