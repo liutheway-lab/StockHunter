@@ -201,18 +201,24 @@ def send_owner(text):
         print("盤中反彈推播失敗：", repr(e)[:80])
 
 
-def loop(interval=90):
-    """背景執行緒：交易時間內每 interval 秒掃全市場一次，有新的符合就私訊"""
+def loop(interval=90, get_dir=None):
+    """背景執行緒：交易時間內每 interval 秒掃全市場一次，有新的符合就私訊。
+    get_dir：回傳已經載入好的股票清單（bot_server 傳入 intraday 的清單，不再另外下載一份，省記憶體）；
+    還沒載入好就回傳 None，這一輪先不掃。"""
     universe = None
     while True:
         try:
             if in_session():
                 _reset_if_new_day()
                 if universe is None:
-                    universe = D.get_directory().to_dict("records")
-                hs = new_hits(scan(universe))
-                if hs:
-                    send_owner(message(hs))
+                    d = get_dir() if get_dir else D.get_directory()
+                    if d is not None:
+                        universe = d.to_dict("records")
+                        del d
+                if universe is not None:
+                    hs = new_hits(scan(universe))
+                    if hs:
+                        send_owner(message(hs))
         except Exception as e:
             print("盤中反彈錯誤：", repr(e)[:120])
         time.sleep(interval)
