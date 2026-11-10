@@ -175,7 +175,8 @@ def main():
     if os.getenv("REBOUND_ON", "1") != "0":            # 盤中快速殺低後反彈偵測（交易時間內每 90 秒一次，只私訊管理者）
         try:
             import rebound_watch
-            threading.Thread(target=rebound_watch.loop, daemon=True).start()
+            # 股票清單直接用 intraday 已經背景載入的那一份（不要再下載一次，兩份會讓記憶體超過 512MB）
+            threading.Thread(target=rebound_watch.loop, kwargs={"get_dir": lambda: I._DIR}, daemon=True).start()
             print("盤中反彈偵測：已啟動", flush=True)
         except Exception as e:
             print("盤中反彈偵測啟動失敗：", repr(e), flush=True)
