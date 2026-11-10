@@ -221,11 +221,13 @@ def _confirm_layer(raw):
 
 
 def stabilization(df, i):
-    """止跌確認（日線）。先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
-    再找「低點日」＝最近 STAB_DAYS 天股價最低點那天（要在爆量日之後），三項都過才算止跌走穩：
-    ① 量能：低點日成交額 ≥ 爆量下跌日
-    ② K 棒：長下影線（下影線 ≥ 當天高低差的 1/2）或長紅（收紅、漲幅 ≥ 1.5%），二擇一
-    ③ 不破低：低點日之後的低點都高於低點日的最低點（低點日就是今天＝觀察中）
+    """止跌確認（日線，2026-11-10 改版：價格為主、量能只顯示）。
+    先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
+    再找「低點日」＝最近 STAB_DAYS 天股價最低點那天（要在爆量日之後），兩項都過才算止跌走穩：
+    ① 反彈：今天收盤離低點日最低點 ≥ STAB_REBOUND（5%）
+    ② 不破低：低點日之後至少 STAB_NO_BREAK_DAYS（2）個交易日，最低點都高於低點日的最低點
+    量能（低點日成交額 ÷ 爆量日）、K 棒型態照樣算出來，但只顯示給你參考，不再是必要條件。
+    觀察中＝不破低天數還沒滿（而且到目前為止沒破低）。
     字典欄位沿用舊名稱（prior_low＝低點日最低點、prior_low_date＝低點日、recent_*＝低點日之後）。"""
     n, k, age = cfg.STAB_LOOKBACK, cfg.STAB_DAYS, cfg.STAB_MAX_AGE
     if i < n + age + 1 or i >= len(df):
@@ -255,18 +257,23 @@ def stabilization(df, i):
     body = float((C[d] - O[d]) / rng) if rng > 0 else 0.0              # 實體占整根 K 棒（收黑為負）
     red_ok = bool(C[d] > O[d] and body >= cfg.STAB_RED_BODY)         # 或長紅
     shape_ok = shadow_ok or red_ok
-    vol_ok = bool(V[d] >= dv)
+    vol_ok = bool(V[d] >= dv)                                        # 只顯示，不卡關
+    need = cfg.STAB_NO_BREAK_DAYS
     after = L[d + 1:i + 1]
     days_after = len(after)
-    no_break = bool(days_after > 0 and after.min() > L[d])           # 低點日之後的低點都沒跌破它
-    full = vol_ok and shape_ok and no_break
-    pending = vol_ok and shape_ok and days_after == 0                # 低點日就是今天：還要再觀察
+    held = bool(days_after == 0 or after.min() > L[d])               # 到目前為止沒破低點日最低點
+    no_break = bool(days_after >= need and held)                     # 不破低：天數夠、而且都沒破
+    reb = float(C[i] / L[d] - 1) if L[d] > 0 else 0.0                # 今天收盤離低點日最低點反彈多少
+    reb_ok = bool(reb >= cfg.STAB_REBOUND)
+    full = reb_ok and no_break
+    pending = (not full) and held and days_after < need              # 天數還沒滿、也還沒破低：觀察中
     rl = float(after.min()) if days_after else None
     rld = idx[d + 1 + int(after.argmin())] if days_after else None
     return {"ok": bool(full), "watching": bool(pending), "signal_date": idx[d],
             "vol_ok": vol_ok, "shape_ok": shape_ok, "no_break": no_break, "vol_missing": False,
+            "rebound": reb, "reb_ok": reb_ok, "held": held,
             "shadow": shadow, "gain": gain, "body": body, "shadow_ok": shadow_ok, "red_ok": red_ok,
-            "days_after": days_after, "need_days": 1,
+            "days_after": days_after, "need_days": need,
             "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
             "recent_start": idx[d], "recent_end": idx[i],
             "dump_vol": dv, "dump_date": dd, "recent_vol": float(V[d]), "vol_date": idx[d]}
@@ -454,12 +461,14 @@ def describe_market(mk):
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             ok = lambda b: "✅" if b else "❌"
             state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
+            low_mark = "✅" if s["no_break"] else ("⏳" if s["held"] else "❌")
             lines.append(
-                f"🧱 止跌確認：{state}（三項都要通過）\n"
-                f"　{ok(s['vol_ok'])} 量能：低點日成交額是爆量下跌日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%，需 100% 以上\n"
-                f"　{ok(s['shape_ok'])} K 棒：下影線占 {s['shadow'] * 100:.0f}%（需 ≥{cfg.STAB_SHADOW * 100:.0f}%），或收紅實體占 {s['body'] * 100:.0f}%（需 ≥{cfg.STAB_RED_BODY * 100:.0f}%）\n"
-                f"　{ok(s['no_break'])} 不破低：低點日最低 {s['prior_low']:,.0f}，"
-                f"之後 {s['days_after']} 天最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}"
+                f"🧱 止跌確認：{state}（反彈、不破低兩項都要通過）\n"
+                f"　{ok(s['reb_ok'])} 反彈：離低點日最低 {s['prior_low']:,.0f} 反彈 {s['rebound'] * 100:+.1f}%（需 ≥{cfg.STAB_REBOUND * 100:.0f}%）\n"
+                f"　{low_mark} 不破低：低點日（{s['signal_date']:%m/%d}）之後 {s['days_after']} 天沒破低"
+                f"（需 ≥{s['need_days']} 天），最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}\n"
+                f"　參考（不卡關）：量能 {ratio:.0f}%（爆量日 {s['dump_date']:%m/%d}），"
+                f"下影線 {s['shadow'] * 100:.0f}%"
             )
             if s["ok"]:
                 lines.append("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
