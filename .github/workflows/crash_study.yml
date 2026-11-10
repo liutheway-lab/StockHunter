@@ -1,0 +1,24 @@
+name: crash_study
+
+on:
+  workflow_dispatch:          # 只有手動執行：Actions → crash_study → Run workflow（一次性研究，用完可刪）
+
+permissions:
+  contents: read
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安裝套件
+        run: pip install requests pandas numpy yfinance
+      - name: 大回檔研究
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_OWNER_ID: ${{ secrets.TG_OWNER_ID }}
+        run: python crash_study.py
