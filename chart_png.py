@@ -233,7 +233,8 @@ def market_chart(mk, bars=45):
     last_ax.set_xlim(-1, len(d))
 
     if stab_mode:
-        verdict = "通過" if mk["stab"].get("ok") else ("無法確認" if mk["stab"].get("vol_missing") else "未通過")
+        verdict = ("通過" if mk["stab"].get("ok") else ("無法確認" if mk["stab"].get("vol_missing") else
+                   ("觀察中" if mk["stab"].get("watching") else "未通過")))
         title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}　止跌確認：{verdict}（黃色區 = {nm}起）"
     else:
         title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}"
