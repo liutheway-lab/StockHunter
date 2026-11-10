@@ -85,28 +85,19 @@ def market_block(mk):
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             da, nd = s["days_after"], s["need_days"]
             state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
-            out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 都過才算止跌")
-            cmp_ = lambda b, ge="≥", lt="<": ge if b else lt
-            low_ok = "✅" if s["no_break"] else "⏳" if da == 0 else "❌"
-            sig = s["vol_ok"] and s["shape_ok"]
-            blk1 = [f"量能　{ratio:>4.0f}%　要 ≥ 100%　{ok(s['vol_ok'])}"]
+            out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 兩項都過才算止跌")
+            low_ok = "✅" if s["no_break"] else "⏳" if s["held"] else "❌"
+            out.append(f"低點日：{s['signal_date']:%m/%d}\n（最近 3 天股價最低的那天）")
+            out.append("*① 反彈*\n今天收盤離低點日最低點\n反彈要 ≥ " f"{cfg.STAB_REBOUND * 100:.0f}%")
+            out.append(code_block([f"反彈 {s['rebound'] * 100:>+5.1f}%　要 ≥ {cfg.STAB_REBOUND * 100:.0f}%　{ok(s['reb_ok'])}"], lang="text"))
+            out.append(f"*② 不破低*\n低點日之後至少 {s['need_days']} 天\n最低點都高於低點日最低點")
             if da == 0:
-                blk1.append("不破低　　　待觀察　　　　❌")
+                blk = [f"不破低　待觀察（要 ≥ {s['need_days']} 天）　{low_ok}"]
             else:
-                blk1.append(f"不破低 {s['recent_low']:,.0f} 要 > {s['prior_low']:,.0f}　{low_ok}")
-            blk2 = [f"下影線 {s['shadow'] * 100:>4.0f}%　要 ≥ {cfg.STAB_SHADOW * 100:.0f}%　{ok(s['shadow_ok'])}",
-                    "",
-                    f"長　紅 {s['body'] * 100:>4.0f}%　要 ≥ {cfg.STAB_RED_BODY * 100:.0f}%　{ok(s['red_ok'])}"]
-            out.append(f"爆量日：{s['dump_date']:%m/%d}\n（這波成交額最大的下跌日）\n"
-                       f"低點日：{s['signal_date']:%m/%d}\n（最近 3 天股價最低的那天）")
-            out.append("*① 量能・不破低*　兩項都要 ✅\n量能＝低點日成交額\n　　　÷爆量日成交額\n不破低＝低點日之後的最低點\n　　　　要高於低點日最低點")
-            out.append(code_block(blk1, lang="text"))
-            if da == 0:
-                out.append("今天為近3日最低點，待後續觀察")
-            out.append("⠀\n⠀")
-            out.append("*② K棒*　二擇一，有一項 ✅ 就過")
-            out.append(code_block(blk2, lang="text"))
-            out.append("％＝占當天整根K棒的比例")
+                blk = [f"天數　{da} 天　要 ≥ {s['need_days']} 天",
+                       f"最低 {s['recent_low']:,.0f}　要 > {s['prior_low']:,.0f}　{low_ok}"]
+            out.append(code_block(blk, lang="text"))
+            out.append(f"參考（不卡關）\n量能 {ratio:.0f}%（低點日÷爆量日 {s['dump_date']:%m/%d}）\n下影線 {s['shadow'] * 100:.0f}%")
             if s["ok"]:
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
     if mk["active"]:
