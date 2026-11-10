@@ -716,18 +716,17 @@ if mk:
                 ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
                 da, nd = s_["days_after"], s_["need_days"]
                 state = "✅ 通過" if s_["ok"] else ("⏳ 觀察中" if s_.get("watching") else "🔴 尚未止跌")
-                st.markdown(L(f"🧱 **止跌確認**　{state}", "量能、K 棒、不破低　都要通過"))
+                st.markdown(L(f"🧱 **止跌確認**　{state}", "反彈、不破低　兩項都要通過"))
                 low_txt = ("低點日就是今天，還要再觀察" if da == 0 else
                            f"低點日（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
-                           f"之後 {da} 天最低 {s_['recent_low']:,.0f}，要保持不破")
+                           f"之後 {da} 天最低 {s_['recent_low']:,.0f}，至少要 {nd} 天不破低")
                 md_cond([
-                    (ok(s_["vol_ok"]), "量能",
-                     f"爆量下跌日 {s_['dump_date']:%m/%d}；低點日成交額約為它的 {ratio:.0f}%，需 100% 以上"),
-                    (ok(s_["shape_ok"]), "K 棒",
-                     f"下影線占當天區間 {s_['shadow'] * 100:.0f}%（需 {cfg.STAB_SHADOW * 100:.0f}% 以上），"
-                     f"或收紅且實體占 {s_['body'] * 100:.0f}%（需 {cfg.STAB_RED_BODY * 100:.0f}% 以上）"),
-                    ("⏳" if (da == 0) else ok(s_["no_break"]), "不破低", low_txt),
+                    (ok(s_["reb_ok"]), "反彈",
+                     f"收盤離低點日最低點 {s_['prior_low']:,.0f} 反彈 {s_['rebound'] * 100:+.1f}%，需 {cfg.STAB_REBOUND * 100:.0f}% 以上"),
+                    ("✅" if s_["no_break"] else ("⏳" if s_["held"] else "❌"), "不破低", low_txt),
                 ])
+                st.caption(f"參考（不卡關）：量能約為爆量日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%；"
+                           f"低點日下影線占 {s_['shadow'] * 100:.0f}%")
                 if s_["ok"]:
                     st.success("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
 
