@@ -509,8 +509,13 @@ def run():
     directory = get_directory()
     directory = directory.assign(sym=directory["code"] + directory["suffix"])
     names = dict(zip(directory["sym"], directory["name"]))
+    import time as _t
+    t0 = _t.time()
     prices, failed = fetch_prices(list(directory["sym"]))
+    print(f"個股下載完成，用時 {(_t.time() - t0) / 60:.1f} 分鐘", flush=True)
+    t0 = _t.time()
     prices, _ = apply_twse_volume(prices, list(mk["df"].index[-70:]))   # 上市股票的成交量改用證交所官方（跟券商一致）
+    print(f"證交所成交量處理用時 {(_t.time() - t0) / 60:.1f} 分鐘", flush=True)
     hits, liquid, stale, funnel, watch, absorb = scan(prices, mk, ratios)
 
     print("\n".join(funnel_lines(funnel, liquid)))   # 永遠寫進 Actions 紀錄，方便檢查
