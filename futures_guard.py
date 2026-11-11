@@ -443,7 +443,7 @@ def handle(cid, text, mid0, ctx):
         FG_S[cid] = {"flow": "menu"}
         S[cid] = {"flow": "fut"}
         TRACK[cid] = [mid0]
-        ask("📈 期貨\n要做什麼？", [["開倉", "平倉"], ["部位", "停利/停損"], ["行情", "上限設定"]])
+        ask("📈 期貨\n要做什麼？", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定"]])
         return True
 
     TRACK.setdefault(cid, []).append(mid0)
@@ -474,14 +474,14 @@ def handle(cid, text, mid0, ctx):
         finish(lines)
 
     if flow == "menu":
-        if t == "開倉":
+        if t in ("開倉", "開倉/加碼"):
             FG_S[cid] = {"flow": "open", "step": "side"}
             ask("做多還是做空？", [SIDES])
-        elif t in ("平倉", "停損", "改停損價", "停利/停損"):
+        elif t in ("平倉", "平倉/減碼", "停損", "改停損價", "停利/停損"):
             if not st["positions"]:
                 finish(notice="目前沒有期貨部位")
             else:
-                FG_S[cid] = {"flow": "close" if t == "平倉" else "stop", "step": "pick"}
+                FG_S[cid] = {"flow": "close" if t in ("平倉", "平倉/減碼") else "stop", "step": "pick"}
                 ask("哪一筆？", [[label(p)] for p in st["positions"]])
         elif t == "部位":
             finish(status_lines(st, current_price()))
@@ -491,10 +491,13 @@ def handle(cid, text, mid0, ctx):
                 finish(SW.status_lines())
             except Exception as e:
                 finish(["價位暫時查不到", type(e).__name__])
+        elif t in ("修正", "修正價格"):                                     # 輸入錯誤或測試用：改成本價、改口數、今日損益歸零
+            FG_S[cid] = {"flow": "fix", "step": "what"}
+            ask("要修正什麼？", [["改成本價", "改口數"], ["今日損益歸零"]])
         elif t in ("風控設定", "上限設定"):
             finish(limits_lines())
         else:
-            ask("請按下面的按鈕", [["開倉", "平倉"], ["部位", "停利/停損"], ["行情", "上限設定"]])
+            ask("請按下面的按鈕", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定"]])
         return True
 
     if flow == "open":
@@ -540,6 +543,55 @@ def handle(cid, text, mid0, ctx):
             if exposure(st) > cfg.FUT_MAX_EQ + 1e-9:
                 extra = ["", f"⚠️ 部位 {exposure(st):g} 口，超過上限 {cfg.FUT_MAX_EQ:g}"]
             done_save(["✅ 已記錄開倉", label(p), "　停損 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + stop_note(p), extra)
+        return True
+
+    if flow == "fix":
+        if step == "what":
+            if t == "今日損益歸零":
+                f.update(step="sure")
+                ask(f"今日已實現 {st['realized']:+,.0f}\n要歸零嗎？\n（部位不會動）", [["確定歸零"]])
+            elif t in ("改成本價", "改口數"):
+                if not st["positions"]:
+                    finish(notice="目前沒有期貨部位")
+                else:
+                    f.update(step="pick", what="avg" if t == "改成本價" else "qty")
+                    ask("哪一筆？", [[label(p)] for p in st["positions"]])
+            else:
+                ask("請按下面的按鈕", [["改成本價", "改口數"], ["今日損益歸零"]])
+            return True
+        if step == "sure":
+            if t == "確定歸零":
+                st["realized"] = 0.0
+                done_save(["✅ 今日已實現 已歸零"])
+            else:
+                ask("請按下面的按鈕", [["確定歸零"]])
+            return True
+        if step == "pick":
+            p = next((x for x in st["positions"] if label(x) == t), None)
+            if p is None:
+                ask("請按下面的按鈕", [[label(x)] for x in st["positions"]])
+            else:
+                f.update(pick=[p["kind"], p["side"]], step="value")
+                ask("新的成本價？\n例：44000" if f["what"] == "avg" else f"新的口數？（目前 {p['qty']} 口）\n例：1", [])
+            return True
+        if step == "value":
+            p = find_pos(st, *f["pick"])
+            if p is None:
+                finish(notice="這筆部位已經不在了")
+                return True
+            if f["what"] == "avg":
+                v = _price(t)
+                if v is None:
+                    ask("價格看起來不對\n請輸入台指期的點數\n例：44000", [])
+                    return True
+                p["avg"] = v
+            else:
+                if not re.fullmatch(r"\d{1,3}", t) or int(t) < 1:
+                    ask("請輸入口數（整數）\n例：1", [])
+                    return True
+                p["qty"] = int(t)
+            done_save(["✅ 已修正部位", label(p)])
+            return True
         return True
 
     if flow in ("close", "stop"):
