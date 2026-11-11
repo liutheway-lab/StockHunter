@@ -339,6 +339,7 @@ def status_lines(st, price=None, now=None):
         if p.get("stop") is not None:
             gap = (price - p["stop"]) if (price is not None and p["side"] == "多") else ((p["stop"] - price) if price is not None else None)
             L.append(f"　停損 {fmt(p['stop'])}" + (f"（差 {gap:,.0f} 點）" if gap is not None else ""))
+            L += stop_note(p)
         else:
             L.append("　停損 未設")
     total = st["realized"] + (unrealized(st, price) if price is not None else 0)
@@ -352,6 +353,15 @@ def status_lines(st, price=None, now=None):
         L.append("（目前沒有即時報價）")
     L.append(f"部位　　　 {exposure(st):g}／{cfg.FUT_MAX_EQ:g} 口大台等值")
     return L
+
+
+def stop_note(p):
+    """停損價相對成本的說明：在成本價另一側＝鎖定獲利；否則是最多虧多少"""
+    if p.get("stop") is None:
+        return []
+    d = pts(p, p["stop"])
+    mny = d * cfg.FUT_POINT.get(p["kind"], 200) * p["qty"]
+    return [f"　鎖定獲利 {d:,.0f} 點（{mny:+,.0f} 元）"] if d > 0 else ([f"　最多虧 {-d:,.0f} 點（{mny:+,.0f} 元）"] if d < 0 else ["　停損在成本價"])
 
 
 def limits_lines():
@@ -481,14 +491,15 @@ def handle(cid, text, mid0, ctx):
                 if stop is None:
                     ask("價格看起來不對\n請輸入停損價，或按「不設」", [["不設"]])
                     return True
-                if (f["side"] == "多" and stop >= f["price"]) or (f["side"] == "空" and stop <= f["price"]):
-                    ask(f"做{f['side']}的停損價\n要在成交價{'下' if f['side'] == '多' else '上'}方\n請重新輸入", [["不設"]])
+                ref = current_price() or f["price"]               # 有現價就跟現價比（停損可以設在成本價另一側鎖利，只要不會馬上被打到）
+                if (f["side"] == "多" and stop >= ref) or (f["side"] == "空" and stop <= ref):
+                    ask(f"做{f['side']}的停損價\n要在現價{'下' if f['side'] == '多' else '上'}方\n現價 {ref:,.0f}\n請重新輸入", [["不設"]])
                     return True
             p = open_pos(st, f["kind"], f["side"], f["qty"], f["price"], stop)
             extra = []
             if exposure(st) > cfg.FUT_MAX_EQ + 1e-9:
                 extra = ["", f"⚠️ 部位 {exposure(st):g} 口，超過上限 {cfg.FUT_MAX_EQ:g}"]
-            done_save(["✅ 已記錄開倉", label(p), "　停損 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")], extra)
+            done_save(["✅ 已記錄開倉", label(p), "　停損 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + stop_note(p), extra)
         return True
 
     if flow in ("close", "stop"):
@@ -501,7 +512,9 @@ def handle(cid, text, mid0, ctx):
                 if flow == "close":
                     ask(f"平幾口？（目前 {p['qty']} 口）", [["全部"]])
                 else:
-                    ask("新的停損價？\n不想設就按「不設」", [["不設"]])
+                    px = current_price()
+                    tip = [f"現價 {px:,.0f}"] if px else []
+                    ask("新的停損價？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）", "不想設就按「不設」"]), [["不設"]])
             return True
         p = find_pos(st, *f["pick"])
         if p is None:
@@ -515,8 +528,12 @@ def handle(cid, text, mid0, ctx):
                 if v is None:
                     ask("價格看起來不對\n請輸入停損價，或按「不設」", [["不設"]])
                     return True
+                px = current_price()
+                if px and ((p["side"] == "多" and v >= px) or (p["side"] == "空" and v <= px)):
+                    ask(f"做{p['side']}的停損價\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {px:,.0f}\n不然會馬上被打到\n請重新輸入", [["不設"]])
+                    return True
                 p["stop"] = v
-            done_save(["✅ 已更新停損", label(p), "　停損 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")])
+            done_save(["✅ 已更新停損", label(p), "　停損 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + stop_note(p))
             return True
         if step == "qty":                                   # 平倉：幾口
             if t == "全部":
