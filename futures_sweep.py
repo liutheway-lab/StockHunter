@@ -455,6 +455,25 @@ class Runner:
         self.seeded = False
         self.hello = False
         self.errs = 0
+        self.last_q = None
+        self.last_at = None
+
+    def level_lines(self, now=None):
+        """目前所有價位（含這個盤到目前為止的高低），給「期貨→價位」和開機卡片用"""
+        now = now or datetime.now(TZ)
+        sess = G.session_of(now)
+        L = []
+        if self.last_q and self.last_q.get("last") is not None and sess is not None:
+            L.append(f"現價 {f0(self.last_q['last'])}")
+        if sess is not None and self.bb.hi is not None and self.bb.lo is not None:
+            nm = "今日盤" if sess == "0" else "今夜盤"
+            L += [f"{nm}高 {f0(self.bb.hi)}", f"{nm}低 {f0(self.bb.lo)}"]
+        for k in ("day_hi", "day_lo", "night_hi", "night_lo", "or_hi", "or_lo"):
+            if k in self.eng.levels:
+                L.append(f"{NAMES[k]} {f0(self.eng.levels[k])}")
+        if sess is None:
+            L.insert(0, "目前沒開盤")
+        return L
 
     def ensure_levels(self, now):
         if self.seeded:
@@ -491,11 +510,13 @@ class Runner:
                     save_levels(self.eng.levels, now)
             return -1 if n == 0 else n
         q = self.quote(now)
+        self.last_q, self.last_at = q, now
         if not self.hello and q.get("last") is not None:        # 開機後第一次抓到報價：私訊你一張「運作中」卡片
             self.hello = True
-            L = ["✅ 掃蕩提醒運作中", f"台指近月 {f0(q['last'])}",
-                 "盤中高低 " + ("有" if q.get("high") is not None and q.get("low") is not None else "沒有（針會漏）")]
-            L += [f"{NAMES[k]} {f0(v)}" for k, v in self.eng.levels.items()] or ["關鍵價位 還沒有"]
+            self.last_q = q
+            L = ["✅ 掃蕩提醒運作中", "盤中高低 " + ("有" if q.get("high") is not None and q.get("low") is not None else "沒有（針會漏）")]
+            self.bb.hi, self.bb.lo = (self.bb.hi if self.bb.hi is not None else q.get("high")), (self.bb.lo if self.bb.lo is not None else q.get("low"))
+            L += self.level_lines(now) or ["關鍵價位 還沒有"]
             self.send(L)
             n += 1
         for b in self.bb.feed(now, q):
@@ -521,6 +542,19 @@ class Runner:
             time.sleep(_cfg("FUT_SWEEP_POLL", 5) if r != -1 else 30)
 
 
+RUNNER = None
+
+
+def status_lines():
+    """「期貨→價位」：現價、今盤高低、各個關鍵價位"""
+    if RUNNER is None:
+        return ["掃蕩提醒還沒啟動"]
+    now = datetime.now(TZ)
+    return [f"📍 台指期價位 {now:%H:%M}"] + (RUNNER.level_lines(now) or ["還沒有價位資料"])
+
+
 def loop(send):
     """send(lines)：把一組短行做成字卡私訊管理者"""
-    Runner(send).run()
+    global RUNNER
+    RUNNER = Runner(send)
+    RUNNER.run()
