@@ -5,6 +5,7 @@
   掃下方：低點被刺破，5 分K 收在低點上方 → 留意做多
 關鍵價位（大價位）：上個日盤高低、上個夜盤高低、今天開盤 30 分鐘高低、本盤（目前這個盤）到目前的高低（要形成 30 分鐘以上）
 盤中波段（小價位）：左右各 2 根 5 分K 都比它低（高）的點；只看最近 3 小時、離現價 150 點內，同方向同時只提醒一個
+價格先站上（跌破）價位再回來也算（最多停留 3 根 5 分K），停損參考用這段期間最極端的點
 提醒裡會標「大價位／小價位」，並附這根 5 分K 的成交量是近 20 根平均的幾倍（只是參考，不拿來過濾）
 兩段提醒：
   第 1 段：收回的那根 5 分K 收盤時，提醒「掃蕩出現」
@@ -131,6 +132,7 @@ class Engine:
         self.hist = []                    # 這個盤已完成的 5 分K
         self.swings = []                  # 盤中波段高低（小價位）
         self.vols = []                    # 這個盤每根 5 分K 的成交量
+        self.exc = {}                     # 價位被「收盤站上（跌破）」之後的停留狀態：{價位: {ext 最極端的點, n 停留幾根}}
 
     # 盤結束：把這個盤的高低存成「上個日盤／夜盤」
     def close_session(self, sess, hi, lo):
@@ -162,7 +164,10 @@ class Engine:
         L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", f"級別 {s['tier']}價位", self._name_line(s)]
         if s["tier"] == "小":
             L.append(f"{s['t'] // 100:02d}:{s['t'] % 100:02d} 形成")
-        L += [f"刺破 {s['pierce']:.0f} 點 {sign} {f0(s['ext'])}", f"5分K 收回 {f0(bar['c'])}"]
+        L += [f"刺破 {s['pierce']:.0f} 點 {sign} {f0(s['ext'])}"]
+        if s.get("held"):
+            L.append(f"先在價位{'上' if up else '下'}方 {s['held']} 根")
+        L.append(f"5分K 收回 {f0(bar['c'])}")
         if ratio is not None:
             L.append(f"這根成交量 {ratio:.1f} 倍均量")
         L += [tag, f"停損參考 {f0(s['ext'])} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
@@ -189,7 +194,7 @@ class Engine:
         skey = (bar["day"], bar["sess"])
         if skey != self.skey:
             self.skey, self.sess_open, self.pending, self.or_bars, self.nbars = skey, None, [], [], 0
-            self.hist, self.swings, self.vols = [], [], []
+            self.hist, self.swings, self.vols, self.exc = [], [], [], {}
             if bar["sess"] == "0":
                 self.levels.pop("or_hi", None)
                 self.levels.pop("or_lo", None)
@@ -251,12 +256,28 @@ class Engine:
                 if name in busy or dk in self.done:
                     continue
                 up = name.endswith("_hi")
-                if up and bar["h"] >= level + mn and bar["c"] < level:
-                    s = {"dir": "short", "name": name, "level": level, "ext": bar["h"], "pierce": bar["h"] - level, "n": 0, "tier": "大"}
-                elif (not up) and bar["l"] <= level - mn and bar["c"] > level:
-                    s = {"dir": "long", "name": name, "level": level, "ext": bar["l"], "pierce": level - bar["l"], "n": 0, "tier": "大"}
-                else:
+                xk = f"{name}@{level}"
+                ex = self.exc.get(xk)
+                hold = _cfg("FUT_SWEEP_HOLD", 3)
+                beyond = (bar["c"] >= level) if up else (bar["c"] <= level)         # 這根收在價位的「外側」（站上高點／跌破低點）
+                reach = (bar["h"] >= level + mn) if up else (bar["l"] <= level - mn)
+                if beyond:                                                          # 還沒收回：記下停留幾根、最極端的點（停損要放這個點外面）
+                    if ex is None and reach:
+                        ex = self.exc[xk] = {"ext": level, "n": 0}
+                    if ex is not None and not ex.get("dead"):
+                        ex["ext"] = max(ex["ext"], bar["h"]) if up else min(ex["ext"], bar["l"])
+                        ex["n"] += 1
+                        if ex["n"] > hold:                                          # 站太久了：不算掃蕩，等它回來也不提醒
+                            ex["dead"] = True
                     continue
+                self.exc.pop(xk, None)                                              # 這根收回來了
+                if ex is not None and ex.get("dead"):
+                    continue
+                far = max(bar["h"], ex["ext"]) if (up and ex) else bar["h"] if up else (min(bar["l"], ex["ext"]) if ex else bar["l"])
+                if (up and far < level + mn) or ((not up) and far > level - mn):
+                    continue
+                s = {"dir": "short" if up else "long", "name": name, "level": level, "ext": far,
+                     "pierce": (far - level) if up else (level - far), "n": 0, "tier": "大", "held": ex["n"] if ex else 0}
                 self.done.add(dk)
                 self.pending.append(s)
                 fired.add(s["dir"])
