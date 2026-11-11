@@ -151,3 +151,5 @@ FUT_SWEEP_SWING_ON = True        # 是否也看盤中波段高低（小價位）
 FUT_SWEEP_SWING_N = 2            # 波段高（低）：左右各幾根 5 分K 都比它低（高）
 FUT_SWEEP_SWING_AGE = 36         # 波段高低只看最近幾根 5 分K 內形成的（36 根＝3 小時）
 FUT_SWEEP_SWING_DIST = 150       # 收回時離波段價位超過幾點就不提醒
+FUT_SWEEP_SESS_AGE = 6           # 本盤高（低）要形成幾根 5 分K（6 根＝30 分鐘）以上，才算大價位
+FUT_SWEEP_HOLD = 3               # 價格先收在價位外側（站上高點／跌破低點）最多幾根 5 分K，之後收回來還算掃蕩
