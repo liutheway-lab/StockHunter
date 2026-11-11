@@ -147,9 +147,9 @@ def us_zone(ts, t=None, sess=None):
 
 
 class Journal:
-    """掃蕩紀錄：每次提醒自動記一筆。「確認」那根的收盤價當進場價，停損＝掃蕩的最極端點，
-    之後 FUT_LOG_BARS 根 5分K 內，先走到 +FUT_LOG_TARGET 點算「贏」，先碰到停損算「輸」，都沒有算「平」。
-    同一根 K 棒兩個都碰到，保守算「輸」（看不出誰先）。存在 /tmp 與 GitHub（sweep_log.json），重啟後還在"""
+    """掃蕩紀錄：每次提醒自動記一筆。「確認」那根的收盤價當進場價，之後 FUT_LOG_BARS 根 5分K 內，
+    記錄價格在碰到停損之前，先走到停損距離（R）的幾倍。遠停損＝掃蕩極點、近停損＝確認那幾根的最低（高）點，兩種各記一份。
+    存在 /tmp 與 GitHub（sweep_log.json），重啟後還在"""
 
     def __init__(self, load=True):
         self.rows = []
@@ -178,9 +178,7 @@ class Journal:
         for r in self.rows:                                   # 重啟前還在等確認／追蹤的，記憶體已經沒了：標成中斷
             if r.get("status") in ("wait", "track"):
                 was = r.get("status")
-                r["status"], r["result"] = "done", ("中斷" if was == "wait" else r.get("result") or "平")
-                if was == "track":
-                    r["result2"] = r.get("result2") or "平"
+                r["status"], r["result"] = "done", ("中斷" if was == "wait" else "完成")
 
     def _save(self):
         rows = {"rows": self.rows[-2000:], "meta": dict(self.meta)}
@@ -223,40 +221,35 @@ class Journal:
         if r:
             near = s.get("near")                               # 近停損：確認那幾根 5分K 的最低點（做空＝最高點）
             r.update(status="track", entry=bar["c"], stop=s["ext"], stop2=near if near is not None else s["ext"],
-                     bars=0, mfe=0.0, mae=0.0, result=None, result2=None)
+                     bars=0, rf=0.0, rn=0.0, sf=False, sn=False, result=None)
             self._save()
 
     def on_bar(self, bar):
-        """遠停損（掃蕩／影線的極點）與近停損（確認那幾根的最低／最高點）各自判斷輸贏：先走到 +目標算贏、先碰到停損算輸、
-        時間到都沒有算平；同一根兩個都碰到，保守算輸。兩個都有結果才結案"""
-        tgt, nbars = _cfg("FUT_LOG_TARGET", 80), _cfg("FUT_LOG_BARS", 6)
+        """確認後逐根追蹤：遠停損（掃蕩／影線的極點）與近停損（確認那幾根的最低／最高點）各自記錄「碰到停損之前，
+        價格先走到停損距離（R）的幾倍」。同一根 K 棒碰到停損，那根的有利走勢不算（保守）。兩個停損都碰到、或追蹤滿 FUT_LOG_BARS 根就結案"""
+        nbars = _cfg("FUT_LOG_BARS", 24)
         changed = False
         for r in self.rows:
             if r.get("status") != "track":
                 continue
             changed = True
             if (r["day"], r["sess"]) != (bar["day"], bar["sess"]):
-                r["result"] = r.get("result") or "平"
-                r["result2"] = r.get("result2") or "平"
-                r["status"] = "done"
+                r["status"], r["result"] = "done", "完成"
                 continue
             short = r["dir"] == "short"
             fav = (r["entry"] - bar["l"]) if short else (bar["h"] - r["entry"])
             adv = (bar["h"] - r["entry"]) if short else (r["entry"] - bar["l"])
             r["bars"] += 1
-            if r.get("result") is None or r.get("result2") is None:
-                r["mfe"], r["mae"] = max(r["mfe"], fav), max(r["mae"], adv)
-            for key, stop in (("result", r["stop"]), ("result2", r.get("stop2", r["stop"]))):
-                if r.get(key) is not None:
+            for stop, rk, sk in ((r["stop"], "rf", "sf"), (r.get("stop2", r["stop"]), "rn", "sn")):
+                if r.get(sk):
                     continue
-                if adv >= max(abs(stop - r["entry"]), 1):
-                    r[key] = "輸"
-                elif fav >= tgt:
-                    r[key] = "贏"
-                elif r["bars"] >= nbars:
-                    r[key] = "平"
-            if r.get("result") is not None and r.get("result2") is not None:
-                r["status"] = "done"
+                d = max(abs(stop - r["entry"]), 1)
+                if adv >= d:
+                    r[sk] = True
+                else:
+                    r[rk] = max(r.get(rk, 0.0), fav / d)
+            if (r.get("sf") and r.get("sn")) or r["bars"] >= nbars:
+                r["status"], r["result"] = "done", "完成"
         if changed:
             self._save()
 
@@ -286,27 +279,29 @@ class Journal:
             return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
         conf = [r for r in rows if r.get("entry") is not None]
         fail = [r for r in rows if r.get("result") == "失敗"]
+        nb = _cfg("FUT_LOG_BARS", 24)
         L = ["📊 掃蕩紀錄", f"提醒 {len(rows)} 次", f"　確認 {len(conf)}｜失敗 {len(fail)}", "",
-             f"確認後進場，30 分內", f"先走 +{_cfg('FUT_LOG_TARGET', 80)} 點＝贏", "先碰到停損＝輸",
+             f"確認後 {nb * 5 // 60} 小時內", "價格在碰到停損之前", "先走到停損距離（R）", "的幾倍，佔幾 %", "最划算＝期望值最高的", "目標倍數（單位 R）", "",
              "遠＝停損放掃蕩極點", "近＝停損放確認那幾根", "　　最低（高）點", ""]
 
-        def block(title, rs):
-            done = [r for r in rs if r.get("result") in ("贏", "輸", "平")]
+        def block(title, rs, ev=False):
+            done = [r for r in rs if r.get("status") == "done" and "rf" in r]
             out = [title]
             if not done:
                 return out + ["　還沒有資料"]
-
-            def tally(key):
-                w, l, e = (sum(1 for r in done if r.get(key, r.get("result")) == x) for x in ("贏", "輸", "平"))
-                return f"{w}勝{l}敗{e}平" + (f" {w / (w + l):.0%}" if w + l else "")
-            ds = [abs(r["stop"] - r["entry"]) for r in done if r.get("entry") is not None]
-            d2 = [abs(r["stop2"] - r["entry"]) for r in done if r.get("stop2") is not None and r.get("entry") is not None]
-            out.append("　遠 " + tally("result"))
-            out.append("　近 " + tally("result2"))
-            if ds and d2:
-                out.append(f"　停損距離 遠{sum(ds) / len(ds):.0f} 近{sum(d2) / len(d2):.0f}")
-            out.append(f"　先走 +{sum(r['mfe'] for r in done) / len(done):.0f}｜逆走 -{sum(r['mae'] for r in done) / len(done):.0f}")
+            n = len(done)
+            out.append(f"　{n} 筆")
+            for nm, sk, rk in (("遠", "stop", "rf"), ("近", "stop2", "rn")):
+                ds = [abs(r.get(sk, r["stop"]) - r["entry"]) for r in done]
+                ps = [sum(1 for r in done if r.get(rk, 0) >= k) / n for k in (1, 2, 3, 4)]
+                out.append(f"　{nm} 停損距離 {sum(ds) / len(ds):.0f} 點")
+                out.append(" " + " ".join(f"{k}R{p:.0%}".replace("%", "") for k, p in zip((1, 2, 3, 4), ps)))
+                if ev:                                         # 期望值（單位 R）：先走到 k 倍的機率 p，賺 k、賠 1
+                    best = max(range(4), key=lambda i: ps[i] * (i + 1) - (1 - ps[i]))
+                    e = ps[best] * (best + 1) - (1 - ps[best])
+                    out.append(f"　　最划算 {best + 1}R（{e:+.2f}）")
             return out
+        L += block("【全部】", conf, ev=True) + [""]
         for tr in ("順勢", "逆勢"):
             L += block(f"【{tr}】", [r for r in conf if r.get("trend") == tr]) + [""]
         L += block("【其他（盤整／未定）】", [r for r in conf if r.get("trend") not in ("順勢", "逆勢")]) + [""]
@@ -329,6 +324,7 @@ class Engine:
         self.levels = {k: v for k, v in (levels or {}).items() if k in STORED and v}
         self.pivot = (levels or {}).get("pivot") or None   # 基準價＝前一個日盤 (高+低+收)/3；收盤在它上面算偏多，下面算偏空
         self.journal = None                                # 掃蕩紀錄（Journal），沒有就不記
+        self.events = []                                   # 新形成的轉折高低點：[("low"／"high", 價位, 時間)]，給持倉的「停損上移」提醒用
         self.last_c = None                                 # (盤別, 最近一根收盤)，日盤結束時算基準價用
         self.pending = []
         self.done = set()
@@ -440,8 +436,10 @@ class Engine:
         b, left, right = h[i], h[i - n:i], h[i + 1:i + 1 + n]
         if b["h"] > max(x["h"] for x in left) and b["h"] >= max(x["h"] for x in right):
             self.swings.append({"dir": "short", "level": b["h"], "idx": i, "t": b["t"], "name": f"sw_hi_{b['t']}"})
+            self.events.append(("high", b["h"], b["t"]))
         if b["l"] < min(x["l"] for x in left) and b["l"] <= min(x["l"] for x in right):
             self.swings.append({"dir": "long", "level": b["l"], "idx": i, "t": b["t"], "name": f"sw_lo_{b['t']}"})
+            self.events.append(("low", b["l"], b["t"]))
 
     def on_bar(self, bar):
         """一根完成的 5 分K → 回傳要提醒的文字清單（每則是 list of 行）"""
@@ -501,8 +499,7 @@ class Engine:
         self.pending = keep
         # 2. 盤中波段高低：先更新，再看這根有沒有把它們掃掉
         self.hist.append(bar)
-        if _cfg("FUT_SWEEP_SWING_ON", True):
-            self._update_swings()
+        self._update_swings()
         # 收盤前最後 5 分鐘不提醒（但價位還是照常更新）
         last_bar = (bar["sess"] == "0" and bar["t"] >= 1340) or (bar["sess"] == "1" and 455 <= bar["t"] < 500)
         fired = set()
@@ -819,6 +816,7 @@ class Runner:
                     for lines in self.eng.on_bar(b):
                         self.send(lines)
                         n += 1
+                self.eng.events = []
                 if self.eng.close_session(sess, hi, lo):
                     self._save(now)
             return -1 if n == 0 else n
@@ -845,6 +843,94 @@ class Runner:
             for lines in self.eng.on_bar(b):
                 self.send(lines)
                 n += 1
+        try:
+            n += self._handle_events() + self._near_check(now, q)
+        except Exception as e:
+            print("持倉提醒失敗：", repr(e)[:100], flush=True)
+        return n
+
+    @staticmethod
+    def _positions():
+        try:
+            return G.get_state().get("positions") or []
+        except Exception as e:
+            print("讀取期貨部位失敗：", repr(e)[:80], flush=True)
+            return []
+
+    def _handle_events(self):
+        """新的轉折低點（做多）／轉折高點（做空）出現：如果比目前停損更有利，提醒你要不要把停損上移（下移），由你決定"""
+        evs, self.eng.events = self.eng.events, []
+        if not evs or not _cfg("FUT_SWING_ALERT_ON", True):
+            return 0
+        pos = self._positions()
+        if not pos:
+            return 0
+        price = (self.last_q or {}).get("last")
+        n = 0
+        for kind, level, t in evs:
+            for p in pos:
+                stop = p.get("stop")
+                if kind == "low" and p["side"] == "多":
+                    ok = (stop is None or level > stop) and (price is None or level < price)
+                elif kind == "high" and p["side"] == "空":
+                    ok = (stop is None or level < stop) and (price is None or level > price)
+                else:
+                    continue
+                if not ok:
+                    continue
+                up = kind == "low"
+                self.send([f"📍 新轉折{'低' if up else '高'}點", f"{p['side']} {p['kind']} {p['qty']}口", f"{t // 100:02d}:{t % 100:02d} 形成",
+                           f"轉折{'低' if up else '高'}點 {f0(level)}", f"目前停損 {f0(stop) if stop is not None else '未設'}",
+                           f"可考慮把停損{'上' if up else '下'}移", "按「期貨→停利/停損」改"])
+                n += 1
+        return n
+
+    def _near_check(self, now, q):
+        """有部位時：價格接近前高（做多）／前低（做空）FUT_NEAR_LEVEL 點內，提醒你考慮減碼或停利；每個價位只提醒一次"""
+        if not _cfg("FUT_NEAR_ALERT_ON", True) or not q or q.get("last") is None:
+            return 0
+        pos = self._positions()
+        price, near = q["last"], _cfg("FUT_NEAR_LEVEL", 30)
+        sess, day = G.session_of(now), G.trade_day(now)
+        cands = {"多": [(NAMES[k], v) for k, v in self.eng.levels.items() if k.endswith("_hi")],
+                 "空": [(NAMES[k], v) for k, v in self.eng.levels.items() if k.endswith("_lo")]}
+        if self.eng.hist:
+            cands["多"].append(("本盤前高", max(b["h"] for b in self.eng.hist)))
+            cands["空"].append(("本盤前低", min(b["l"] for b in self.eng.hist)))
+        sent = self.__dict__.setdefault("_near_sent", set())
+        n = 0
+        if not pos:                                                  # 空手：提醒價格靠近前高前低，讓你留意建倉機會
+            if not _cfg("FUT_FLAT_NEAR_ON", True):
+                return 0
+            ts = now.timestamp()
+            if ts - getattr(self, "_flat_ts", 0) < _cfg("FUT_FLAT_COOL", 600):   # 冷卻：避免趨勢盤連發
+                return 0
+            pv = getattr(self.eng, "pivot", None)
+            for side in ("多", "空"):
+                for name, level in cands[side]:
+                    hi = side == "多"
+                    gap = (level - price) if hi else (price - level)
+                    key = ("flat", day, sess, name, level)
+                    if 0 <= gap <= near and key not in sent:
+                        sent.add(key)
+                        self._flat_ts = ts
+                        L = [f"📍 空手 接近{'前高' if hi else '前低'}", f"{name} {f0(level)}", f"現價 {f0(price)}", f"還差 {gap:.0f} 點"]
+                        if pv:
+                            L.append(f"多空分界 {f0(pv)}（{'偏多' if price > pv else '偏空'}）")
+                        L.append("留意突破或被壓回" if hi else "留意跌破或撐住")
+                        self.send(L)
+                        return 1
+            return 0
+        for p in pos:
+            for name, level in cands.get(p["side"], []):
+                gap = (level - price) if p["side"] == "多" else (price - level)
+                key = (day, sess, p["side"], p["kind"], name, level)
+                if 0 <= gap <= near and key not in sent:
+                    sent.add(key)
+                    hi = p["side"] == "多"
+                    self.send([f"📍 接近{'前高' if hi else '前低'}", f"{p['side']} {p['kind']} {p['qty']}口", f"{name} {f0(level)}",
+                               f"現價 {f0(price)}", f"還差 {gap:.0f} 點", "可考慮減碼或停利"])
+                    n += 1
         return n
 
     def _digest_check(self, now=None):
