@@ -187,6 +187,14 @@ def main():
             print("期貨風控監控：已啟動", flush=True)
         except Exception as e:
             print("期貨風控監控啟動失敗：", repr(e), flush=True)
+    if os.getenv("FUTURES_ON", "1") != "0" and os.getenv("SWEEP_ON", "1") != "0":     # 台指期流動性掃蕩提醒（只私訊管理者）
+        try:
+            import futures_sweep
+            threading.Thread(target=futures_sweep.loop, daemon=True,
+                             args=(lambda lines: I.tg("sendMessage", chat_id=I.OWNER, text=futures_sweep.card(lines), parse_mode="HTML"),)).start()
+            print("期貨掃蕩提醒：已啟動", flush=True)
+        except Exception as e:
+            print("期貨掃蕩提醒啟動失敗：", repr(e), flush=True)
     port = int(os.getenv("PORT", "10000"))
     print(f"機器人已啟動，port {port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
