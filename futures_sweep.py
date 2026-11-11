@@ -125,6 +125,27 @@ LOG_FILE = "/tmp/sweep_log.json"
 LOG_NAME = "sweep_log.json"
 
 
+def us_zone(ts, t=None, sess=None):
+    """這個時間點屬於哪個時段：'日盤'、'美股開盤前後'（夜盤，美股 9:30 開盤前 30 分到後 60 分，夏令冬令自動換算）、'夜盤其他'"""
+    if ts is None:                                           # 舊紀錄沒存時間：用冬令時間 22:30 當開盤
+        if sess == "0":
+            return "日盤"
+        return "美股開盤前後" if t is not None and 2200 <= t < 2330 else "夜盤其他"
+    if G.session_of(ts) == "0":
+        return "日盤"
+    try:
+        ny = ZoneInfo("America/New_York")
+        d0 = ts.astimezone(ny).date()
+        for k in (-1, 0, 1):
+            d = d0 + timedelta(days=k)
+            op = datetime(d.year, d.month, d.day, 9, 30, tzinfo=ny).astimezone(TZ)
+            if -_cfg("FUT_US_BEFORE", 30) <= (ts - op).total_seconds() / 60 < _cfg("FUT_US_AFTER", 60):
+                return "美股開盤前後"
+    except Exception:
+        pass
+    return "夜盤其他"
+
+
 class Journal:
     """掃蕩紀錄：每次提醒自動記一筆。「確認」那根的收盤價當進場價，停損＝掃蕩的最極端點，
     之後 FUT_LOG_BARS 根 5分K 內，先走到 +FUT_LOG_TARGET 點算「贏」，先碰到停損算「輸」，都沒有算「平」。
@@ -178,7 +199,7 @@ class Journal:
 
     def opened(self, s, bar, ratio):
         s["jid"] = len(self.rows)
-        self.rows.append({"day": bar["day"], "sess": bar["sess"], "t": bar["t"], "name": Engine._name_line(s),
+        self.rows.append({"day": bar["day"], "sess": bar["sess"], "t": bar["t"], "ts": datetime.now(TZ).isoformat(timespec="minutes"), "name": Engine._name_line(s),
                           "tier": s["tier"], "dir": s["dir"], "level": s["level"], "ext": s["ext"],
                           "trend": s.get("trend", "未定"), "ratio": round(ratio, 1) if ratio else None,
                           "status": "wait", "result": None})
@@ -268,6 +289,14 @@ class Journal:
         for tr in ("順勢", "逆勢"):
             L += block(f"【{tr}】", [r for r in conf if r.get("trend") == tr]) + [""]
         L += block("【其他（盤整／未定）】", [r for r in conf if r.get("trend") not in ("順勢", "逆勢")]) + [""]
+        def zone(r):
+            try:
+                ts = datetime.fromisoformat(r["ts"]) if r.get("ts") else None
+            except Exception:
+                ts = None
+            return us_zone(ts, r.get("t"), r.get("sess"))
+        for z in ("日盤", "美股開盤前後", "夜盤其他"):
+            L += block({"日盤": "【日盤】", "美股開盤前後": "【夜盤・美股開盤前後】", "夜盤其他": "【夜盤・其他】"}[z], [r for r in conf if zone(r) == z]) + [""]
         for tier in ("大", "小"):
             L += block(f"【{tier}價位】", [r for r in conf if r.get("tier") == tier]) + [""]
         L.append("樣本少時別太相信")
