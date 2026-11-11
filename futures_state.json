@@ -7,7 +7,8 @@
    "side": "多",
    "qty": 1,
    "avg": 44350.0,
-   "stop": null
+   "stop": null,
+   "target": null
   }
  ]
 }
