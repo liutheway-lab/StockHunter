@@ -31,7 +31,7 @@ GH_TOKEN = (os.getenv("FUT_GH_TOKEN") or os.getenv("GH_TOKEN") or "").strip()   
 LOCAL_FILE = "/tmp/futures_state.json"
 MIS_URL = "https://mis.taifex.com.tw/futures/api/getQuoteList"
 ENTRY = "期貨"
-ABORT = {"追蹤", "移除", "調價", "查價", "持股", "說明", "清畫面", "管理者", "更多"}      # 做到一半按了別的功能：中止這一串
+ABORT = {"追蹤", "移除", "調價", "查價", "持股", "說明", "清畫面", "管理者", "更多", "股票"}      # 做到一半按了別的功能：中止這一串
 KINDS = ["大台", "小台", "微台"]
 SIDES = ["多", "空"]
 
