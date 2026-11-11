@@ -13,6 +13,7 @@ services:
       paths:
         - intraday.py
         - futures_guard.py
+        - futures_sweep.py
         - rebound_watch.py
         - bot_server.py
         - config.py
