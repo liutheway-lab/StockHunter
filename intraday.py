@@ -1448,7 +1448,7 @@ def _handle_message(m, state, asked):
             print("期貨風控處理失敗：", repr(e))
             if FG:
                 FG.reset(cid, {"SESSIONS": SESSIONS})
-            send_kb(cid, "期貨這一步出錯了\n已取消，請再按一次「期貨」")
+            send_kb(cid, pre(["期貨這一步出錯了", "已取消，請再按一次「期貨」", "", "原因（給開發者看）", type(e).__name__, str(e)[:40]]), None, True)
             return
         adm = ADMIN.get(cid)
         if adm:                                       # 正在設定某位朋友的額度（引導：按鈕或自己輸入）
