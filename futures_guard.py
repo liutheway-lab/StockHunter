@@ -1,6 +1,6 @@
 """futures_guard.py — 台指期風控提醒（只私訊管理者，不發群組）
 
-1. Telegram 按鈕「期貨」：開倉/加碼、平倉/減碼、部位、停利/停損、行情、修正價格、上限設定（部位由你輸入，機器人不會下單）
+1. Telegram 按鈕「期貨」：開倉/加碼、平倉/減碼、部位、停利/停損、行情、修正價格、上限設定、掃蕩紀錄（部位由你輸入，機器人不會下單）
 2. 背景監控（Render，bot_server.py 啟動）：有部位時每 20 秒抓期交所報價，算已實現＋浮動損益
    - 單日虧損達上限 70% 提醒一次、達上限每 5 分鐘一直提醒
    - 部位超過上限（大台等值口數）提醒
@@ -238,8 +238,8 @@ def quote(now=None):
 
 
 # ───────────── 存檔（記憶體＋GitHub）─────────────
-def _gh(method, **kw):
-    return requests.request(method, f"https://api.github.com/repos/{GH_REPO}/contents/{STATE_NAME}", timeout=20,
+def _gh(method, name=STATE_NAME, **kw):
+    return requests.request(method, f"https://api.github.com/repos/{GH_REPO}/contents/{name}", timeout=20,
                             headers={"Authorization": f"Bearer {GH_TOKEN}", "Accept": "application/vnd.github+json",
                                      "X-GitHub-Api-Version": "2022-11-28"}, **kw)
 
@@ -269,6 +269,34 @@ def _gh_save(st):
     r = _gh("PUT", json=body)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"GitHub 存檔失敗 {r.status_code} {r.text[:100]}")
+
+
+def gh_read(name):
+    """讀 GitHub 上的 JSON 檔（掃蕩紀錄用）。檔案還不存在回 None；沒有 token 或連不上會拋例外"""
+    if not GH_TOKEN:
+        raise RuntimeError("沒有 token")
+    r = _gh("GET", name, params={"ref": GH_BRANCH})
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return json.loads(base64.b64decode(r.json()["content"]).decode("utf-8"))
+
+
+def gh_write(name, obj, msg="更新紀錄"):
+    """把 JSON 存到 GitHub；失敗拋例外"""
+    if not GH_TOKEN:
+        raise RuntimeError("沒有 token")
+    sha = None
+    r = _gh("GET", name, params={"ref": GH_BRANCH})
+    if r.status_code == 200:
+        sha = r.json().get("sha")
+    body = {"message": msg, "branch": GH_BRANCH,
+            "content": base64.b64encode(json.dumps(obj, ensure_ascii=False, indent=1).encode("utf-8")).decode("ascii")}
+    if sha:
+        body["sha"] = sha
+    r = _gh("PUT", name, json=body)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"GitHub 存檔失敗 {r.status_code}")
 
 
 def get_state(max_age=120, send=None):
@@ -443,7 +471,7 @@ def handle(cid, text, mid0, ctx):
         FG_S[cid] = {"flow": "menu"}
         S[cid] = {"flow": "fut"}
         TRACK[cid] = [mid0]
-        ask("📈 期貨\n要做什麼？", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定"]])
+        ask("📈 期貨\n要做什麼？", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定", "掃蕩紀錄"]])
         return True
 
     TRACK.setdefault(cid, []).append(mid0)
@@ -496,8 +524,14 @@ def handle(cid, text, mid0, ctx):
             ask("要修正什麼？", [["改成本價", "改口數"], ["今日損益歸零"]])
         elif t in ("風控設定", "上限設定"):
             finish(limits_lines())
+        elif t == "掃蕩紀錄":                                              # 每次掃蕩提醒自動記錄，之後統計順勢／逆勢哪個好用
+            try:
+                import futures_sweep as SW
+                finish(SW.journal_lines())
+            except Exception as e:
+                finish(["掃蕩紀錄暫時查不到", type(e).__name__])
         else:
-            ask("請按下面的按鈕", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定"]])
+            ask("請按下面的按鈕", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定", "掃蕩紀錄"]])
         return True
 
     if flow == "open":
