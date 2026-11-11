@@ -15,6 +15,7 @@
 | 恐慌承接預判 | 用盤中數字套恐慌承接規則，推播到群組 | 13:00 |
 | 大盤成交金額量測 | 13:25 起量測證交所大盤成交金額；實測約 15:00 出現（11/06 為 15:01） | 13:25 ～ 15:30 |
 | 夜間掃描 | 三套選股策略＋恐慌承接名單＋大盤線圖 | 每個交易日 15:30 起 |
+| 期貨風控 | 台指期部位損益、單日虧損上限、部位上限、停損價、收盤前留倉提醒，只私訊管理者（Render，Telegram「期貨」按鈕輸入部位） | 日盤 08:45～13:45、夜盤 15:00～05:00 |
 | 網頁 App | 今日推薦、個股診斷、資金試算（盤後資料 15:30 才更新） | 隨時 |
 | Telegram 機器人 | 追蹤清單、查價、即時提醒 | 隨時（Render） |
 
@@ -65,6 +66,7 @@
 | `config.py` | 所有可調參數（門檻、比例、時間），想改策略數字只改這個檔 |
 | `night.py` | 夜間掃描主程式 |
 | `night_gate.py` | 夜間掃描的閘門：週末、平日休市、今天已經掃過就跳過；證交所成交金額出現就掃；到 16:30 還沒齊也強制掃（時間設定在 `config.py`） |
+| `futures_guard.py` | 台指期風控：Telegram「期貨」按鈕（開倉、平倉、部位、停損、風控設定）、背景監控與提醒、部位存在 GitHub 的 `futures_state.json`（數字在 `config.py` 的 `FUT_` 開頭） |
 | `rebound_watch.py` | 盤中殺低後反彈偵測（Render 背景執行緒，只私訊管理者；環境變數 `REBOUND_ON=0` 可關閉） |
 | `morning.py` | 盤前晨報 |
 | `intraday.py` | 盤中監控與追蹤清單提醒 |
@@ -94,6 +96,7 @@
 | `group_probe.py` | 探測 Yahoo 族群與個股頁的資料結構（一次性，結果私訊管理者） |
 | `index_probe.py` | 探測證交所指數即時資料有沒有成交量欄位（一次性；結果：沒有） |
 | `turnover_probe.py` | 把全部個股即時報價加總，估算全市場成交金額，跟 App 的總量比對（一次性，盤中手動執行） |
+| `asia_probe.py` | 探測日經有沒有比 Yahoo 指數更即時的來源（一次性，手動執行 `asia_probe.yml`，結果私訊管理者） |
 | `crash_study.py` | 大回檔研究：加權指數跌離 60 日高點 ≥15% 的事件，驗證預警訊號與快速確認條件（一次性，手動執行 `crash_study.yml`，結果私訊管理者） |
 | `futures_test.py` | 台指期貨報價測試（TAIFEX MIS） |
 | `fugle_test.py` | 富果報價測試 |
@@ -102,7 +105,7 @@
 
 **GitHub Actions 排程**（`.github/workflows/`）
 
-`morning.yml`、`intraday.yml`、`night.yml`（15:30、16:00、16:30，由閘門決定要不要真的掃）、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`、`history_check.yml`、`group_probe.yml`、`index_probe.yml`、`turnover_probe.yml`、`crash_study.yml`（最後五個是一次性探測，用完可以刪）
+`morning.yml`、`intraday.yml`、`night.yml`（15:30、16:00、16:30，由閘門決定要不要真的掃）、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`、`history_check.yml`、`group_probe.yml`、`index_probe.yml`、`turnover_probe.yml`、`crash_study.yml`、`asia_probe.yml`（最後六個是一次性探測，用完可以刪）
 
 **部署設定**
 
@@ -122,7 +125,7 @@
 - `TG_CHAT_ID`：群組通知的 chat id
 - `FUGLE_API_KEY`：富果行情 API 金鑰
 
-Render 上另外需要 `GH_TOKEN`（備援排程用）與 `FUGLE_API_KEY`。
+Render 上另外需要 `GH_TOKEN`（備援排程用，期貨部位存檔也用它，要有寫入 repo 內容的權限）與 `FUGLE_API_KEY`。
 
 > 金鑰只放在 Secrets 裡，不要寫進程式碼或 README。
 
@@ -142,6 +145,7 @@ Render 上另外需要 `GH_TOKEN`（備援排程用）與 `FUGLE_API_KEY`。
 | 11/05 | 低位起漲改用十年月線高低判斷位階，並加上上影線條件；量縮抗跌改為盤整、量縮、族群抗跌三條件；族群排名與個股概念查詢上線；追蹤清單取消按鈕修正；網頁 App 按鈕顯示追價與出場價 |
 | 11/06 | 新增盤中殺低後反彈偵測（Render，全市場每 90 秒，殺低 ≥ 4% 要出量、反彈 ≥ 4%，今日量 ≥ 1000 張，私訊管理者）；實測大盤成交金額約 15:00 出現，夜間掃描改為 15:30 起（排程 15:30／16:00／16:30、閘門、Render 備援 15:50 補跑、網頁 App 標示「盤後資料 15:30 才更新」） |
 | 11/10 | 止跌確認改為看價格（反彈 ≥ 5%、至少 2 天不破低），量能與 K 棒只顯示不卡關；修正 Render 記憶體超過 512MB 重複重啟（反彈偵測與機器人共用同一份股票清單）；night_gate 加時段限制（15:00～17:30 才掃描）；追蹤流程「僅追蹤」改名、取消後補回主按鍵 |
+| 11/11 | 夜間掃描逾時修正（逾時 45→90 分、證交所成交量最多抓 5 分鐘、收盤前手動執行直接結束）；晨報亞洲股市標題加「資料到幾點」；新增台指期風控（單日虧損上限 10 萬、最大部位 2 口大台等值）；新增大回檔研究與轉空規則帳戶模擬（crash_study）、日經來源探測（asia_probe） |
 
 ---
 
@@ -154,6 +158,7 @@ Render 上另外需要 `GH_TOKEN`（備援排程用）與 `FUGLE_API_KEY`。
 - 大盤成交金額實測約 15:00 才抓得到（11/06 為 15:01），只量過一天，還需要多看幾天確認。
 - 盤中殺低後反彈偵測目前只在 11/06 實測過，門檻（殺低 4%、反彈 4%、量能 2 倍、1000 張）還在觀察；Render 重啟後當天的價格紀錄會清空。
 - 證交所指數即時資料沒有成交量欄位，無法直接取得大盤估量。
+- 期貨風控只記錄你輸入的部位、不會下單；報價來自期交所免費行情，抓不到時會提醒你自己盯盤；部位存檔需要 GH_TOKEN 有寫入權限，否則機器人重啟後部位會不見（會私訊提醒）。
 - 策略門檻是依照目前的觀察設定，尚未經過完整回測驗證。
 
 ---
