@@ -180,6 +180,13 @@ def main():
             print("盤中反彈偵測：已啟動", flush=True)
         except Exception as e:
             print("盤中反彈偵測啟動失敗：", repr(e), flush=True)
+    if os.getenv("FUTURES_ON", "1") != "0":            # 台指期風控監控（有部位時才抓報價，只私訊管理者）
+        try:
+            import futures_guard
+            threading.Thread(target=futures_guard.loop, args=(lambda t: I.send_to(I.OWNER, t),), daemon=True).start()
+            print("期貨風控監控：已啟動", flush=True)
+        except Exception as e:
+            print("期貨風控監控啟動失敗：", repr(e), flush=True)
     port = int(os.getenv("PORT", "10000"))
     print(f"機器人已啟動，port {port}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
