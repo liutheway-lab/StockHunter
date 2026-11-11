@@ -12,6 +12,8 @@ services:
     buildFilter:                 # 只有這些檔案改了才重新部署（夜間掃描每天存結果時不會一直重啟）
       paths:
         - intraday.py
+        - futures_guard.py
+        - rebound_watch.py
         - bot_server.py
         - config.py
         - strategies.py
