@@ -155,5 +155,7 @@ FUT_SWEEP_SESS_AGE = 6           # 本盤高（低）要形成幾根 5 分K（6 
 FUT_LOG_TARGET = 80              # 掃蕩紀錄：確認後，往有利方向走多少點算「贏」
 FUT_LOG_DIGEST = True            # 掃蕩紀錄自動統整：每週六 09:00 一次、確認單每累積滿 FUT_LOG_MILESTONE 筆一次；不要了改成 False
 FUT_LOG_MILESTONE = 30
+FUT_US_BEFORE = 30               # 掃蕩紀錄「美股開盤前後」時段：開盤前幾分鐘開始算
+FUT_US_AFTER = 60                # 開盤後幾分鐘結束（冬令 22:30、夏令 21:30 開盤，自動換算）
 FUT_LOG_BARS = 6                 # 掃蕩紀錄：確認後最多看幾根 5分K（6 根＝30 分鐘），沒到贏也沒到輸就算「平」
 FUT_SWEEP_HOLD = 3               # 價格先收在價位外側（站上高點／跌破低點）最多幾根 5 分K，之後收回來還算掃蕩
