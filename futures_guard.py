@@ -6,8 +6,8 @@
    - 部位超過上限（大台等值口數）提醒
    - 離停損價 30 點內提醒、碰到停損價每 5 分鐘一直提醒
    - 收盤前（日盤 13:30、夜盤 04:50）還有部位就提醒
-3. 部位存檔：記憶體＋GitHub 的 futures_state.json（要 GH_TOKEN 有寫入 repo 內容的權限）；
-   存不進 GitHub 時會私訊你，因為機器人重啟後部位會不見
+3. 部位存檔：記憶體＋GitHub 的 futures_state.json（Render 環境變數 FUT_GH_TOKEN，沒有就用 GH_TOKEN；
+   要有 Contents 讀寫權限）。存不進 GitHub 時，結果卡片與「部位」卡片會寫「只存在記憶體」，因為機器人重啟後部位會不見
 所有數字都在 config.py 的 FUT_ 開頭。
 """
 import base64
@@ -27,7 +27,7 @@ TZ = ZoneInfo("Asia/Taipei")
 STATE_NAME = "futures_state.json"
 GH_REPO = os.getenv("GH_REPO", "liutheway-lab/StockHunter")
 GH_BRANCH = os.getenv("GH_BRANCH", "main")
-GH_TOKEN = os.getenv("GH_TOKEN", "").strip()
+GH_TOKEN = (os.getenv("FUT_GH_TOKEN") or os.getenv("GH_TOKEN") or "").strip()      # FUT_GH_TOKEN：專門存期貨部位用的 token（不影響原本的 GH_TOKEN）
 LOCAL_FILE = "/tmp/futures_state.json"
 MIS_URL = "https://mis.taifex.com.tw/futures/api/getQuoteList"
 ENTRY = "期貨"
@@ -311,10 +311,7 @@ def save_state(st, send=None):
             except Exception as e:
                 print("期貨部位存檔失敗：", repr(e)[:160], flush=True)
         _STATE["dirty"] = bool(GH_TOKEN) and not ok          # GitHub 沒存成功：先不要用它的舊資料蓋掉記憶體
-        if not ok and send and not _STATE["warned"]:
-            _STATE["warned"] = True
-            send("⚠️ 期貨部位只存在機器人記憶體\n機器人重啟後會不見\n請確認 Render 的 GH_TOKEN\n有寫入 repo 內容的權限\n重啟後請用「期貨→部位」檢查")
-        return ok
+        return ok                                            # 沒存到 GitHub 時，結果卡片與「部位」卡片會直接寫「只存在記憶體」，不再另外傳訊息吵你
 
 
 # ───────────── 畫面 ─────────────
@@ -324,6 +321,11 @@ def fmt(x):
 
 def label(p):
     return f"{p['side']} {p['kind']} {p['qty']}口 @{fmt(p['avg'])}"
+
+
+def persisted():
+    """部位有沒有存到 GitHub（機器人重啟後還在）"""
+    return bool(GH_TOKEN) and not _STATE["dirty"]
 
 
 def status_lines(st, price=None, now=None):
@@ -352,6 +354,8 @@ def status_lines(st, price=None, now=None):
         L.append(f"虧損上限　 -{cfg.FUT_DAILY_LOSS:,.0f}")
         L.append("（目前沒有即時報價）")
     L.append(f"部位　　　 {exposure(st):g}／{cfg.FUT_MAX_EQ:g} 口大台等值")
+    if not persisted():
+        L += ["", "⚠️ 部位只存在記憶體", "機器人重啟後會不見"]
     return L
 
 
