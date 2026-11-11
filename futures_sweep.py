@@ -177,7 +177,10 @@ class Journal:
         self.rows = data if isinstance(data, list) else []
         for r in self.rows:                                   # 重啟前還在等確認／追蹤的，記憶體已經沒了：標成中斷
             if r.get("status") in ("wait", "track"):
-                r["status"], r["result"] = "done", ("中斷" if r.get("status") == "wait" else r.get("result") or "平")
+                was = r.get("status")
+                r["status"], r["result"] = "done", ("中斷" if was == "wait" else r.get("result") or "平")
+                if was == "track":
+                    r["result2"] = r.get("result2") or "平"
 
     def _save(self):
         rows = {"rows": self.rows[-2000:], "meta": dict(self.meta)}
@@ -218,32 +221,42 @@ class Journal:
     def confirmed(self, s, bar):
         r = self._row(s)
         if r:
-            r.update(status="track", entry=bar["c"], stop=s["ext"], bars=0, mfe=0.0, mae=0.0, result=None)
+            near = s.get("near")                               # 近停損：確認那幾根 5分K 的最低點（做空＝最高點）
+            r.update(status="track", entry=bar["c"], stop=s["ext"], stop2=near if near is not None else s["ext"],
+                     bars=0, mfe=0.0, mae=0.0, result=None, result2=None)
             self._save()
 
     def on_bar(self, bar):
+        """遠停損（掃蕩／影線的極點）與近停損（確認那幾根的最低／最高點）各自判斷輸贏：先走到 +目標算贏、先碰到停損算輸、
+        時間到都沒有算平；同一根兩個都碰到，保守算輸。兩個都有結果才結案"""
         tgt, nbars = _cfg("FUT_LOG_TARGET", 80), _cfg("FUT_LOG_BARS", 6)
         changed = False
         for r in self.rows:
             if r.get("status") != "track":
                 continue
+            changed = True
             if (r["day"], r["sess"]) != (bar["day"], bar["sess"]):
-                r["status"], r["result"] = "done", "平"
-                changed = True
+                r["result"] = r.get("result") or "平"
+                r["result2"] = r.get("result2") or "平"
+                r["status"] = "done"
                 continue
             short = r["dir"] == "short"
             fav = (r["entry"] - bar["l"]) if short else (bar["h"] - r["entry"])
             adv = (bar["h"] - r["entry"]) if short else (r["entry"] - bar["l"])
-            stopd = max(abs(r["stop"] - r["entry"]), 1)
             r["bars"] += 1
-            r["mfe"], r["mae"] = max(r["mfe"], fav), max(r["mae"], adv)
-            if adv >= stopd:
-                r["status"], r["result"] = "done", "輸"
-            elif fav >= tgt:
-                r["status"], r["result"] = "done", "贏"
-            elif r["bars"] >= nbars:
-                r["status"], r["result"] = "done", "平"
-            changed = True
+            if r.get("result") is None or r.get("result2") is None:
+                r["mfe"], r["mae"] = max(r["mfe"], fav), max(r["mae"], adv)
+            for key, stop in (("result", r["stop"]), ("result2", r.get("stop2", r["stop"]))):
+                if r.get(key) is not None:
+                    continue
+                if adv >= max(abs(stop - r["entry"]), 1):
+                    r[key] = "輸"
+                elif fav >= tgt:
+                    r[key] = "贏"
+                elif r["bars"] >= nbars:
+                    r[key] = "平"
+            if r.get("result") is not None and r.get("result2") is not None:
+                r["status"] = "done"
         if changed:
             self._save()
 
@@ -274,17 +287,25 @@ class Journal:
         conf = [r for r in rows if r.get("entry") is not None]
         fail = [r for r in rows if r.get("result") == "失敗"]
         L = ["📊 掃蕩紀錄", f"提醒 {len(rows)} 次", f"　確認 {len(conf)}｜失敗 {len(fail)}", "",
-             f"確認後進場，30 分內", f"先走 +{_cfg('FUT_LOG_TARGET', 80)} 點＝贏", "先碰到停損參考＝輸", ""]
+             f"確認後進場，30 分內", f"先走 +{_cfg('FUT_LOG_TARGET', 80)} 點＝贏", "先碰到停損＝輸",
+             "遠＝停損放掃蕩極點", "近＝停損放確認那幾根", "　　最低（高）點", ""]
 
         def block(title, rs):
             done = [r for r in rs if r.get("result") in ("贏", "輸", "平")]
-            w, l, e = (sum(1 for r in done if r["result"] == x) for x in ("贏", "輸", "平"))
             out = [title]
             if not done:
                 return out + ["　還沒有資料"]
-            out.append(f"　贏{w} 輸{l} 平{e}" + (f"　勝率 {w / (w + l):.0%}" if w + l else ""))
-            out.append(f"　平均先走 +{sum(r['mfe'] for r in done) / len(done):.0f} 點")
-            out.append(f"　平均逆走 -{sum(r['mae'] for r in done) / len(done):.0f} 點")
+
+            def tally(key):
+                w, l, e = (sum(1 for r in done if r.get(key, r.get("result")) == x) for x in ("贏", "輸", "平"))
+                return f"{w}勝{l}敗{e}平" + (f" {w / (w + l):.0%}" if w + l else "")
+            ds = [abs(r["stop"] - r["entry"]) for r in done if r.get("entry") is not None]
+            d2 = [abs(r["stop2"] - r["entry"]) for r in done if r.get("stop2") is not None and r.get("entry") is not None]
+            out.append("　遠 " + tally("result"))
+            out.append("　近 " + tally("result2"))
+            if ds and d2:
+                out.append(f"　停損距離 遠{sum(ds) / len(ds):.0f} 近{sum(d2) / len(d2):.0f}")
+            out.append(f"　先走 +{sum(r['mfe'] for r in done) / len(done):.0f}｜逆走 -{sum(r['mae'] for r in done) / len(done):.0f}")
             return out
         for tr in ("順勢", "逆勢"):
             L += block(f"【{tr}】", [r for r in conf if r.get("trend") == tr]) + [""]
@@ -297,8 +318,8 @@ class Journal:
             return us_zone(ts, r.get("t"), r.get("sess"))
         for z in ("日盤", "美股開盤前後", "夜盤其他"):
             L += block({"日盤": "【日盤】", "美股開盤前後": "【夜盤・美股開盤前後】", "夜盤其他": "【夜盤・其他】"}[z], [r for r in conf if zone(r) == z]) + [""]
-        for tier in ("大", "小"):
-            L += block(f"【{tier}價位】", [r for r in conf if r.get("tier") == tier]) + [""]
+        for tier in ("大", "小", "影線"):
+            L += block("【影線】" if tier == "影線" else f"【{tier}價位】", [r for r in conf if r.get("tier") == tier]) + [""]
         L.append("樣本少時別太相信")
         return L
 
@@ -353,30 +374,49 @@ class Engine:
         return gone
 
     @staticmethod
+    def _tier_line(s):
+        return "級別 影線" if s["tier"] == "影線" else f"級別 {s['tier']}價位"
+
+    @staticmethod
     def _name_line(s):
+        if s["tier"] == "影線":
+            return f"{'長上影線高點' if s['dir'] == 'short' else '長下影線低點'} {f0(s['level'])}"
         return f"{NAMES[s['name']]} {f0(s['level'])}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {f0(s['level'])}"
 
-    def _sweep_text(self, s, bar, ratio=None):
-        up = s["dir"] == "short"
+    def _trend_tag(self, s, up, bar):
+        """今日偏多／偏空與順勢逆勢的標籤（同時記到 s["trend"] 給紀錄用）"""
         if self.pivot:                                        # 收盤在前一個日盤的基準價上面＝偏多，下面＝偏空
             trend = bar["c"] - self.pivot
             with_trend = (trend < 0) if up else (trend > 0)
-            tag = f"{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
             s["trend"] = "順勢" if with_trend else "逆勢"
-        else:
-            trend = bar["c"] - self.sess_open if self.sess_open else 0
-            if self.nbars <= 1:
-                tag = "剛開盤 走勢未定"
-                s["trend"] = "未定"
-            elif abs(trend) < 30:
-                tag = "今日走勢 盤整"
-                s["trend"] = "盤整"
-            else:
-                with_trend = (trend < 0) if up else (trend > 0)
-                tag = f"今日{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
-                s["trend"] = "順勢" if with_trend else "逆勢"
+            return f"{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
+        trend = bar["c"] - self.sess_open if self.sess_open else 0
+        if self.nbars <= 1:
+            s["trend"] = "未定"
+            return "剛開盤 走勢未定"
+        if abs(trend) < 30:
+            s["trend"] = "盤整"
+            return "今日走勢 盤整"
+        with_trend = (trend < 0) if up else (trend > 0)
+        s["trend"] = "順勢" if with_trend else "逆勢"
+        return f"今日{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
+
+    def _wick_text(self, s, bar, ratio=None):
+        up = s["dir"] == "short"
+        L = ["🔻 長上影線，留意做空" if up else "🔺 長下影線，留意做多", "級別 影線", f"影線 {s['pierce']:.0f} 點",
+             f"{'高' if up else '低'}點 {f0(s['level'])}", f"收盤 {f0(bar['c'])}"]
+        if ratio is not None:
+            L.append(f"這根成交量 {ratio:.1f} 倍均量")
+        L += [self._trend_tag(s, up, bar), f"停損參考 {f0(s['ext'])} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
+        if self.journal:
+            self.journal.opened(s, bar, ratio)
+        return L
+
+    def _sweep_text(self, s, bar, ratio=None):
+        up = s["dir"] == "short"
+        tag = self._trend_tag(s, up, bar)
         sign = "高" if up else "低"
-        L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", f"級別 {s['tier']}價位", self._name_line(s)]
+        L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", self._tier_line(s), self._name_line(s)]
         if s["tier"] == "小":
             L.append(f"{s['t'] // 100:02d}:{s['t'] % 100:02d} 形成")
         L += [f"刺破 {s['pierce']:.0f} 點 {sign} {f0(s['ext'])}"]
@@ -440,17 +480,18 @@ class Engine:
         for s in self.pending:
             up = s["dir"] == "short"
             s["n"] += 1
+            s["near"] = max(s.get("near", bar["h"]), bar["h"]) if up else min(s.get("near", bar["l"]), bar["l"])
             broke = (bar["h"] > s["ext"]) if up else (bar["l"] < s["ext"])
             back = (bar["c"] >= s["level"]) if up else (bar["c"] <= s["level"])
             who = f"（{'做空' if up else '做多'}）"
             if broke or back:
                 why = ("又創高 " if up else "又創低 ") + f0(bar["h"] if up else bar["l"]) if broke else \
                       ("收盤又站上 " if up else "收盤又跌破 ") + f0(s["level"])
-                out.append([f"❌ 掃蕩失敗{who}", f"級別 {s['tier']}價位", self._name_line(s), why, "這個訊號不用看了"])
+                out.append([f"❌ 掃蕩失敗{who}", self._tier_line(s), self._name_line(s), why, "這個訊號不用看了"])
                 if self.journal:
                     self.journal.failed(s)
             elif s["n"] >= need:
-                out.append([f"✅ 掃蕩確認{who}", f"級別 {s['tier']}價位", self._name_line(s),
+                out.append([f"✅ 掃蕩確認{who}", self._tier_line(s), self._name_line(s),
                             f"連 {need} 根 沒再創{'高' if up else '低'}", f"現價 {f0(bar['c'])}",
                             f"停損參考 {f0(s['ext'])} {'上' if up else '下'}"])
                 if self.journal:
@@ -538,6 +579,21 @@ class Engine:
                          "ext": bar["h"] if up else bar["l"], "pierce": (bar["h"] - w["level"]) if up else (w["level"] - bar["l"])}
                     self.pending.append(s)
                     out.append(self._sweep_text(s, bar, ratio))
+        if _cfg("FUT_WICK_ON", True) and not last_bar:                                # 長影線：不需要任何價位，只看這根 K 棒本身
+            rng = bar["h"] - bar["l"]
+            prior = self.hist[-21:-1]
+            avg = (sum(b["h"] - b["l"] for b in prior) / len(prior)) if len(prior) >= 6 else 0
+            need_pts = max(_cfg("FUT_WICK_MIN", 60), _cfg("FUT_WICK_MULT", 2.5) * avg)      # 至少 60 點，而且要是平常一根 K 棒的 2.5 倍以上
+            fresh = {p["dir"] for p in self.pending if p["n"] == 0}                        # 這根已經因為掃蕩提醒過的方向，不重複
+            for d, wick in (("long", min(bar["o"], bar["c"]) - bar["l"]), ("short", bar["h"] - max(bar["o"], bar["c"]))):
+                if rng <= 0 or wick < need_pts or wick < _cfg("FUT_WICK_PCT", 0.6) * rng:
+                    continue
+                if d in fresh or any(p["tier"] == "影線" and p["dir"] == d for p in self.pending):
+                    continue
+                lvl = bar["l"] if d == "long" else bar["h"]
+                w = {"dir": d, "name": f"wick_{bar['t']}", "level": lvl, "ext": lvl, "pierce": wick, "n": 0, "tier": "影線", "t": bar["t"]}
+                self.pending.append(w)
+                out.append(self._wick_text(w, bar, ratio))
         if bar.get("v"):
             self.vols.append(bar["v"])
         return out
