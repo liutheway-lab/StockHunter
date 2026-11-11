@@ -254,6 +254,15 @@ def _gh_load():
     return json.loads(base64.b64decode(j["content"]).decode("utf-8")), j.get("sha")
 
 
+def _clear_hint(p, key):
+    """停損／停利已經有值才提示「不設」可以清掉；還沒設就不出現"""
+    return ["要清掉就按「不設」"] if p.get(key) is not None else []
+
+
+def _clear_kb(p, key):
+    return [["不設"]] if p.get(key) is not None else []
+
+
 def _gh_save(st):
     sha = None
     try:
@@ -471,7 +480,7 @@ def handle(cid, text, mid0, ctx):
         FG_S[cid] = {"flow": "menu"}
         S[cid] = {"flow": "fut"}
         TRACK[cid] = [mid0]
-        ask("📈 期貨\n要做什麼？", [["開倉/加碼", "平倉/減碼"], ["部位", "行情"], ["修正價格", "掃蕩紀錄"], ["上限設定"]])
+        ask("📈 期貨\n要做什麼？", [["開倉/加碼", "平倉/減碼"], ["部位", "行情"], ["修正價格/部位", "掃蕩紀錄"], ["上限設定"]])
         return True
 
     TRACK.setdefault(cid, []).append(mid0)
@@ -519,7 +528,7 @@ def handle(cid, text, mid0, ctx):
                 finish(SW.status_lines())
             except Exception as e:
                 finish(["價位暫時查不到", type(e).__name__])
-        elif t in ("修正", "修正價格"):                                     # 輸入錯誤或測試用：改成本價、改口數、今日損益歸零
+        elif t in ("修正", "修正價格", "修正價格/部位"):                                     # 輸入錯誤或測試用：改成本價、改口數、今日損益歸零
             FG_S[cid] = {"flow": "fix", "step": "what"}
             ask("要修正什麼？", [["改成本價", "改口數"], ["改停損/停利", "今日損益歸零"]])
         elif t in ("風控設定", "上限設定"):
@@ -531,7 +540,7 @@ def handle(cid, text, mid0, ctx):
             except Exception as e:
                 finish(["掃蕩紀錄暫時查不到", type(e).__name__])
         else:
-            ask("請按下面的按鈕", [["開倉/加碼", "平倉/減碼"], ["部位", "行情"], ["修正價格", "掃蕩紀錄"], ["上限設定"]])
+            ask("請按下面的按鈕", [["開倉/加碼", "平倉/減碼"], ["部位", "行情"], ["修正價格/部位", "掃蕩紀錄"], ["上限設定"]])
         return True
 
     if flow == "open":
@@ -658,9 +667,9 @@ def handle(cid, text, mid0, ctx):
             px = current_price()
             tip = [f"現價 {px:,.0f}"] if px else []
             if f["which"] == "stop":
-                ask("新的停損價？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）", "不想設就按「不設」"]), [["不設"]])
+                ask("新的停損價？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）"] + _clear_hint(p, "stop")), _clear_kb(p, "stop"))
             else:
-                ask("停利價多少？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "到價會提醒你", "不想設就按「不設」"]), [["不設"]])
+                ask("停利價多少？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "到價會提醒你"] + _clear_hint(p, "target")), _clear_kb(p, "target"))
             return True
         if flow == "stop" and f.get("which") == "target":
             if t == "不設":
@@ -668,11 +677,11 @@ def handle(cid, text, mid0, ctx):
             else:
                 v = _price(t)
                 if v is None:
-                    ask("價格看起來不對\n請輸入停利價，或按「不設」", [["不設"]])
+                    ask("價格看起來不對\n請輸入停利價" + ("，或按「不設」" if p.get("target") is not None else ""), _clear_kb(p, "target"))
                     return True
                 px = current_price()
                 if px and ((p["side"] == "多" and v <= px) or (p["side"] == "空" and v >= px)):
-                    ask(f"做{p['side']}的停利價\n要在現價{'上' if p['side'] == '多' else '下'}方\n現價 {px:,.0f}\n請重新輸入", [["不設"]])
+                    ask(f"做{p['side']}的停利價\n要在現價{'上' if p['side'] == '多' else '下'}方\n現價 {px:,.0f}\n請重新輸入", _clear_kb(p, "target"))
                     return True
                 p["target"] = v
             done_save(["✅ 已更新停利", label(p), "　停利 " + (fmt(p["target"]) if p.get("target") is not None else "未設")])
@@ -683,11 +692,11 @@ def handle(cid, text, mid0, ctx):
             else:
                 v = _price(t)
                 if v is None:
-                    ask("價格看起來不對\n請輸入停損價，或按「不設」", [["不設"]])
+                    ask("價格看起來不對\n請輸入停損價" + ("，或按「不設」" if p.get("stop") is not None else ""), _clear_kb(p, "stop"))
                     return True
                 px = current_price()
                 if px and ((p["side"] == "多" and v >= px) or (p["side"] == "空" and v <= px)):
-                    ask(f"做{p['side']}的停損價\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {px:,.0f}\n不然會馬上被打到\n請重新輸入", [["不設"]])
+                    ask(f"做{p['side']}的停損價\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {px:,.0f}\n不然會馬上被打到\n請重新輸入", _clear_kb(p, "stop"))
                     return True
                 p["stop"] = v
             done_save(["✅ 已更新停損", label(p), "　停損 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + stop_note(p))
