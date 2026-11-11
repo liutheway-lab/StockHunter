@@ -166,16 +166,21 @@ def fetch_twse_stock_volume(code, months=4):
     return pd.Series(out).sort_index()
 
 
-def fetch_twse_market_volume(days, sleep=1.0):
+def fetch_twse_market_volume(days, sleep=1.0, budget_sec=300):
     """證交所官方：指定的每個交易日，全部上市股票的成交股數。
-    一天只要一次請求（MI_INDEX），所以 70 天大約 70 次。回傳 {日期: {代號: 股數}}，抓不到的日子不會出現在結果裡。"""
+    一天只要一次請求（MI_INDEX），所以 70 天大約 70 次。回傳 {日期: {代號: 股數}}，抓不到的日子不會出現在結果裡。
+    總時間最多 budget_sec 秒，超過就停，已抓到的照樣回傳（不讓整個夜間掃描被拖到逾時）。"""
     out = {}
+    t0 = time.time()
     for day in days:
+        if time.time() - t0 > budget_sec:
+            print(f"證交所全市場成交股數超過 {budget_sec} 秒，先停止，已抓 {len(out)} 天", flush=True)
+            break
         day = pd.Timestamp(day).normalize()
         url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={day:%Y%m%d}&type=ALLBUT0999"
         for k in range(3):
             try:
-                j = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"}).json()
+                j = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"}).json()
                 tables = list(j.get("tables") or [])
                 for key in list(j):                          # 舊格式：fields1/data1 ...
                     if key.startswith("fields") and key.replace("fields", "data") in j:
