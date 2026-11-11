@@ -18,6 +18,7 @@
 import csv
 import io
 import json
+import threading
 import os
 import time
 import unicodedata
@@ -120,10 +121,164 @@ class BarBuilder:
 
 
 # ───────────── 掃蕩判斷（純計算）─────────────
+LOG_FILE = "/tmp/sweep_log.json"
+LOG_NAME = "sweep_log.json"
+
+
+class Journal:
+    """掃蕩紀錄：每次提醒自動記一筆。「確認」那根的收盤價當進場價，停損＝掃蕩的最極端點，
+    之後 FUT_LOG_BARS 根 5分K 內，先走到 +FUT_LOG_TARGET 點算「贏」，先碰到停損算「輸」，都沒有算「平」。
+    同一根 K 棒兩個都碰到，保守算「輸」（看不出誰先）。存在 /tmp 與 GitHub（sweep_log.json），重啟後還在"""
+
+    def __init__(self, load=True):
+        self.rows = []
+        self.meta = {}                                        # {"weekly": 最近一次週報的日期, "milestone": 已推過的確認單筆數}
+        self._lock = threading.Lock()
+        if load:
+            self.load()
+
+    def load(self):
+        data = None
+        try:
+            data = G.gh_read(LOG_NAME)
+        except Exception as e:
+            print("掃蕩紀錄讀取失敗：", repr(e)[:100], flush=True)
+        if data is None:
+            try:
+                with open(LOG_FILE, encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = []
+        self.meta = {}
+        if isinstance(data, dict):
+            self.meta = data.get("meta") or {}
+            data = data.get("rows")
+        self.rows = data if isinstance(data, list) else []
+        for r in self.rows:                                   # 重啟前還在等確認／追蹤的，記憶體已經沒了：標成中斷
+            if r.get("status") in ("wait", "track"):
+                r["status"], r["result"] = "done", ("中斷" if r.get("status") == "wait" else r.get("result") or "平")
+
+    def _save(self):
+        rows = {"rows": self.rows[-2000:], "meta": dict(self.meta)}
+        try:
+            with open(LOG_FILE, "w", encoding="utf-8") as f:
+                json.dump(rows, f, ensure_ascii=False)
+        except Exception:
+            pass
+        if not getattr(G, "GH_TOKEN", ""):
+            return
+
+        def go():
+            with self._lock:
+                try:
+                    G.gh_write(LOG_NAME, rows, "更新掃蕩紀錄")
+                except Exception as e:
+                    print("掃蕩紀錄存檔失敗：", repr(e)[:100], flush=True)
+        threading.Thread(target=go, daemon=True).start()
+
+    def opened(self, s, bar, ratio):
+        s["jid"] = len(self.rows)
+        self.rows.append({"day": bar["day"], "sess": bar["sess"], "t": bar["t"], "name": Engine._name_line(s),
+                          "tier": s["tier"], "dir": s["dir"], "level": s["level"], "ext": s["ext"],
+                          "trend": s.get("trend", "未定"), "ratio": round(ratio, 1) if ratio else None,
+                          "status": "wait", "result": None})
+        self._save()
+
+    def _row(self, s):
+        i = s.get("jid")
+        return self.rows[i] if i is not None and 0 <= i < len(self.rows) else None
+
+    def failed(self, s):
+        r = self._row(s)
+        if r:
+            r["status"], r["result"] = "done", "失敗"
+            self._save()
+
+    def confirmed(self, s, bar):
+        r = self._row(s)
+        if r:
+            r.update(status="track", entry=bar["c"], stop=s["ext"], bars=0, mfe=0.0, mae=0.0, result=None)
+            self._save()
+
+    def on_bar(self, bar):
+        tgt, nbars = _cfg("FUT_LOG_TARGET", 80), _cfg("FUT_LOG_BARS", 6)
+        changed = False
+        for r in self.rows:
+            if r.get("status") != "track":
+                continue
+            if (r["day"], r["sess"]) != (bar["day"], bar["sess"]):
+                r["status"], r["result"] = "done", "平"
+                changed = True
+                continue
+            short = r["dir"] == "short"
+            fav = (r["entry"] - bar["l"]) if short else (bar["h"] - r["entry"])
+            adv = (bar["h"] - r["entry"]) if short else (r["entry"] - bar["l"])
+            stopd = max(abs(r["stop"] - r["entry"]), 1)
+            r["bars"] += 1
+            r["mfe"], r["mae"] = max(r["mfe"], fav), max(r["mae"], adv)
+            if adv >= stopd:
+                r["status"], r["result"] = "done", "輸"
+            elif fav >= tgt:
+                r["status"], r["result"] = "done", "贏"
+            elif r["bars"] >= nbars:
+                r["status"], r["result"] = "done", "平"
+            changed = True
+        if changed:
+            self._save()
+
+    def digest(self, now):
+        """該自動統整給你看的時候，回傳 (標題, 卡片行)；不用就回 None。
+        每週六 09:00 之後第一次（有資料才推）；確認單每累積滿 FUT_LOG_MILESTONE 筆（預設 30）再推一次"""
+        if not _cfg("FUT_LOG_DIGEST", True) or not self.rows:
+            return None
+        conf = sum(1 for r in self.rows if r.get("entry") is not None)
+        step = _cfg("FUT_LOG_MILESTONE", 30)
+        title = None
+        if now.weekday() == 5 and now.hour >= 9 and self.meta.get("weekly") != now.date().isoformat():
+            self.meta["weekly"] = now.date().isoformat()
+            self.meta["milestone"] = conf // step * step
+            title = "📊 掃蕩週報"
+        elif step and conf // step * step > self.meta.get("milestone", 0):
+            self.meta["milestone"] = conf // step * step
+            title = f"📊 確認單累積 {conf} 筆"
+        if title is None:
+            return None
+        self._save()
+        return title, ["（自動統整）"] + self.lines()[1:]
+
+    def lines(self):
+        rows = self.rows
+        if not rows:
+            return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
+        conf = [r for r in rows if r.get("entry") is not None]
+        fail = [r for r in rows if r.get("result") == "失敗"]
+        L = ["📊 掃蕩紀錄", f"提醒 {len(rows)} 次", f"　確認 {len(conf)}｜失敗 {len(fail)}", "",
+             f"確認後進場，30 分內", f"先走 +{_cfg('FUT_LOG_TARGET', 80)} 點＝贏", "先碰到停損參考＝輸", ""]
+
+        def block(title, rs):
+            done = [r for r in rs if r.get("result") in ("贏", "輸", "平")]
+            w, l, e = (sum(1 for r in done if r["result"] == x) for x in ("贏", "輸", "平"))
+            out = [title]
+            if not done:
+                return out + ["　還沒有資料"]
+            out.append(f"　贏{w} 輸{l} 平{e}" + (f"　勝率 {w / (w + l):.0%}" if w + l else ""))
+            out.append(f"　平均先走 +{sum(r['mfe'] for r in done) / len(done):.0f} 點")
+            out.append(f"　平均逆走 -{sum(r['mae'] for r in done) / len(done):.0f} 點")
+            return out
+        for tr in ("順勢", "逆勢"):
+            L += block(f"【{tr}】", [r for r in conf if r.get("trend") == tr]) + [""]
+        L += block("【其他（盤整／未定）】", [r for r in conf if r.get("trend") not in ("順勢", "逆勢")]) + [""]
+        for tier in ("大", "小"):
+            L += block(f"【{tier}價位】", [r for r in conf if r.get("tier") == tier]) + [""]
+        L.append("樣本少時別太相信")
+        return L
+
+
 class Engine:
     def __init__(self, levels=None):
         self.levels = {k: v for k, v in (levels or {}).items() if k in STORED and v}
         self.pivot = (levels or {}).get("pivot") or None   # 基準價＝前一個日盤 (高+低+收)/3；收盤在它上面算偏多，下面算偏空
+        self.journal = None                                # 掃蕩紀錄（Journal），沒有就不記
         self.last_c = None                                 # (盤別, 最近一根收盤)，日盤結束時算基準價用
         self.pending = []
         self.done = set()
@@ -178,15 +333,19 @@ class Engine:
             trend = bar["c"] - self.pivot
             with_trend = (trend < 0) if up else (trend > 0)
             tag = f"{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
+            s["trend"] = "順勢" if with_trend else "逆勢"
         else:
             trend = bar["c"] - self.sess_open if self.sess_open else 0
             if self.nbars <= 1:
                 tag = "剛開盤 走勢未定"
+                s["trend"] = "未定"
             elif abs(trend) < 30:
                 tag = "今日走勢 盤整"
+                s["trend"] = "盤整"
             else:
                 with_trend = (trend < 0) if up else (trend > 0)
                 tag = f"今日{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
+                s["trend"] = "順勢" if with_trend else "逆勢"
         sign = "高" if up else "低"
         L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", f"級別 {s['tier']}價位", self._name_line(s)]
         if s["tier"] == "小":
@@ -198,6 +357,8 @@ class Engine:
         if ratio is not None:
             L.append(f"這根成交量 {ratio:.1f} 倍均量")
         L += [tag, f"停損參考 {f0(s['ext'])} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
+        if self.journal:
+            self.journal.opened(s, bar, ratio)
         return L
 
     def _update_swings(self):
@@ -220,6 +381,8 @@ class Engine:
             return out
         skey = (bar["day"], bar["sess"])
         self.last_c = (bar["sess"], bar["c"])
+        if self.journal:
+            self.journal.on_bar(bar)
         if skey != self.skey:
             self.skey, self.sess_open, self.pending, self.or_bars, self.nbars = skey, None, [], [], 0
             self.hist, self.swings, self.vols, self.exc = [], [], [], {}
@@ -255,10 +418,14 @@ class Engine:
                 why = ("又創高 " if up else "又創低 ") + f0(bar["h"] if up else bar["l"]) if broke else \
                       ("收盤又站上 " if up else "收盤又跌破 ") + f0(s["level"])
                 out.append([f"❌ 掃蕩失敗{who}", f"級別 {s['tier']}價位", self._name_line(s), why, "這個訊號不用看了"])
+                if self.journal:
+                    self.journal.failed(s)
             elif s["n"] >= need:
                 out.append([f"✅ 掃蕩確認{who}", f"級別 {s['tier']}價位", self._name_line(s),
                             f"連 {need} 根 沒再創{'高' if up else '低'}", f"現價 {f0(bar['c'])}",
                             f"停損參考 {f0(s['ext'])} {'上' if up else '下'}"])
+                if self.journal:
+                    self.journal.confirmed(s, bar)
             else:
                 keep.append(s)
         self.pending = keep
@@ -496,6 +663,8 @@ class Runner:
         self.bb = BarBuilder()
         self.eng = Engine(load_levels())
         self.eng.pivot = self.eng.pivot or None
+        if _cfg("FUT_LOG_ON", True):
+            self.eng.journal = Journal()
         self.seeded = False
         self.hello = False
         self.errs = 0
@@ -593,6 +762,23 @@ class Runner:
                 n += 1
         return n
 
+    def _digest_check(self, now=None):
+        """每分鐘最多看一次：週報／累積筆數到了就私訊統整"""
+        j = self.eng.journal
+        if j is None:
+            return
+        now = now or datetime.now(TZ)
+        ts = now.timestamp()
+        if ts - getattr(self, "_dg_ts", 0) < 60:
+            return
+        self._dg_ts = ts
+        try:
+            d = j.digest(now)
+            if d:
+                self.send([d[0]] + d[1])
+        except Exception as e:
+            print("掃蕩統整失敗：", repr(e)[:100], flush=True)
+
     def run(self):
         while True:
             try:
@@ -607,10 +793,17 @@ class Runner:
                         self.send(["⚠️ 期貨報價連續抓不到", "掃蕩提醒可能失效"])
                     except Exception:
                         pass
+            self._digest_check()
             time.sleep(_cfg("FUT_SWEEP_POLL", 5) if r != -1 else 30)
 
 
 RUNNER = None
+
+
+def journal_lines():
+    """「期貨→掃蕩紀錄」：機器人在跑就用它記憶體裡的，不然讀存檔"""
+    j = RUNNER.eng.journal if (RUNNER is not None and RUNNER.eng.journal) else Journal()
+    return j.lines()
 
 
 def status_lines():
