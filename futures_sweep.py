@@ -321,6 +321,20 @@ def seed_levels(now, fetch=fetch_zip, files=3):
 
 
 # ───────────── 背景執行 ─────────────
+def parse_manual(txt):
+    """'day_hi=44250,day_lo=42521' → {'day_hi': 44250.0, 'day_lo': 42521.0}；格式不對的略過"""
+    out = {}
+    for part in (txt or "").replace("，", ",").split(","):
+        k, _, v = part.partition("=")
+        k = k.strip()
+        try:
+            if k in NAMES:
+                out[k] = float(v.strip().replace(",", ""))
+        except ValueError:
+            pass
+    return out
+
+
 def card(lines):
     w = max(max(cells(l) for l in lines) + 4, 18)
     import html
@@ -341,6 +355,10 @@ class Runner:
         if self.seeded:
             return
         self.seeded = True
+        manual = parse_manual(os.getenv("SWEEP_LEVELS", ""))
+        if manual:                                  # 手動指定的價位（例：今天日盤高低，期交所檔案還沒出來時用）
+            self.eng.levels.update(manual)
+            print("掃蕩關鍵價位（手動）：", manual, flush=True)
         if not all(k in self.eng.levels for k in ("day_hi", "night_hi")):
             try:
                 got = self.seed(now)
