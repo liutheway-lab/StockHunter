@@ -783,11 +783,11 @@ def _levels_for(code, suffix, price):
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "追蹤清單": "持股", "清單": "持股",
          "track": "追蹤", "remove": "移除", "buy": "買", "set": "設", "quote": "查價", "price": "查價"}
-KEYBOARD = {"keyboard": [[{"text": "追蹤/買入"}, {"text": "取消追蹤/賣出"}], [{"text": "追蹤清單"}, {"text": "查價"}],
-                         [{"text": "更多"}]],                      # 調價、說明、清畫面、（管理者）收進「更多」
+KEYBOARD = {"keyboard": [[{"text": "股票"}, {"text": "更多"}]],        # 股票相關（追蹤、賣出、清單、查價）收進「股票」；調價、說明、清畫面收進「更多」
             "resize_keyboard": True, "is_persistent": True}
-KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "期貨"}, {"text": "更多"}]],       # 只有管理者看得到「期貨」；「管理者」在「更多」裡
+KEYBOARD_OWNER = {"keyboard": [[{"text": "股票"}, {"text": "期貨"}], [{"text": "更多"}]],       # 只有管理者看得到「期貨」；「管理者」在「更多」裡
                   "resize_keyboard": True, "is_persistent": True}
+STOCK_ROWS = [["追蹤/買入", "取消追蹤/賣出"], ["追蹤清單", "查價"]]                  # 「股票」選單的按鈕
 MORE_ROWS = [["調價", "說明"], ["清畫面"]]                         # 「更多」選單的按鈕（管理者再多一顆「管理者」）
 # 追蹤清單是空的時的提示（一句一行，不切斷）與按鍵
 EMPTY_TRACK_MSG = "目前沒有追蹤清單唷😊\n趕緊加入股票 按讚 訂閱 開啟小鈴噹唷！🔔"
@@ -799,13 +799,14 @@ THANKS = ["謝謝你的支持，哲哲老師超開心的！🥰",
 RESULT_SEC = 3                                       # 所有回覆顯示幾秒後自動消失（只留置頂的持股清單）
 LIKE_CLEAN_SEC = RESULT_SEC                          # 感謝訊息也是同樣的秒數
 FORMAT = {
-    "追蹤": "追蹤格式：追蹤 代號\n例：追蹤 2330\n（未持股，系統自動算價位）\n也可以按下方「追蹤」按鈕",
+    "追蹤": "追蹤格式：追蹤 代號\n例：追蹤 2330\n（未持股，系統自動算價位）\n也可以按「股票」→「追蹤/買入」",
     "買": "已持股格式：買 代號 數量 價格\n例：買 2330 2張 950\n　　買 2330 500股 950\n可以再加：出場 900 壓力 1100",
     "移除": "移除格式：移除 代號\n或 移除 全部",
     "設": "修改格式：設 代號 出場 價格\n例：設 2330 出場 920\n也可以改：壓力 1100、支撐 900、前高 1000",
 }
 HELP = ("🤖 股票追蹤\n"
         "━━━━━━━━━━━━━━\n"
+        "按下方「股票」，裡面有：\n"
         "📥 追蹤/買入\n"
         "　輸入股票，之後可以選：\n"
         "　・還沒買 → 僅追蹤\n"
@@ -815,7 +816,7 @@ HELP = ("🤖 股票追蹤\n"
         "　不再追蹤，已持股的也會一起移除\n"
         "📋 追蹤清單　看目前追蹤的股票\n"
         "🔍 查價　輸入代號看成交價\n"
-        "➕ 更多\n"
+        "按下方「更多」，裡面有：\n"
         "　・✏️ 調價　改出場、支撐、壓力、前高\n"
         "　・🧹 清畫面　只留釘選的追蹤清單\n"
         "　・❓ 說明　看這份說明\n"
@@ -874,7 +875,7 @@ def handle(text, h, cid=None):
         codes = parse_quote_codes(w[1:])
         if not codes:
             return ("查價格式：查價 2330\n一次查多檔：查價 2330 2317\n"
-                    "晨報的指數期貨：查價 那斯達克 日經\n也可以按下方「查價」按鈕"), False
+                    "晨報的指數期貨：查價 那斯達克 日經\n也可以按「股票」→「查價」"), False
         return quote_report(codes), False
     if cmd == "持股":
         q = quotes_quick(h, 10)
@@ -1538,6 +1539,11 @@ def _handle_message(m, state, asked):
                 owner[1] = save_holdings(OWNER, owner[0], owner[1], users)      # 結果與提示都顯示完，看板最後更新
             return
     me = get(cid)
+    if text == "股票":                                          # 股票相關的按鈕收在這裡：追蹤/買入、取消追蹤/賣出、追蹤清單、查價
+        SESSIONS.pop(cid, None)
+        MENU_WAIT[cid] = True
+        TRACK[cid] = [m.get("message_id"), send_kb(cid, "📊 股票\n要做什麼？", _kb([list(r) for r in STOCK_ROWS] + [["取消"]]))]
+        return
     if text == "更多":                                          # 少用的功能收在這裡：調價、說明、清畫面（管理者再多一顆「管理者」）
         SESSIONS.pop(cid, None)
         MENU_WAIT[cid] = True
