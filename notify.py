@@ -33,10 +33,12 @@ def _chunks(blocks, limit=3500):
     return out
 
 
-_BOT_KB = {"keyboard": [[{"text": "追蹤"}, {"text": "移除"}], [{"text": "追蹤清單"}, {"text": "調價"}],
+# 下方按鍵：一定要跟 intraday.py 的 KEYBOARD／KEYBOARD_OWNER 完全一樣，
+# 不然每次推播都會把按鍵換成另一套（11/11 發生過：推播後「期貨」按鈕消失、「追蹤/買入」變成「追蹤」）
+_BOT_KB = {"keyboard": [[{"text": "追蹤/買入"}, {"text": "取消追蹤/賣出"}], [{"text": "追蹤清單"}, {"text": "調價"}],
                         [{"text": "查價"}, {"text": "說明"}], [{"text": "清畫面"}]],
            "resize_keyboard": True, "is_persistent": True}
-_OWNER_KB = {"keyboard": _BOT_KB["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],
+_OWNER_KB = {"keyboard": _BOT_KB["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "期貨"}, {"text": "管理者"}]],
              "resize_keyboard": True, "is_persistent": True}
 
 
