@@ -25,7 +25,7 @@ concurrency:                 # 15:30 的掃描還沒跑完時，16:00 的排程�
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90   # 11/11 實測：個股下載＋證交所成交量超過 45 分鐘被強制取消，沒有存下結果
     steps:
       - uses: actions/checkout@v4
       - name: 判斷這次要不要跑（night_gate）
