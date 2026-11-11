@@ -1,6 +1,6 @@
 """futures_guard.py — 台指期風控提醒（只私訊管理者，不發群組）
 
-1. Telegram 按鈕「期貨」：開倉/加碼、平倉/減碼、部位、停利/停損、行情、修正價格、上限設定、掃蕩紀錄（部位由你輸入，機器人不會下單）
+1. Telegram 按鈕「期貨」：開倉/加碼、平倉/減碼、部位、行情、修正價格（含改停損/停利）、掃蕩紀錄、上限設定（部位由你輸入，機器人不會下單）
 2. 背景監控（Render，bot_server.py 啟動）：有部位時每 20 秒抓期交所報價，算已實現＋浮動損益
    - 單日虧損達上限 70% 提醒一次、達上限每 5 分鐘一直提醒
    - 部位超過上限（大台等值口數）提醒
@@ -471,7 +471,7 @@ def handle(cid, text, mid0, ctx):
         FG_S[cid] = {"flow": "menu"}
         S[cid] = {"flow": "fut"}
         TRACK[cid] = [mid0]
-        ask("📈 期貨\n要做什麼？", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定", "掃蕩紀錄"]])
+        ask("📈 期貨\n要做什麼？", [["開倉/加碼", "平倉/減碼"], ["部位", "行情"], ["修正價格", "掃蕩紀錄"], ["上限設定"]])
         return True
 
     TRACK.setdefault(cid, []).append(mid0)
@@ -521,7 +521,7 @@ def handle(cid, text, mid0, ctx):
                 finish(["價位暫時查不到", type(e).__name__])
         elif t in ("修正", "修正價格"):                                     # 輸入錯誤或測試用：改成本價、改口數、今日損益歸零
             FG_S[cid] = {"flow": "fix", "step": "what"}
-            ask("要修正什麼？", [["改成本價", "改口數"], ["今日損益歸零"]])
+            ask("要修正什麼？", [["改成本價", "改口數"], ["改停損/停利", "今日損益歸零"]])
         elif t in ("風控設定", "上限設定"):
             finish(limits_lines())
         elif t == "掃蕩紀錄":                                              # 每次掃蕩提醒自動記錄，之後統計順勢／逆勢哪個好用
@@ -531,7 +531,7 @@ def handle(cid, text, mid0, ctx):
             except Exception as e:
                 finish(["掃蕩紀錄暫時查不到", type(e).__name__])
         else:
-            ask("請按下面的按鈕", [["開倉/加碼", "平倉/減碼"], ["部位", "停利/停損"], ["行情", "修正價格"], ["上限設定", "掃蕩紀錄"]])
+            ask("請按下面的按鈕", [["開倉/加碼", "平倉/減碼"], ["部位", "行情"], ["修正價格", "掃蕩紀錄"], ["上限設定"]])
         return True
 
     if flow == "open":
@@ -584,6 +584,12 @@ def handle(cid, text, mid0, ctx):
             if t == "今日損益歸零":
                 f.update(step="sure")
                 ask(f"今日已實現 {st['realized']:+,.0f}\n要歸零嗎？\n（部位不會動）", [["確定歸零"]])
+            elif t == "改停損/停利":                                          # 原本的「停利/停損」併到這裡
+                if not st["positions"]:
+                    finish(notice="目前沒有期貨部位")
+                else:
+                    FG_S[cid] = {"flow": "stop", "step": "pick"}
+                    ask("哪一筆？", [[label(p)] for p in st["positions"]])
             elif t in ("改成本價", "改口數"):
                 if not st["positions"]:
                     finish(notice="目前沒有期貨部位")
@@ -591,7 +597,7 @@ def handle(cid, text, mid0, ctx):
                     f.update(step="pick", what="avg" if t == "改成本價" else "qty")
                     ask("哪一筆？", [[label(p)] for p in st["positions"]])
             else:
-                ask("請按下面的按鈕", [["改成本價", "改口數"], ["今日損益歸零"]])
+                ask("請按下面的按鈕", [["改成本價", "改口數"], ["改停損/停利", "今日損益歸零"]])
             return True
         if step == "sure":
             if t == "確定歸零":
