@@ -123,6 +123,8 @@ class BarBuilder:
 class Engine:
     def __init__(self, levels=None):
         self.levels = {k: v for k, v in (levels or {}).items() if k in STORED and v}
+        self.pivot = (levels or {}).get("pivot") or None   # 基準價＝前一個日盤 (高+低+收)/3；收盤在它上面算偏多，下面算偏空
+        self.last_c = None                                 # (盤別, 最近一根收盤)，日盤結束時算基準價用
         self.pending = []
         self.done = set()
         self.skey = None
@@ -143,6 +145,8 @@ class Engine:
             return False
         pre = "day" if sess == "0" else "night"
         self.levels[pre + "_hi"], self.levels[pre + "_lo"] = hi, lo
+        if sess == "0" and self.last_c and self.last_c[0] == "0":
+            self.pivot = (hi + lo + self.last_c[1]) / 3
         if sess == "0":
             self.levels.pop("or_hi", None)
             self.levels.pop("or_lo", None)
@@ -170,14 +174,19 @@ class Engine:
 
     def _sweep_text(self, s, bar, ratio=None):
         up = s["dir"] == "short"
-        trend = bar["c"] - self.sess_open if self.sess_open else 0
-        if self.nbars <= 1:
-            tag = "剛開盤 走勢未定"
-        elif abs(trend) < 30:
-            tag = "今日走勢 盤整"
-        else:
+        if self.pivot:                                        # 收盤在前一個日盤的基準價上面＝偏多，下面＝偏空
+            trend = bar["c"] - self.pivot
             with_trend = (trend < 0) if up else (trend > 0)
-            tag = f"今日{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
+            tag = f"{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
+        else:
+            trend = bar["c"] - self.sess_open if self.sess_open else 0
+            if self.nbars <= 1:
+                tag = "剛開盤 走勢未定"
+            elif abs(trend) < 30:
+                tag = "今日走勢 盤整"
+            else:
+                with_trend = (trend < 0) if up else (trend > 0)
+                tag = f"今日{'偏多' if trend > 0 else '偏空'}（{'順勢' if with_trend else '逆勢'}）"
         sign = "高" if up else "低"
         L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", f"級別 {s['tier']}價位", self._name_line(s)]
         if s["tier"] == "小":
@@ -210,6 +219,7 @@ class Engine:
         if bar.get("partial"):
             return out
         skey = (bar["day"], bar["sess"])
+        self.last_c = (bar["sess"], bar["c"])
         if skey != self.skey:
             self.skey, self.sess_open, self.pending, self.or_bars, self.nbars = skey, None, [], [], 0
             self.hist, self.swings, self.vols, self.exc = [], [], [], {}
@@ -367,7 +377,7 @@ def load_levels(now=None):
         with open(LEVEL_FILE, encoding="utf-8") as f:
             j = json.load(f)
         if now - datetime.fromisoformat(j["asof"]) < timedelta(days=4):
-            return {k: v for k, v in j["levels"].items() if k in STORED}
+            return {k: v for k, v in j["levels"].items() if k in STORED or k == "pivot"}
     except Exception:
         pass
     return {}
@@ -396,6 +406,7 @@ def seed_levels(now, fetch=fetch_zip, files=3):
     """機器人剛啟動、沒有存檔時：從期交所最近幾天的逐筆檔，算出最近一個完整的日盤／夜盤高低。
     一行一行讀、不把整個檔案放進記憶體（Render 只有 512MB）"""
     seg = {}                                      # {(盤別, 起算日, 到期月): [高, 低]}
+    lastt, lastp = {}, {}
     got, d = 0, now.date()
     for _ in range(8):
         if got >= files:
@@ -418,6 +429,8 @@ def seed_levels(now, fetch=fetch_zip, files=3):
                     continue
                 if 84500 <= t <= 134500:
                     k = ("0", day, row[2].strip())
+                    if t >= lastt.get(k, 0):
+                        lastt[k], lastp[k] = t, px          # 日盤最後一筆成交價＝收盤價
                 elif t >= 150000:
                     k = ("1", day, row[2].strip())
                 elif t < 50000:
@@ -442,9 +455,13 @@ def seed_levels(now, fetch=fetch_zip, files=3):
         if ends:
             day = max(ends)
             best[s] = (day, ends[day][1], ends[day][2])
+            if s == "0" and (s, day, ends[day][0]) in lastp:
+                best["close"] = lastp[(s, day, ends[day][0])]
     out = {}
     if "0" in best:
         out["day_hi"], out["day_lo"] = best["0"][1], best["0"][2]
+        if "close" in best:
+            out["pivot"] = (best["0"][1] + best["0"][2] + best["close"]) / 3
     if "1" in best:
         out["night_hi"], out["night_lo"] = best["1"][1], best["1"][2]
     return out
@@ -478,14 +495,18 @@ class Runner:
         self.send, self.quote, self.seed = send, quote, seed
         self.bb = BarBuilder()
         self.eng = Engine(load_levels())
+        self.eng.pivot = self.eng.pivot or None
         self.seeded = False
         self.hello = False
         self.errs = 0
         self.last_q = None
         self.last_at = None
 
+    def _save(self, now):
+        save_levels({**self.eng.levels, **({"pivot": self.eng.pivot} if self.eng.pivot else {})}, now)
+
     def level_lines(self, now=None):
-        """目前所有價位（含這個盤到目前為止的高低），給「期貨→價位」和開機卡片用"""
+        """目前所有價位（含這個盤到目前為止的高低），給「期貨→行情」和開機卡片用"""
         now = now or datetime.now(TZ)
         sess = G.session_of(now)
         L = []
@@ -497,6 +518,8 @@ class Runner:
         for k in ("day_hi", "day_lo", "night_hi", "night_lo", "or_hi", "or_lo"):
             if k in self.eng.levels:
                 L.append(f"{NAMES[k]} {f0(self.eng.levels[k])}")
+        if self.eng.pivot:
+            L.append(f"基準價 {f0(self.eng.pivot)}")
         if sess is None:
             L.insert(0, "目前沒開盤")
         return L
@@ -509,13 +532,16 @@ class Runner:
         if manual:                                  # 手動指定的價位（例：今天日盤高低，期交所檔案還沒出來時用）
             self.eng.levels.update(manual)
             print("掃蕩關鍵價位（手動）：", manual, flush=True)
-        if not all(k in self.eng.levels for k in ("day_hi", "night_hi")):
+        if not all(k in self.eng.levels for k in ("day_hi", "night_hi")) or not self.eng.pivot:
             try:
                 got = self.seed(now)
+                if got.get("pivot") and not self.eng.pivot:
+                    self.eng.pivot = got["pivot"]
                 for k, v in got.items():
-                    self.eng.levels.setdefault(k, v)
-                save_levels(self.eng.levels, now)
-                print("掃蕩關鍵價位：", {NAMES[k]: v for k, v in self.eng.levels.items()}, flush=True)
+                    if k != "pivot":
+                        self.eng.levels.setdefault(k, v)
+                self._save(now)
+                print("掃蕩關鍵價位：", {NAMES[k]: v for k, v in self.eng.levels.items()}, "基準價", self.eng.pivot, flush=True)
             except Exception as e:
                 print("掃蕩關鍵價位補算失敗：", repr(e)[:120], flush=True)
 
@@ -533,7 +559,7 @@ class Runner:
                         self.send(lines)
                         n += 1
                 if self.eng.close_session(sess, hi, lo):
-                    save_levels(self.eng.levels, now)
+                    self._save(now)
             return -1 if n == 0 else n
         q = self.quote(now)
         self.last_q, self.last_at = q, now
@@ -581,7 +607,7 @@ RUNNER = None
 
 
 def status_lines():
-    """「期貨→價位」：現價、今盤高低、各個關鍵價位"""
+    """「期貨→行情」：現價、今盤高低、各個關鍵價位"""
     if RUNNER is None:
         return ["掃蕩提醒還沒啟動"]
     now = datetime.now(TZ)
