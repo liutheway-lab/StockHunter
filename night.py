@@ -493,6 +493,12 @@ def run():
     now = datetime.now(ZoneInfo("Asia/Taipei"))
     ratios = cfg.TRANCHES
 
+    if now.weekday() < 5 and now.hour * 60 + now.minute < 15 * 60:
+        # 收盤前手動執行：大盤資料還是前一個交易日，等也等不到，只會白等 40 分鐘再逾時。
+        # 而且存下的結果會讓閘門以為「今天已掃描」，15:30 的正式排程就會被跳過。所以直接結束、不存結果。
+        print("現在還沒收盤（15:00 前），大盤資料是前一個交易日，這次不掃描、不存結果。請 15:30 後再手動執行。", flush=True)
+        return
+
     if now.weekday() == 0:       # 每週一：掃描前先附上說明書（新加入的人才看得到）
         try:
             from guide import build
