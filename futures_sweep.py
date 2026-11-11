@@ -506,22 +506,29 @@ class Runner:
         save_levels({**self.eng.levels, **({"pivot": self.eng.pivot} if self.eng.pivot else {})}, now)
 
     def level_lines(self, now=None):
-        """目前所有價位（含這個盤到目前為止的高低），給「期貨→行情」和開機卡片用"""
+        """目前所有價位，給「期貨→行情」和開機卡片用。照時間分組、組與組之間空一行"""
         now = now or datetime.now(TZ)
         sess = G.session_of(now)
-        L = []
+        lv = self.eng.levels
+        G_ = []                                                  # 每一組是一個 list
         if self.last_q and self.last_q.get("last") is not None and sess is not None:
-            L.append(f"現價 {f0(self.last_q['last'])}")
+            G_.append([f"現價 {f0(self.last_q['last'])}"])
         if sess is not None and self.bb.hi is not None and self.bb.lo is not None:
-            nm = "今日盤" if sess == "0" else "今夜盤"
-            L += [f"{nm}高 {f0(self.bb.hi)}", f"{nm}低 {f0(self.bb.lo)}"]
-        for k in ("day_hi", "day_lo", "night_hi", "night_lo", "or_hi", "or_lo"):
-            if k in self.eng.levels:
-                L.append(f"{NAMES[k]} {f0(self.eng.levels[k])}")
+            G_.append(["今日盤" if sess == "0" else "今夜盤", f"高 {f0(self.bb.hi)}", f"低 {f0(self.bb.lo)}"])
+        if "or_hi" in lv and "or_lo" in lv:
+            G_.append(["開盤30分", f"高 {f0(lv['or_hi'])}", f"低 {f0(lv['or_lo'])}"])
+        for pre, nm in (("day", "上個日盤"), ("night", "上個夜盤")):
+            if pre + "_hi" in lv and pre + "_lo" in lv:
+                G_.append([nm, f"高 {f0(lv[pre + '_hi'])}", f"低 {f0(lv[pre + '_lo'])}"])
         if self.eng.pivot:
-            L.append(f"基準價 {f0(self.eng.pivot)}")
+            G_.append([f"多空分界 {f0(self.eng.pivot)}", "（前一日盤 高低收 平均）"])
         if sess is None:
-            L.insert(0, "目前沒開盤")
+            G_.insert(0, ["目前沒開盤"])
+        L = []
+        for g in G_:
+            if L:
+                L.append("")
+            L += g
         return L
 
     def ensure_levels(self, now):
@@ -611,7 +618,7 @@ def status_lines():
     if RUNNER is None:
         return ["掃蕩提醒還沒啟動"]
     now = datetime.now(TZ)
-    return [f"📍 台指期價位 {now:%H:%M}"] + (RUNNER.level_lines(now) or ["還沒有價位資料"])
+    return [f"📍 台指期行情 {now:%H:%M}"] + (RUNNER.level_lines(now) or ["還沒有價位資料"])
 
 
 def loop(send):
