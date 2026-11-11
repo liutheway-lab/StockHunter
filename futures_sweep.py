@@ -3,7 +3,7 @@
 什麼是掃蕩：價格刺破一個關鍵高（低）點，把停損單掃掉，然後 5 分K 又收回去。
   掃上方：高點被刺破，5 分K 收在高點下方 → 留意做空
   掃下方：低點被刺破，5 分K 收在低點上方 → 留意做多
-關鍵價位（大價位）：上個日盤高低、上個夜盤高低、今天開盤 30 分鐘高低
+關鍵價位（大價位）：上個日盤高低、上個夜盤高低、今天開盤 30 分鐘高低、本盤（目前這個盤）到目前的高低（要形成 30 分鐘以上）
 盤中波段（小價位）：左右各 2 根 5 分K 都比它低（高）的點；只看最近 3 小時、離現價 150 點內，同方向同時只提醒一個
 提醒裡會標「大價位／小價位」，並附這根 5 分K 的成交量是近 20 根平均的幾倍（只是參考，不拿來過濾）
 兩段提醒：
@@ -35,7 +35,8 @@ ZIP_URL = "https://www.taifex.com.tw/file/taifex/Dailydownload/DailydownloadCSV/
 HEAD = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Referer": "https://www.taifex.com.tw/cht/3/dlFutPrevious30DaysSalesData"}
 NAMES = {"day_hi": "上個日盤高", "day_lo": "上個日盤低", "night_hi": "上個夜盤高", "night_lo": "上個夜盤低",
-         "or_hi": "今日開盤30分高", "or_lo": "今日開盤30分低"}
+         "or_hi": "今日開盤30分高", "or_lo": "今日開盤30分低", "sess_hi": "本盤高", "sess_lo": "本盤低"}
+STORED = ("day_hi", "day_lo", "night_hi", "night_lo", "or_hi", "or_lo")      # 會存檔的價位（本盤高低隨時在變，不存）
 SESS_NAME = {"0": "日盤", "1": "夜盤"}
 
 
@@ -120,7 +121,7 @@ class BarBuilder:
 # ───────────── 掃蕩判斷（純計算）─────────────
 class Engine:
     def __init__(self, levels=None):
-        self.levels = {k: v for k, v in (levels or {}).items() if k in NAMES and v}
+        self.levels = {k: v for k, v in (levels or {}).items() if k in STORED and v}
         self.pending = []
         self.done = set()
         self.skey = None
@@ -235,8 +236,18 @@ class Engine:
         fired = set()
         if not last_bar:
             busy = {s["name"] for s in self.pending}
-            for name, level in self.levels.items():
-                dk = (bar["day"], bar["sess"], name)
+            lv = dict(self.levels)
+            prev = self.hist[:-1]                       # 本盤高低（到上一根為止）：形成至少 30 分鐘才算，不然剛創高就被自己掃，沒意義
+            if prev:
+                hi_i = max(range(len(prev)), key=lambda i: (prev[i]["h"], -i))
+                lo_i = min(range(len(prev)), key=lambda i: (prev[i]["l"], i))
+                cur_i = len(self.hist) - 1
+                if cur_i - hi_i >= _cfg("FUT_SWEEP_SESS_AGE", 6):
+                    lv["sess_hi"] = prev[hi_i]["h"]
+                if cur_i - lo_i >= _cfg("FUT_SWEEP_SESS_AGE", 6):
+                    lv["sess_lo"] = prev[lo_i]["l"]
+            for name, level in lv.items():
+                dk = (bar["day"], bar["sess"], name if not name.startswith("sess_") else f"{name}@{level}")
                 if name in busy or dk in self.done:
                     continue
                 up = name.endswith("_hi")
@@ -309,7 +320,7 @@ def load_levels(now=None):
         with open(LEVEL_FILE, encoding="utf-8") as f:
             j = json.load(f)
         if now - datetime.fromisoformat(j["asof"]) < timedelta(days=4):
-            return {k: v for k, v in j["levels"].items() if k in NAMES}
+            return {k: v for k, v in j["levels"].items() if k in STORED}
     except Exception:
         pass
     return {}
