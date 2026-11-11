@@ -97,6 +97,9 @@
 | `index_probe.py` | 探測證交所指數即時資料有沒有成交量欄位（一次性；結果：沒有） |
 | `turnover_probe.py` | 把全部個股即時報價加總，估算全市場成交金額，跟 App 的總量比對（一次性，盤中手動執行） |
 | `asia_probe.py` | 探測日經有沒有比 Yahoo 指數更即時的來源（一次性，手動執行 `asia_probe.yml`，結果私訊管理者） |
+| `taifex_probe.py` | 探測期交所「期貨每日成交資料」能不能自動下載、能回溯到多久（為了台指期回測，一次性，手動執行 `taifex_probe.yml`，結果私訊管理者） |
+| `futures_sweep.py` | 台指期「流動性掃蕩」提醒：價格刺破 上個日盤／夜盤高低、開盤30分高低後 5 分K 收回，先提醒一次，之後連 2 根 5 分K 沒再創新高（低）再提醒「確認」，又創新高（低）就提醒「失敗」。只私訊管理者、不下單；Render 環境變數 `SWEEP_ON=0` 可關閉 |
+| `tx_collect.py` | 每天自動收集台指期近月 5 分 K（日盤＋夜盤）存到 `data/tx_5m.csv`，累積做訊號回測用（期交所只提供最近約 30 天，所以要每天收；`tx_collect.yml` 每個交易日 18:00 自動跑，第一次手動跑、往回幾天填 45） |
 | `crash_study.py` | 大回檔研究：加權指數跌離 60 日高點 ≥15% 的事件，驗證預警訊號與快速確認條件（一次性，手動執行 `crash_study.yml`，結果私訊管理者） |
 | `futures_test.py` | 台指期貨報價測試（TAIFEX MIS） |
 | `fugle_test.py` | 富果報價測試 |
@@ -105,7 +108,7 @@
 
 **GitHub Actions 排程**（`.github/workflows/`）
 
-`morning.yml`、`intraday.yml`、`night.yml`（15:30、16:00、16:30，由閘門決定要不要真的掃）、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`、`history_check.yml`、`group_probe.yml`、`index_probe.yml`、`turnover_probe.yml`、`crash_study.yml`、`asia_probe.yml`（最後六個是一次性探測，用完可以刪）
+`morning.yml`、`intraday.yml`、`night.yml`（15:30、16:00、16:30，由閘門決定要不要真的掃）、`volume_probe.yml`、`volume_profile.yml`、`commands.yml`、`guide.yml`、`ping.yml`、`backtest.yml`、`futures_test.yml`、`fugle_test.yml`、`history_check.yml`、`group_probe.yml`、`index_probe.yml`、`turnover_probe.yml`、`crash_study.yml`、`asia_probe.yml`、`taifex_probe.yml`（最後七個是一次性探測，用完可以刪）、`tx_collect.yml`（台指期資料收集，要留著）
 
 **部署設定**
 
