@@ -146,6 +146,17 @@ class Engine:
         self.pending, self.swings = [], []
         return True
 
+    def retire_passed(self, day, sess, hi, lo):
+        """機器人剛啟動（或重啟）時：這個盤已經超過（跌破）的價位，不知道當時有沒有提醒過，一律當成用掉了，避免重複提醒"""
+        mn = _cfg("FUT_SWEEP_MIN", 3)
+        gone = []
+        for name, level in self.levels.items():
+            up = name.endswith("_hi")
+            if (up and hi is not None and hi >= level + mn) or ((not up) and lo is not None and lo <= level - mn):
+                self.done.add((day, sess, name))
+                gone.append(name)
+        return gone
+
     @staticmethod
     def _name_line(s):
         return f"{NAMES[s['name']]} {f0(s['level'])}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {f0(s['level'])}"
@@ -220,13 +231,13 @@ class Engine:
             s["n"] += 1
             broke = (bar["h"] > s["ext"]) if up else (bar["l"] < s["ext"])
             back = (bar["c"] >= s["level"]) if up else (bar["c"] <= s["level"])
-            who = f"（{'空' if up else '多'}·{s['tier']}）"
+            who = f"（{'做空' if up else '做多'}）"
             if broke or back:
                 why = ("又創高 " if up else "又創低 ") + f0(bar["h"] if up else bar["l"]) if broke else \
                       ("收盤又站上 " if up else "收盤又跌破 ") + f0(s["level"])
-                out.append([f"❌ 掃蕩失敗{who}", self._name_line(s), why, "這個訊號不用看了"])
+                out.append([f"❌ 掃蕩失敗{who}", f"級別 {s['tier']}價位", self._name_line(s), why, "這個訊號不用看了"])
             elif s["n"] >= need:
-                out.append([f"✅ 掃蕩確認{who}", self._name_line(s),
+                out.append([f"✅ 掃蕩確認{who}", f"級別 {s['tier']}價位", self._name_line(s),
                             f"連 {need} 根 沒再創{'高' if up else '低'}", f"現價 {f0(bar['c'])}",
                             f"停損參考 {f0(s['ext'])} {'上' if up else '下'}"])
             else:
@@ -272,6 +283,7 @@ class Engine:
                     continue
                 self.exc.pop(xk, None)                                              # 這根收回來了
                 if ex is not None and ex.get("dead"):
+                    self.done.add(dk)                                               # 已經站上（跌破）很久才回來：這個價位在這個盤已經被用掉了，不再提醒
                     continue
                 far = max(bar["h"], ex["ext"]) if (up and ex) else bar["h"] if up else (min(bar["l"], ex["ext"]) if ex else bar["l"])
                 if (up and far < level + mn) or ((not up) and far > level - mn):
@@ -516,6 +528,9 @@ class Runner:
             self.last_q = q
             L = ["✅ 掃蕩提醒運作中", "盤中高低 " + ("有" if q.get("high") is not None and q.get("low") is not None else "沒有（針會漏）")]
             self.bb.hi, self.bb.lo = (self.bb.hi if self.bb.hi is not None else q.get("high")), (self.bb.lo if self.bb.lo is not None else q.get("low"))
+            gone = self.eng.retire_passed(G.trade_day(now), G.session_of(now), self.bb.hi, self.bb.lo)
+            if gone:
+                print("重啟後視為已用掉的價位：", [NAMES[k] for k in gone], flush=True)
             L += self.level_lines(now) or ["關鍵價位 還沒有"]
             self.send(L)
             n += 1
