@@ -349,6 +349,7 @@ class Runner:
         self.bb = BarBuilder()
         self.eng = Engine(load_levels())
         self.seeded = False
+        self.hello = False
         self.errs = 0
 
     def ensure_levels(self, now):
@@ -386,6 +387,13 @@ class Runner:
                     save_levels(self.eng.levels, now)
             return -1 if n == 0 else n
         q = self.quote(now)
+        if not self.hello and q.get("last") is not None:        # 開機後第一次抓到報價：私訊你一張「運作中」卡片
+            self.hello = True
+            L = ["✅ 掃蕩提醒運作中", f"台指近月 {f0(q['last'])}",
+                 "盤中高低 " + ("有" if q.get("high") is not None and q.get("low") is not None else "沒有（針會漏）")]
+            L += [f"{NAMES[k]} {f0(v)}" for k, v in self.eng.levels.items()] or ["關鍵價位 還沒有"]
+            self.send(L)
+            n += 1
         for b in self.bb.feed(now, q):
             for lines in self.eng.on_bar(b):
                 self.send(lines)
