@@ -409,7 +409,7 @@ def handle(cid, text, mid0, ctx):
         FG_S[cid] = {"flow": "menu"}
         S[cid] = {"flow": "fut"}
         TRACK[cid] = [mid0]
-        ask("📈 期貨風控\n要做什麼？", [["開倉", "平倉"], ["部位", "停損"], ["風控設定"]])
+        ask("📈 期貨風控\n要做什麼？", [["開倉", "平倉"], ["部位", "停損"], ["價位", "風控設定"]])
         return True
 
     TRACK.setdefault(cid, []).append(mid0)
@@ -451,10 +451,16 @@ def handle(cid, text, mid0, ctx):
                 ask("哪一筆？", [[label(p)] for p in st["positions"]])
         elif t == "部位":
             finish(status_lines(st, current_price()))
+        elif t == "價位":                                    # 現價、今盤高低、各個關鍵價位（掃蕩提醒在盯的）
+            try:
+                import futures_sweep as SW
+                finish(SW.status_lines())
+            except Exception as e:
+                finish(["價位暫時查不到", type(e).__name__])
         elif t == "風控設定":
             finish(limits_lines())
         else:
-            ask("請按下面的按鈕", [["開倉", "平倉"], ["部位", "停損"], ["風控設定"]])
+            ask("請按下面的按鈕", [["開倉", "平倉"], ["部位", "停損"], ["價位", "風控設定"]])
         return True
 
     if flow == "open":
