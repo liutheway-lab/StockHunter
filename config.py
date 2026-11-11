@@ -147,3 +147,7 @@ FUT_EQ = {"大台": 1.0, "小台": 0.25, "微台": 0.05}        # 換算成大�
 FUT_SWEEP_BARS = 2               # 掃蕩收回後，要再看幾根 5 分K 才算「確認」
 FUT_SWEEP_MIN = 3                # 刺破關鍵價位至少幾點才算掃蕩（太小是雜訊）
 FUT_SWEEP_POLL = 5               # 開盤時每幾秒抓一次期交所報價（用來組 5 分K）
+FUT_SWEEP_SWING_ON = True        # 是否也看盤中波段高低（小價位）；不想要就改 False
+FUT_SWEEP_SWING_N = 2            # 波段高（低）：左右各幾根 5 分K 都比它低（高）
+FUT_SWEEP_SWING_AGE = 36         # 波段高低只看最近幾根 5 分K 內形成的（36 根＝3 小時）
+FUT_SWEEP_SWING_DIST = 150       # 收回時離波段價位超過幾點就不提醒
