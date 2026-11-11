@@ -1,35 +1,19 @@
 {
- "generated_at": "2026-11-10 15:50",
- "data_date": "2026-11-10",
- "layer": 5,
- "layer_name": "強空頭",
- "active": [],
+ "generated_at": "2026-11-11 15:51",
+ "data_date": "2026-11-11",
+ "layer": 4,
+ "layer_name": "空頭",
+ "active": [
+  "breakout",
+  "dry"
+ ],
  "risk": false,
- "stab_ok": false,
+ "stab_ok": true,
  "hits": {
   "pullback": [],
   "flag": [],
   "breakout": [],
-  "dry": [
-   {
-    "code": "2884",
-    "name": "玉山金",
-    "suffix": ".TW",
-    "industry": "金融保險業",
-    "market": "上市",
-    "close": 46.95,
-    "key": 50.1,
-    "stop1": 44.35,
-    "target": 50.1,
-    "turnover": 1573618091,
-    "score": 6.9,
-    "broke": false,
-    "vl_low": 37.75,
-    "vl_date": "08/19",
-    "vl_vol": 103424,
-    "vl_side": "撐"
-   }
-  ]
+  "dry": []
  },
  "watch": {
   "pullback": [],
