@@ -99,6 +99,7 @@ IDX_HOLIDAYS = {          # 該市場休市的平日（只要寫會影響「缺�
     "^KS11": {"2026-12-25", "2026-12-31", "2027-01-01"},
 }
 SUSPECT = {}              # {代號: 說明}：前收可能缺資料，不列入分數
+ASIA_TS = {}              # {代號: 最後一筆資料的台灣時間}：Yahoo 的亞洲指數常延遲約 20 分鐘，標題會標出「資料到幾點」
 NAVER_URL = "https://m.stock.naver.com/api/index/KOSPI/basic"      # 韓國 Naver 證券：KOSPI 現價與前日比
 
 
@@ -133,13 +134,15 @@ def get_quote_index(symbol):
     tz = IDX_TZ[symbol]
     d = yf.Ticker(symbol).history(period="10d", interval="1d").dropna(subset=["Close"])
     closes = {t.date(): float(c) for t, c in zip(d.index, d["Close"])}           # 日線的日期已經是當地日期
-    fives = {}
+    fives, five_ts = {}, {}
+    ASIA_TS.pop(symbol, None)
     try:
         m = yf.Ticker(symbol).history(period="5d", interval="5m").dropna(subset=["Close"])
         if len(m):
             mi = m.index.tz_convert(tz) if m.index.tz is not None else m.index.tz_localize("UTC").tz_convert(tz)
             for t, c in zip(mi, m["Close"]):                                   # 時間由早到晚，同一天最後一筆就是當天收盤（盤中＝最新價）
                 fives[t.date()] = float(c)
+                five_ts[t.date()] = t
     except Exception as e:
         print(symbol, "5 分 K 抓不到：", repr(e))
     print(symbol, "日線：", [(f"{k:%m/%d}", round(v, 2)) for k, v in list(closes.items())[-4:]],
@@ -149,6 +152,7 @@ def get_quote_index(symbol):
     dlast, mlast = max(closes) if closes else None, max(fives) if fives else None
     if mlast is not None and (dlast is None or mlast > dlast):
         cur_date, curr = mlast, fives[mlast]
+        ASIA_TS[symbol] = five_ts[mlast].tz_convert("Asia/Taipei").tz_localize(None)
     else:
         cur_date, curr = dlast, closes[dlast]
     merged = dict(fives)
@@ -370,6 +374,9 @@ def run():
         head = f"*{title}*"
         if gdate:
             head += f"　{gdate:%m/%d}"
+            tss = [ASIA_TS[s] for _, s, c, _, _ in rows if c is not None and s in ASIA_TS and ASIA_TS[s].date() == now.date()]
+            if tss:
+                head += f" 資料到{min(tss):%H:%M}"        # 例如「11/11 資料到08:15」：日經盤中數字比實際慢約 20 分鐘
             if (today - gdate).days > 4:
                 head += "　⚠️資料較舊（可能休市）"
 
