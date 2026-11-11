@@ -766,7 +766,7 @@ def _levels_for(code, suffix, price):
                     return {"stop": stop, "target": r["target"], "key": st.tick(r["key"]), "sup": sup, "sup_why": sup_why,
                             "why": f"依{cfg.STRATEGY_NAMES[r['name']]}型態", "pattern": True,
                             "pname": cfg.STRATEGY_NAMES[r['name']],
-                            "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、壓力、前高\n依攻擊日規則自動算出\n要改請按「調價」"}
+                            "note": f"符合「{cfg.STRATEGY_NAMES[r['name']]}」盤整型態\n出場、壓力、前高\n依攻擊日規則自動算出\n要改請按「更多」→「調價」"}
     except Exception as e:
         print(f"{code} 計算價位失敗：{e!r}")
     key = volume_key(raw, price) if raw is not None else None
@@ -775,7 +775,7 @@ def _levels_for(code, suffix, price):
     sup, sup_why = support_for(raw, price) if raw is not None else (None, "")
     return {"stop": st.tick(price * (1 - BUY_STOP_PCT), "ceil"), "target": None, "key": key, "sup": sup, "sup_why": sup_why,
             "why": f"買價下 {BUY_STOP_PCT * 100:.0f}%", "pattern": False,
-            "note": "目前不是盤整型態\n（強勢續攻）\n壓力留空\n" + kline + "\n要改請按「調價」"}
+            "note": "目前不是盤整型態\n（強勢續攻）\n壓力留空\n" + kline + "\n要改請按「更多」→「調價」"}
 
 
 # ================= 指令 =================
@@ -783,11 +783,12 @@ def _levels_for(code, suffix, price):
 MENU = []                      # 不再用輸入框旁的「Menu」選單，改用下方四個按鈕
 ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "持股", "追蹤清單": "持股", "清單": "持股",
          "track": "追蹤", "remove": "移除", "buy": "買", "set": "設", "quote": "查價", "price": "查價"}
-KEYBOARD = {"keyboard": [[{"text": "追蹤/買入"}, {"text": "取消追蹤/賣出"}], [{"text": "追蹤清單"}, {"text": "調價"}], [{"text": "查價"}, {"text": "說明"}],
-                         [{"text": "清畫面"}]],
+KEYBOARD = {"keyboard": [[{"text": "追蹤/買入"}, {"text": "取消追蹤/賣出"}], [{"text": "追蹤清單"}, {"text": "查價"}],
+                         [{"text": "更多"}]],                      # 調價、說明、清畫面、（管理者）收進「更多」
             "resize_keyboard": True, "is_persistent": True}
-KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "期貨"}, {"text": "管理者"}]],       # 只有管理者看得到「期貨」「管理者」按鈕
+KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "期貨"}, {"text": "更多"}]],       # 只有管理者看得到「期貨」；「管理者」在「更多」裡
                   "resize_keyboard": True, "is_persistent": True}
+MORE_ROWS = [["調價", "說明"], ["清畫面"]]                         # 「更多」選單的按鈕（管理者再多一顆「管理者」）
 # 追蹤清單是空的時的提示（一句一行，不切斷）與按鍵
 EMPTY_TRACK_MSG = "目前沒有追蹤清單唷😊\n趕緊加入股票 按讚 訂閱 開啟小鈴噹唷！🔔"
 LIKE_BTN = "按讚 訂閱 開啟小鈴噹🔔"
@@ -813,9 +814,11 @@ HELP = ("🤖 股票追蹤\n"
         "📤 取消追蹤/賣出\n"
         "　不再追蹤，已持股的也會一起移除\n"
         "📋 追蹤清單　看目前追蹤的股票\n"
-        "✏️ 調價　改出場、支撐、壓力、前高\n"
         "🔍 查價　輸入代號看成交價\n"
-        "🧹 清畫面　只留釘選的追蹤清單\n"
+        "➕ 更多\n"
+        "　・✏️ 調價　改出場、支撐、壓力、前高\n"
+        "　・🧹 清畫面　只留釘選的追蹤清單\n"
+        "　・❓ 說明　看這份說明\n"
         "━━━━━━━━━━━━━━\n"
         "💡 停損不一定要設，設了跌破會提醒你")
 
@@ -965,7 +968,7 @@ def handle(text, h, cid=None):
         msg = card
         if lv:
             msg += f"\n\n🧭 策略判斷\n{lv['note']}"
-        return msg + "\n\n要改價位，按「調價」", True
+        return msg + "\n\n要改價位，按「更多」→「調價」", True
     if cmd == "移除" and len(w) >= 2:                              # 不再追蹤（已持股的也一樣移除）
         if w[1] == "全部":
             if not h:
@@ -1154,7 +1157,7 @@ def _choose_text(code, name, buy):
     return (head + "\n\n要自己設定價格嗎？\n"
             "・設定價格：逐一設出場、支撐、壓力、前高\n"
             "・不設定：出場價留空，支撐、壓力、前高用系統自動算的\n"
-            "之後都可以按「調價」改")
+            "之後都可以按「更多」→「調價」改")
 
 
 def guided(cid, text, h):
@@ -1423,7 +1426,7 @@ def _handle_message(m, state, asked):
         PENDING[cid] = (frm.get("first_name") or "朋友").strip()
         if cid not in asked:
             asked.add(cid)
-            send_kb(OWNER, f"👤 {name or '有人'} 想使用持股追蹤\n請按「管理者」→「待開通名單」開通")
+            send_kb(OWNER, f"👤 {name or '有人'} 想使用持股追蹤\n請按「更多」→「管理者」→「待開通名單」開通")
         return
     me = get(cid)
     if text == LIKE_BTN:                                  # 按讚訂閱：回一句感謝，顯示幾秒後連同點按的訊息與回覆一起清掉
@@ -1535,6 +1538,14 @@ def _handle_message(m, state, asked):
                 owner[1] = save_holdings(OWNER, owner[0], owner[1], users)      # 結果與提示都顯示完，看板最後更新
             return
     me = get(cid)
+    if text == "更多":                                          # 少用的功能收在這裡：調價、說明、清畫面（管理者再多一顆「管理者」）
+        SESSIONS.pop(cid, None)
+        MENU_WAIT[cid] = True
+        rows = [list(r) for r in MORE_ROWS]
+        if cid == OWNER:
+            rows[-1].append("管理者")
+        TRACK[cid] = [m.get("message_id"), send_kb(cid, "更多功能\n要做什麼？", _kb(rows + [["取消"]]))]
+        return
     if text in ("清畫面", "清除畫面", "清空"):                    # 畫面只剩一則看板（釘選），不再多送任何提示
         SESSIONS.pop(cid, None)
         MENU_WAIT.pop(cid, None)
