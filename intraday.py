@@ -786,7 +786,7 @@ ALIAS = {"start": "說明", "help": "說明", "指令": "說明", "holdings": "�
 KEYBOARD = {"keyboard": [[{"text": "追蹤/買入"}, {"text": "取消追蹤/賣出"}], [{"text": "追蹤清單"}, {"text": "調價"}], [{"text": "查價"}, {"text": "說明"}],
                          [{"text": "清畫面"}]],
             "resize_keyboard": True, "is_persistent": True}
-KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "管理者"}]],       # 只有管理者看得到「管理者」按鈕
+KEYBOARD_OWNER = {"keyboard": KEYBOARD["keyboard"][:-1] + [[{"text": "清畫面"}, {"text": "期貨"}, {"text": "管理者"}]],       # 只有管理者看得到「期貨」「管理者」按鈕
                   "resize_keyboard": True, "is_persistent": True}
 # 追蹤清單是空的時的提示（一句一行，不切斷）與按鍵
 EMPTY_TRACK_MSG = "目前沒有追蹤清單唷😊\n趕緊加入股票 按讚 訂閱 開啟小鈴噹唷！🔔"
@@ -1438,6 +1438,18 @@ def _handle_message(m, state, asked):
         def tidy(*extra):                             # 把這一次管理者操作的中間訊息全部清掉
             delete_msgs(cid, TRACK.pop(cid, []) + [mid0] + list(extra))
 
+        FG = None
+        try:                                          # 期貨風控（只有管理者）：開倉、平倉、部位、停損
+            import futures_guard as FG
+            if FG.handle(cid, text, mid0, {"send": send_kb, "kb": _kb, "pre": pre, "delete": delete_msgs,
+                                           "SESSIONS": SESSIONS, "TRACK": TRACK, "alert": lambda t: send_to(OWNER, t)}):
+                return
+        except Exception as e:
+            print("期貨風控處理失敗：", repr(e))
+            if FG:
+                FG.reset(cid, {"SESSIONS": SESSIONS})
+            send_kb(cid, "期貨這一步出錯了\n已取消，請再按一次「期貨」")
+            return
         adm = ADMIN.get(cid)
         if adm:                                       # 正在設定某位朋友的額度（引導：按鈕或自己輸入）
             u = adm["uid"]
