@@ -36,7 +36,7 @@ KINDS = ["大台", "小台", "微台"]
 SIDES = ["多", "空"]
 
 _lock = threading.RLock()
-_STATE = {"data": None, "loaded_at": 0.0, "warned": False, "dirty": False}
+_STATE = {"data": None, "loaded_at": 0.0, "warned": False, "dirty": False, "err": ""}
 FG_S = {}            # {chat id: 目前問到哪一步}
 
 
@@ -142,6 +142,14 @@ def evaluate(st, price, now):
     if ex > cfg.FUT_MAX_EQ + 1e-9:
         out.append((f"size-{day}-{ex:g}", f"⚠️ 部位超過上限\n目前 {ex:g} 口大台等值\n上限 {cfg.FUT_MAX_EQ:g} 口", 1800))
     for p in st["positions"]:
+        tg = p.get("target")
+        if tg is not None:
+            tgap = (tg - price) if p["side"] == "多" else (price - tg)
+            nm = f"{p['side']} {p['kind']} {p['qty']}口"
+            if tgap <= 0:
+                out.append((f"targethit-{p['kind']}-{p['side']}", f"🎯 已到停利價\n{nm}\n停利 {tg:,.0f}｜現價 {price:,.0f}\n要不要落袋？", cfg.FUT_REPEAT_SEC))
+            elif tgap <= cfg.FUT_STOP_NEAR:
+                out.append((f"targetnear-{day}-{p['kind']}-{p['side']}", f"🎯 接近停利價\n{nm}\n停利 {tg:,.0f}｜現價 {price:,.0f}\n只剩 {tgap:.0f} 點", 900))
         if p.get("stop") is None:
             continue
         gap = (price - p["stop"]) if p["side"] == "多" else (p["stop"] - price)
@@ -292,6 +300,20 @@ def get_state(max_age=120, send=None):
         return st
 
 
+def why_short(e):
+    """存不進 GitHub 的原因，翻成一行白話（卡片上顯示，不用去看 Render 記錄）"""
+    m = str(e)
+    if "401" in m:
+        return "401 token 不對或過期"
+    if "403" in m:
+        return "403 token 沒有 Contents 寫入權限"
+    if "404" in m:
+        return "404 token 看不到這個 repo"
+    if "409" in m or "422" in m:
+        return "衝突 " + m[-30:]
+    return m[:40] if m else type(e).__name__
+
+
 def save_state(st, send=None):
     """存起來。回傳 True＝GitHub 也存好了；False＝只存在記憶體（會私訊提醒一次）"""
     with _lock:
@@ -308,8 +330,12 @@ def save_state(st, send=None):
                 _gh_save(st)
                 ok = True
                 _STATE["warned"] = False
+                _STATE["err"] = ""
             except Exception as e:
                 print("期貨部位存檔失敗：", repr(e)[:160], flush=True)
+                _STATE["err"] = why_short(e)
+        else:
+            _STATE["err"] = "沒讀到 token"
         _STATE["dirty"] = bool(GH_TOKEN) and not ok          # GitHub 沒存成功：先不要用它的舊資料蓋掉記憶體
         return ok                                            # 沒存到 GitHub 時，結果卡片與「部位」卡片會直接寫「只存在記憶體」，不再另外傳訊息吵你
 
@@ -344,6 +370,10 @@ def status_lines(st, price=None, now=None):
             L += stop_note(p)
         else:
             L.append("　停損 未設")
+        if p.get("target") is not None:
+            tg = p["target"]
+            tgap = (tg - price) if (price is not None and p["side"] == "多") else ((price - tg) if price is not None else None)
+            L.append(f"　停利 {fmt(tg)}" + (f"（差 {tgap:,.0f} 點）" if tgap is not None else ""))
     total = st["realized"] + (unrealized(st, price) if price is not None else 0)
     L.append("")
     L.append(f"今日已實現 {st['realized']:+,.0f}")
@@ -355,7 +385,7 @@ def status_lines(st, price=None, now=None):
         L.append("（目前沒有即時報價）")
     L.append(f"部位　　　 {exposure(st):g}／{cfg.FUT_MAX_EQ:g} 口大台等值")
     if not persisted():
-        L += ["", "⚠️ 部位只存在記憶體", "機器人重啟後會不見"]
+        L += ["", "⚠️ 部位只存在記憶體", "機器人重啟後會不見"] + ([f"原因 {_STATE['err']}"] if _STATE.get("err") else [])
     return L
 
 
@@ -369,7 +399,7 @@ def stop_note(p):
 
 
 def limits_lines():
-    return ["🛡 風控設定", f"單日虧損上限 {cfg.FUT_DAILY_LOSS:,.0f} 元", f"最大部位 {cfg.FUT_MAX_EQ:g} 口大台等值",
+    return ["🛡 上限設定", f"單日虧損上限 {cfg.FUT_DAILY_LOSS:,.0f} 元", f"最大部位 {cfg.FUT_MAX_EQ:g} 口大台等值",
             "（小台 0.25 口、微台 0.05 口）", f"虧損 {cfg.FUT_WARN_PCT:.0%} 先提醒", f"離停損 {cfg.FUT_STOP_NEAR} 點內提醒",
             "要改請改 config.py 的 FUT_"]
 
@@ -413,7 +443,7 @@ def handle(cid, text, mid0, ctx):
         FG_S[cid] = {"flow": "menu"}
         S[cid] = {"flow": "fut"}
         TRACK[cid] = [mid0]
-        ask("📈 期貨風控\n要做什麼？", [["開倉", "平倉"], ["部位", "停損"], ["價位", "風控設定"]])
+        ask("📈 期貨\n要做什麼？", [["開倉", "平倉"], ["部位", "停利/停損"], ["行情", "上限設定"]])
         return True
 
     TRACK.setdefault(cid, []).append(mid0)
@@ -440,14 +470,14 @@ def handle(cid, text, mid0, ctx):
         if extra:
             lines = lines + extra
         if not ok:
-            lines = lines + ["", "⚠️ 只存在記憶體"]
+            lines = lines + ["", "⚠️ 只存在記憶體"] + ([f"原因 {_STATE['err']}"] if _STATE.get("err") else [])
         finish(lines)
 
     if flow == "menu":
         if t == "開倉":
             FG_S[cid] = {"flow": "open", "step": "side"}
             ask("做多還是做空？", [SIDES])
-        elif t in ("平倉", "停損"):
+        elif t in ("平倉", "停損", "改停損價", "停利/停損"):
             if not st["positions"]:
                 finish(notice="目前沒有期貨部位")
             else:
@@ -455,16 +485,16 @@ def handle(cid, text, mid0, ctx):
                 ask("哪一筆？", [[label(p)] for p in st["positions"]])
         elif t == "部位":
             finish(status_lines(st, current_price()))
-        elif t == "價位":                                    # 現價、今盤高低、各個關鍵價位（掃蕩提醒在盯的）
+        elif t in ("價位", "行情"):                                    # 現價、今盤高低、各個關鍵價位（掃蕩提醒在盯的）
             try:
                 import futures_sweep as SW
                 finish(SW.status_lines())
             except Exception as e:
                 finish(["價位暫時查不到", type(e).__name__])
-        elif t == "風控設定":
+        elif t in ("風控設定", "上限設定"):
             finish(limits_lines())
         else:
-            ask("請按下面的按鈕", [["開倉", "平倉"], ["部位", "停損"], ["價位", "風控設定"]])
+            ask("請按下面的按鈕", [["開倉", "平倉"], ["部位", "停利/停損"], ["行情", "上限設定"]])
         return True
 
     if flow == "open":
@@ -518,17 +548,42 @@ def handle(cid, text, mid0, ctx):
             if p is None:
                 ask("請按下面的按鈕", [[label(x)] for x in st["positions"]])
             else:
-                f.update(pick=[p["kind"], p["side"]], step="qty" if flow == "close" else "stop")
+                f.update(pick=[p["kind"], p["side"]], step="qty" if flow == "close" else "which")
                 if flow == "close":
                     ask(f"平幾口？（目前 {p['qty']} 口）", [["全部"]])
                 else:
-                    px = current_price()
-                    tip = [f"現價 {px:,.0f}"] if px else []
-                    ask("新的停損價？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）", "不想設就按「不設」"]), [["不設"]])
+                    ask("要設哪一個？\n停損 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設") + "\n停利 " + (fmt(p["target"]) if p.get("target") is not None else "未設"), [["停損價", "停利價"]])
             return True
         p = find_pos(st, *f["pick"])
         if p is None:
             finish(notice="這筆部位已經不在了")
+            return True
+        if flow == "stop" and step == "which":
+            if t not in ("停損價", "停利價"):
+                ask("請按下面的按鈕", [["停損價", "停利價"]])
+                return True
+            f.update(which="stop" if t == "停損價" else "target", step="stop")
+            px = current_price()
+            tip = [f"現價 {px:,.0f}"] if px else []
+            if f["which"] == "stop":
+                ask("新的停損價？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）", "不想設就按「不設」"]), [["不設"]])
+            else:
+                ask("停利價多少？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "到價會提醒你", "不想設就按「不設」"]), [["不設"]])
+            return True
+        if flow == "stop" and f.get("which") == "target":
+            if t == "不設":
+                p["target"] = None
+            else:
+                v = _price(t)
+                if v is None:
+                    ask("價格看起來不對\n請輸入停利價，或按「不設」", [["不設"]])
+                    return True
+                px = current_price()
+                if px and ((p["side"] == "多" and v <= px) or (p["side"] == "空" and v >= px)):
+                    ask(f"做{p['side']}的停利價\n要在現價{'上' if p['side'] == '多' else '下'}方\n現價 {px:,.0f}\n請重新輸入", [["不設"]])
+                    return True
+                p["target"] = v
+            done_save(["✅ 已更新停利", label(p), "　停利 " + (fmt(p["target"]) if p.get("target") is not None else "未設")])
             return True
         if flow == "stop":
             if t == "不設":
