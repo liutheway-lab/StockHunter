@@ -133,6 +133,9 @@ class Engine:
         self.swings = []                  # 盤中波段高低（小價位）
         self.vols = []                    # 這個盤每根 5 分K 的成交量
         self.exc = {}                     # 價位被「收盤站上（跌破）」之後的停留狀態：{價位: {ext 最極端的點, n 停留幾根}}
+        self.seed_key = None              # 機器人重啟時，用期交所給的「本盤到目前的高低」補上重啟前的本盤高低
+        self.seed_hi = None
+        self.seed_lo = None
 
     # 盤結束：把這個盤的高低存成「上個日盤／夜盤」
     def close_session(self, sess, hi, lo):
@@ -145,6 +148,10 @@ class Engine:
             self.levels.pop("or_lo", None)
         self.pending, self.swings = [], []
         return True
+
+    def seed_session(self, day, sess, hi, lo):
+        """重啟後記憶體是空的：把期交所給的「本盤到目前的最高、最低」當成早就形成的本盤高低（重啟前創的，一定超過 30 分鐘）"""
+        self.seed_key, self.seed_hi, self.seed_lo = (day, sess), hi, lo
 
     def retire_passed(self, day, sess, hi, lo):
         """機器人剛啟動（或重啟）時：這個盤已經超過（跌破）的價位，不知道當時有沒有提醒過，一律當成用掉了，避免重複提醒"""
@@ -206,6 +213,8 @@ class Engine:
         if skey != self.skey:
             self.skey, self.sess_open, self.pending, self.or_bars, self.nbars = skey, None, [], [], 0
             self.hist, self.swings, self.vols, self.exc = [], [], [], {}
+            if self.seed_key != skey:
+                self.seed_hi = self.seed_lo = None
             if bar["sess"] == "0":
                 self.levels.pop("or_hi", None)
                 self.levels.pop("or_lo", None)
@@ -262,6 +271,11 @@ class Engine:
                     lv["sess_hi"] = prev[hi_i]["h"]
                 if cur_i - lo_i >= _cfg("FUT_SWEEP_SESS_AGE", 6):
                     lv["sess_lo"] = prev[lo_i]["l"]
+            if self.seed_key == skey:
+                if self.seed_hi is not None:
+                    lv["sess_hi"] = max(lv.get("sess_hi", self.seed_hi), self.seed_hi)
+                if self.seed_lo is not None:
+                    lv["sess_lo"] = min(lv.get("sess_lo", self.seed_lo), self.seed_lo)
             for name, level in lv.items():
                 dk = (bar["day"], bar["sess"], name if not name.startswith("sess_") else f"{name}@{level}")
                 if name in busy or dk in self.done:
@@ -531,6 +545,12 @@ class Runner:
             gone = self.eng.retire_passed(G.trade_day(now), G.session_of(now), self.bb.hi, self.bb.lo)
             if gone:
                 print("重啟後視為已用掉的價位：", [NAMES[k] for k in gone], flush=True)
+            sess_now = G.session_of(now)
+            start = now.replace(hour=8 if sess_now == "0" else 15, minute=45 if sess_now == "0" else 0, second=0, microsecond=0)
+            if sess_now == "1" and now.hour < 15:
+                start -= timedelta(days=1)
+            if sess_now is not None and (now - start) >= timedelta(minutes=30) and self.bb.hi is not None and self.bb.lo is not None:
+                self.eng.seed_session(G.trade_day(now), sess_now, self.bb.hi, self.bb.lo)
             L += self.level_lines(now) or ["關鍵價位 還沒有"]
             self.send(L)
             n += 1
