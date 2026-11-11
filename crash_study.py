@@ -219,6 +219,87 @@ def eval_rules(f, events, sigs):
     return b_more, b_up, rows
 
 
+# ───────────── 帳戶模擬：觸發就空手，止跌確認才回來（多市場）─────────────
+INDICES = [("^TWII", "台灣加權"), ("^GSPC", "美國S&P500"), ("^N225", "日本日經"),
+           ("^KS11", "韓國綜合"), ("^HSI", "香港恆生")]
+START = "1997-01-01"     # 各市場用同一段期間比較
+COST = 0.001             # 每次進出成本 0.1%
+REB, HOLD = 0.05, 2      # 止跌確認：離低點反彈 5%、低點後 2 天不破低
+
+
+def load_ticker(t):
+    import yfinance as yf
+    df = yf.Ticker(t).history(period="max", interval="1d", auto_adjust=False)
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    df = df[["Close", "Volume"]].dropna(subset=["Close"])
+    df = df[(df["Close"] > 0) & (df.index >= START)]
+    return df
+
+
+def simulate(f, sig):
+    """sig＝None 代表一直持有。回傳 (年化, 最大回檔, 在場比例, 每年進出次數)"""
+    c = f["c"].values
+    n = len(c)
+    ma20, ma60 = f["ma20"].values, f["ma60"].values
+    up20 = (~f["ma20_dn"]).values
+    s = np.zeros(n, bool) if sig is None else sig.fillna(False).values.astype(bool)
+    pos = np.ones(n)
+    held, low, low_i, guard, sw = True, None, None, None, 0
+    for i in range(LOOK, n):
+        if sig is None:
+            break
+        if held:
+            edge = s[i] and not s[i - 1]
+            broke = guard is not None and c[i] < guard
+            if edge or broke:
+                held, low, low_i, guard = False, c[i], i, None
+                sw += 1
+        else:
+            if c[i] < low:
+                low, low_i = c[i], i
+            stab = c[i] >= low * (1 + REB) and i - low_i >= HOLD
+            trend = c[i] > ma20[i] and c[i] > ma60[i] and up20[i]
+            if stab or trend:
+                held = True
+                guard = low if (stab and not trend) else None   # 靠止跌回來的，跌破低點就再出場
+                sw += 1
+        pos[i] = 1.0 if held else 0.0
+    ret = np.zeros(n)
+    ret[1:] = c[1:] / c[:-1] - 1
+    r = np.zeros(n)
+    r[LOOK + 1:] = pos[LOOK:-1] * ret[LOOK + 1:] - COST * np.abs(np.diff(pos[LOOK - 1:-1]))
+    eq = np.cumprod(1 + r[LOOK:])
+    years = max((f.index[-1] - f.index[LOOK]).days / 365.25, 1e-9)
+    cagr = eq[-1] ** (1 / years) - 1
+    mdd = float(np.min(eq / np.maximum.accumulate(eq) - 1))
+    return cagr, mdd, float(pos[LOOK:].mean()), sw / years
+
+
+def equity_all():
+    if os.getenv("CRASH_CSV"):
+        sets = [("測試", load())]
+    else:
+        sets = []
+        for t, name in INDICES:
+            try:
+                d = load_ticker(t)
+                if len(d) > 500:
+                    sets.append((name, d))
+                else:
+                    print(f"{name} 資料太少，跳過")
+            except Exception as e:
+                print(f"{name} 抓取失敗：{e!r}")
+    res = []
+    for name, d in sets:
+        f = features(d)
+        sigs = rule_signals(f)
+        row = {"一直持有": simulate(f, None)}
+        for k, sg in sigs.items():
+            row[k] = simulate(f, sg)
+        res.append((name, d, row))
+    return res
+
+
 # ───────────── 報告（字卡：每段一則訊息，<pre> 區塊不換行）─────────────
 import html as _html
 
@@ -287,6 +368,36 @@ def build_rules(df):
     return [card(lines)]
 
 
+def build_equity():
+    res = equity_all()
+    msgs = []
+    for name, d, row in res:
+        lines = [f"{name} {d.index[0]:%Y}～{d.index[-1]:%Y/%m}", ""]
+        for k, (cg, md, ex, sw) in row.items():
+            lines += [k, f"　年化{cg:.1%}｜最大回檔{abs(md):.0%}"]
+            if k != "一直持有":
+                lines.append(f"　在場{ex:.0%}｜每年進出{sw:.1f}次")
+            lines.append("")
+        msgs.append(card(lines))
+    if res:
+        keys = list(res[0][2].keys())
+        cur = keys[1]
+        lines = [f"{len(res)} 個市場平均", "（年化｜最大回檔）", ""]
+        for k in keys:
+            cg = np.mean([r[2][k][0] for r in res])
+            md = np.mean([r[2][k][1] for r in res])
+            lines += [k, f"　{cg:.1%}｜{abs(md):.0%}"]
+            if k not in ("一直持有", cur):
+                win = sum(1 for r in res
+                          if r[2][k][0] / max(abs(r[2][k][1]), 1e-9) > r[2][cur][0] / max(abs(r[2][cur][1]), 1e-9))
+                lines.append(f"　比現行好 {win}/{len(res)} 個市場")
+            lines.append("")
+        lines += ["比現行好＝年化÷最大回檔較高", "出場：規則剛觸發", "回來：止跌確認或站回月季線",
+                  f"每次進出扣 {COST:.1%} 成本"]
+        msgs.insert(0, card(lines))
+    return msgs
+
+
 def push(msgs):
     import requests
     owner = os.getenv("TG_OWNER_ID", "").strip()
@@ -301,7 +412,8 @@ def push(msgs):
 
 if __name__ == "__main__":
     data = load()
-    msgs = build_rules(data) if (len(sys.argv) > 1 and sys.argv[1] == "rules") else build(data)
+    mode = sys.argv[1] if len(sys.argv) > 1 else "equity"
+    msgs = {"rules": lambda: build_rules(data), "all": lambda: build(data)}.get(mode, build_equity)()
     for m in msgs:
         print(_html.unescape(m.replace("<pre>", "").replace("</pre>", "")))
         print("-" * 20)
