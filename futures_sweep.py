@@ -736,10 +736,10 @@ class Engine:
 
 
 # ───────────── 報價 ─────────────
-def quote_full(now=None):
-    """近月台指期：{last, high, low, vol}（高低、累計成交量都是這個盤到目前為止）；沒開盤回 None"""
+def quote_full(now=None, mt=None):
+    """近月台指期：{last, high, low, vol}（高低、累計成交量都是這個盤到目前為止）；沒開盤回 None。mt 可指定盤別"""
     now = now or datetime.now(TZ)
-    mt = G.session_of(now)
+    mt = mt or G.session_of(now)
     if mt is None:
         return None
     body = {"MarketType": mt, "SymbolType": "F", "KindID": "1", "CID": "TXF",
@@ -759,6 +759,13 @@ def quote_full(now=None):
 
 
 # ───────────── 關鍵價位：存檔與開機時補算 ─────────────
+def quote_official(now=None):
+    """日盤收盤後（13:45～13:55）：再用日盤代碼抓一次，取期交所的收盤價；抓不到回 None"""
+    now = now or datetime.now(TZ)
+    q = quote_full(now, mt="0")
+    return q["last"] if q and q.get("last") is not None else None
+
+
 def load_levels(now=None):
     now = now or datetime.now(TZ)
     try:
@@ -880,8 +887,9 @@ def card(lines):
 class Runner:
     """每次呼叫 step() 做一次：抓價、組 5 分K、判斷、通知。send(lines) 由外面決定怎麼傳"""
 
-    def __init__(self, send, quote=quote_full, seed=seed_levels):
-        self.send, self.quote, self.seed = send, quote, seed
+    def __init__(self, send, quote=quote_full, seed=seed_levels, official=quote_official):
+        self.send, self.quote, self.seed, self.official = send, quote, seed, official
+        self._off_day = None                                    # 日盤剛收盤、還在等官方收盤價的交易日
         self.bb = BarBuilder()
         self.eng = Engine(load_levels())
         self.eng.pivot = self.eng.pivot or None
@@ -959,6 +967,7 @@ class Runner:
         n = 0
         self.ensure_levels(now)
         if G.session_of(now) is None:
+            self._official_close(now)
             fl = self.bb.flush()
             if fl:
                 bars, sess, hi, lo = fl
@@ -969,6 +978,8 @@ class Runner:
                 self.eng.events = []
                 if self.eng.close_session(sess, hi, lo):
                     self._save(now)
+                    if sess == "0":
+                        self._off_day = G.trade_day(now)            # 等官方收盤價
             return -1 if n == 0 else n
         q = self.quote(now)
         self.last_q, self.last_at = q, now
@@ -999,6 +1010,36 @@ class Runner:
             print("持倉提醒失敗：", repr(e)[:100], flush=True)
         return n
 
+    def _official_close(self, now):
+        """日盤收盤後 13:45～13:55 每 30 秒問一次期交所官方收盤價；拿到就取代最後成交價，記成上個交易日的收盤"""
+        day = self._off_day
+        if not day or not _cfg("FUT_CLOSE_OFFICIAL", True):
+            return
+        hm = (now.hour, now.minute)
+        if hm > (13, 55):
+            self._off_day = None
+            return
+        if hm < (13, 45):
+            return
+        try:
+            px = self.official(now)
+        except Exception as e:
+            print("官方收盤價抓取失敗：", repr(e)[:100], flush=True)
+            return
+        if px is None:
+            return
+        self._off_day = None
+        g = self.eng.days.setdefault(day, {})
+        last = g.get("d_c")
+        g["d_c"] = px
+        self.eng.refresh(day)
+        self._save(now)
+        if last is not None and round(last) != round(px):
+            self.send(["🧾 收盤價校正", f"最後成交 {f0(last)}", f"官方收盤 {f0(px)}",
+                       f"上個交易日收盤已改成 {f0(px)}", f"多空分界 {f0(self.eng.pivot)}"])
+        print("收盤價：最後成交", last, "官方", px, flush=True)
+
+    @staticmethod
     @staticmethod
     def _positions():
         try:
