@@ -363,8 +363,8 @@
    "ext": 42801.0,
    "trend": "逆勢",
    "ratio": null,
-   "status": "wait",
-   "result": null
+   "status": "done",
+   "result": "失敗"
   }
  ],
  "meta": {}
