@@ -401,16 +401,16 @@
    "ext": 43493.0,
    "trend": "順勢",
    "ratio": 1.8,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 43307.0,
    "stop": 43493.0,
    "stop2": 43445.0,
-   "bars": 2,
+   "bars": 3,
    "rf": 0.8172043010752689,
    "rn": 1.1014492753623188,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {}
