@@ -712,6 +712,17 @@ class Engine:
                 seg = self.hist[a["idx"]:b["idx"] + 1]
                 neck = min(x["l"] for x in seg) if up else max(x["h"] for x in seg)
                 if not ((bar["c"] < neck) if up else (bar["c"] > neck)):
+                    # 還沒跌破（站上）頸線：高點降低已經成立，先提醒「留意」，不用等頸線
+                    wkey = ("watch",) + key
+                    if _cfg("FUT_STRUCT_WATCH", True) and wkey not in done and ready(("watch", d)):
+                        done.add(wkey)
+                        last[("watch", d)] = self.nbars
+                        out.append(["👀 高點降低（留意轉空）" if up else "👀 低點墊高（留意轉多）", "級別 結構轉換（未確認）",
+                                    f"{'高點降低' if up else '低點墊高'} {f0(a['level'])}→{f0(b['level'])}",
+                                    f"頸線 {f0(neck)}",
+                                    f"收盤{'跌破' if up else '站上'}才確認",
+                                    f"{'站回' if up else '跌破'} {f0(a['level'])} {'上' if up else '下'}就失效",
+                                    f"現價 {f0(bar['c'])}"])
                     continue
                 done.add(key)
                 if not ready(("struct", d)):
