@@ -1,13 +1,5 @@
 {
  "day": "2026-11-12",
- "realized": 99200.0,
- "positions": [
-  {
-   "kind": "大台",
-   "side": "多",
-   "qty": 2,
-   "avg": 44086.5,
-   "stop": 44030.0
-  }
- ]
+ "realized": 71400.0,
+ "positions": []
 }
