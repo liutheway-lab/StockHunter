@@ -904,9 +904,14 @@ class Runner:
         sess, day = G.session_of(now), G.trade_day(now)
         cands = {"多": [(NAMES[k], v) for k, v in self.eng.levels.items() if k.endswith("_hi")],
                  "空": [(NAMES[k], v) for k, v in self.eng.levels.items() if k.endswith("_lo")]}
-        if self.eng.hist:
-            cands["多"].append(("本盤前高", max(b["h"] for b in self.eng.hist)))
-            cands["空"].append(("本盤前低", min(b["l"] for b in self.eng.hist)))
+        hi_, lo_ = q.get("high"), q.get("low")                       # 本盤高低用期交所報價的（機器人重啟後，自己組的 5 分K 只有重啟之後的，會漏掉更高的高點）
+        if (hi_ is None or lo_ is None) and self.eng.hist:
+            hi_, lo_ = max(b["h"] for b in self.eng.hist), min(b["l"] for b in self.eng.hist)
+        if hi_ is not None:
+            cands["多"].append(("本盤前高", hi_))
+        if lo_ is not None:
+            cands["空"].append(("本盤前低", lo_))
+        edge = _cfg("FUT_NEAR_MIN", 3)                               # 離本盤高低不到 3 點＝就在高低點上，那是「創高／創低」，不算接近
         sent = self.__dict__.setdefault("_near_sent", set())
         cool = self.__dict__.setdefault("_near_ts", {})
         n = 0
@@ -922,7 +927,7 @@ class Runner:
                     hi = side == "多"
                     gap = (level - price) if hi else (price - level)
                     key = ("flat", day, sess, name) if name.startswith("本盤") else ("flat", day, sess, name, level)
-                    if 0 <= gap <= near and key not in sent:
+                    if (edge if name.startswith("本盤") else 0) <= gap <= near and key not in sent:
                         sent.add(key)
                         self._flat_ts = ts
                         L = [f"📍 空手 接近{'前高' if hi else '前低'}", f"{name} {f0(level)}", f"現價 {f0(price)}", f"還差 {gap:.0f} 點"]
@@ -940,7 +945,7 @@ class Runner:
                 ck = (p["side"], p["kind"], name)
                 if live and now.timestamp() - cool.get(ck, 0) < _cfg("FUT_NEAR_COOL", 1800):
                     continue
-                if 0 <= gap <= near and key not in sent:
+                if (edge if live else 0) <= gap <= near and key not in sent:
                     sent.add(key)
                     cool[ck] = now.timestamp()
                     hi = p["side"] == "多"
