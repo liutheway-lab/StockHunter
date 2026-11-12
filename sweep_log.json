@@ -197,6 +197,21 @@
    "rn": 0.0,
    "sf": true,
    "sn": true
+  },
+  {
+   "day": "2026-11-13",
+   "sess": "1",
+   "t": 1610,
+   "ts": "2026-11-12T16:15+08:00",
+   "name": "盤中波段高 43,336",
+   "tier": "小",
+   "dir": "short",
+   "level": 43336.0,
+   "ext": 43360.0,
+   "trend": "順勢",
+   "ratio": 0.8,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
