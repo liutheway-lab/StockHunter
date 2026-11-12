@@ -14,6 +14,21 @@
    "ratio": null,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-12",
+   "sess": "0",
+   "t": 850,
+   "ts": "2026-11-12T08:55+08:00",
+   "name": "長上影線高點 44,157",
+   "tier": "影線",
+   "dir": "short",
+   "level": 44157.0,
+   "ext": 44157.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
