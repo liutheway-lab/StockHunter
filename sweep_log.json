@@ -113,6 +113,21 @@
    "rn": 5.115646258503402,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-13",
+   "sess": "1",
+   "t": 1505,
+   "ts": "2026-11-12T15:10+08:00",
+   "name": "長下影線低點 43,158",
+   "tier": "影線",
+   "dir": "long",
+   "level": 43158.0,
+   "ext": 43158.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
