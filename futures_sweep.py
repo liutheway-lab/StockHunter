@@ -280,8 +280,8 @@ class Journal:
         rows = self.rows
         if not rows:
             return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
-        pat = [r for r in rows if r.get("tier") in ("滯漲", "轉折")]
-        rows = [r for r in rows if r.get("tier") not in ("滯漲", "轉折")]
+        pat = [r for r in rows if r.get("tier") in ("滯漲", "轉折", "破")]
+        rows = [r for r in rows if r.get("tier") not in ("滯漲", "轉折", "破")]
         if not rows and not pat:
             return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
         conf = [r for r in rows if r.get("entry") is not None]
@@ -324,8 +324,9 @@ class Journal:
             L += block({"日盤": "【日盤】", "美股開盤前後": "【夜盤・美股開盤前後】", "夜盤其他": "【夜盤・其他】"}[z], [r for r in conf if zone(r) == z]) + [""]
         for tier in ("大", "小", "影線"):
             L += block("【影線】" if tier == "影線" else f"【{tier}價位】", [r for r in conf if r.get("tier") == tier]) + [""]
-        for tier, title in (("滯漲", "【放量滯漲／不跌】"), ("轉折", "【結構轉換】")):
-            rs = [r for r in pat if r.get("tier") == tier]
+        for tier, title, dr in (("滯漲", "【放量滯漲／不跌】", None), ("轉折", "【結構轉換】", None),
+                                ("破", "【創新低追空】", "short"), ("破", "【創新高追多】", "long")):
+            rs = [r for r in pat if r.get("tier") == tier and (dr is None or r.get("dir") == dr)]
             if rs:                                              # 有型態提醒才顯示這一塊
                 L += block(title, rs, ev=True)[:1] + [f"　提醒 {len(rs)} 次"] + block(title, rs, ev=True)[1:] + [""]
         L.append("樣本少時別太相信")
@@ -418,8 +419,8 @@ class Engine:
 
     @staticmethod
     def _tier_line(s):
-        if s["tier"] in ("滯漲", "轉折"):
-            return "級別 放量滯漲" if s["tier"] == "滯漲" else "級別 結構轉換"
+        if s["tier"] in ("滯漲", "轉折", "破"):
+            return {"滯漲": "級別 放量滯漲", "轉折": "級別 結構轉換", "破": "級別 破全日高低"}[s["tier"]]
         return "級別 影線" if s["tier"] == "影線" else f"級別 {s['tier']}價位"
 
     @staticmethod
@@ -428,6 +429,8 @@ class Engine:
             return f"{'高檔放量滯漲' if s['dir'] == 'short' else '低檔放量不跌'} {f0(s['level'])}"
         if s["tier"] == "轉折":
             return f"{'高點降低' if s['dir'] == 'short' else '低點墊高'} {f0(s['level'])}"
+        if s["tier"] == "破":
+            return f"{'創新低追空' if s['dir'] == 'short' else '創新高追多'} {f0(s['level'])}"
         if s["tier"] == "影線":
             return f"{'長上影線高點' if s['dir'] == 'short' else '長下影線低點'} {f0(s['level'])}"
         return f"{NAMES[s['name']]} {f0(s['level'])}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {f0(s['level'])}"
@@ -507,6 +510,7 @@ class Engine:
             self.journal.on_bar(bar)
         if skey != self.skey:
             self.skey, self.sess_open, self.pending, self.or_bars, self.nbars = skey, None, [], [], 0
+            self.watch_live, self.trail = [], []
             self.hist, self.swings, self.vols, self.exc = [], [], [], {}
             self.shi, self.slo = [], []
             if self.seed_key != skey:
@@ -550,9 +554,36 @@ class Engine:
                             f"停損參考 {f0(s['ext'])} {'上' if up else '下'}"])
                 if self.journal:
                     self.journal.confirmed(s, bar)
+                self.trail.append({"dir": s["dir"], "ext": s["ext"], "n": 0})     # 確認後還會再盯一陣子，有更高的點就跟著移
             else:
                 keep.append(s)
         self.pending = keep
+        # 1b. 已經提醒過的「留意」：又創新高（低）就作廢，不能再說高點降低
+        keep_w = []
+        for w in self.watch_live:
+            w["age"] += 1
+            hit = (bar["h"] > w["a"]) if w["up"] else (bar["l"] < w["a"])
+            if hit:
+                out.append(["👀 留意作廢", f"又{'創高' if w['up'] else '創低'} {f0(bar['h'] if w['up'] else bar['l'])}",
+                            f"{'高點' if w['up'] else '低點'} {f0(w['a'])} 已被突破", "這個形態不成立"])
+            elif w["age"] < 12:
+                keep_w.append(w)
+        self.watch_live = keep_w
+        # 1c. 掃蕩確認後又出現更高（低）的點：停損參考跟著移，提醒一次
+        keep_t = []
+        for t in self.trail:
+            t["n"] += 1
+            up_t = t["dir"] == "short"
+            hit = (bar["h"] > t["ext"]) if up_t else (bar["l"] < t["ext"])
+            if hit:
+                newe = bar["h"] if up_t else bar["l"]
+                out.append([f"⚠️ 掃蕩確認後又{'創高' if up_t else '創低'}（{'做空' if up_t else '做多'}）",
+                            f"新{'高' if up_t else '低'} {f0(newe)}", f"停損參考 改放 {f0(newe)} {'上' if up_t else '下'}",
+                            f"原來 {f0(t['ext'])}"])
+                t["ext"] = newe
+            if t["n"] < 6:
+                keep_t.append(t)
+        self.trail = keep_t
         # 2. 盤中波段高低：先更新，再看這根有沒有把它們掃掉
         self.hist.append(bar)
         self._update_swings()
@@ -717,6 +748,7 @@ class Engine:
                     if _cfg("FUT_STRUCT_WATCH", True) and wkey not in done and ready(("watch", d)):
                         done.add(wkey)
                         last[("watch", d)] = self.nbars
+                        self.watch_live.append({"up": up, "a": a["level"], "age": 0})
                         out.append(["👀 高點降低（留意轉空）" if up else "👀 低點墊高（留意轉多）", "級別 結構轉換（未確認）",
                                     f"{'高點降低' if up else '低點墊高'} {f0(a['level'])}→{f0(b['level'])}",
                                     f"頸線 {f0(neck)}",
@@ -732,7 +764,55 @@ class Engine:
                 out.append(self._pat_card(s, bar, ["🔻 結構轉換（轉空）" if up else "🔺 結構轉換（轉多）", "級別 結構轉換",
                                                    f"{'高點降低' if up else '低點墊高'} {f0(a['level'])}→{f0(b['level'])}",
                                                    f"收盤{'跌破' if up else '站上'} {f0(neck)}", f"收盤 {f0(bar['c'])}"] ) + ["建議 1 口小試"])
+        # ③ 創新低追空／創新高追多：收盤跌破（站上）「全日（含夜盤）」的低（高）點。只記進掃蕩紀錄，不推播
+        if _cfg("FUT_BREAK_ON", True) and self.journal:
+            self._break_log(bar, skey, ready, last)
         return out
+
+    def _break_log(self, bar, skey, ready, last):
+        """全日低點＝夜盤已結束的那段（td_lo）＋本盤到上一根為止（含重啟補上的）。低點要形成至少 FUT_BREAK_AGE 根（預設 6＝30 分鐘）才算「站穩的低點」，
+        不然只是一路下殺中的連續創低。收盤跌破它 FUT_BREAK_MIN 點以上就記一筆：進場價＝這根收盤；
+        停損遠＝最近 FUT_BREAK_FAR 根（預設 12）的最高點，近＝最近 FUT_BREAK_NEAR 根（預設 3）的最高點"""
+        prev, cur_i = self.hist[:-1], len(self.hist) - 1
+        age, mn = _cfg("FUT_BREAK_AGE", 6), _cfg("FUT_BREAK_MIN", 3)
+        done = self.__dict__.setdefault("_brk_done", set())
+        for d in ("short", "long"):
+            dn = d == "short"                                   # short＝跌破低點追空；long＝站上高點追多
+            cands = []                                          # (價位, 是不是已經站穩)
+            pick = (lambda b: b["l"]) if dn else (lambda b: b["h"])
+            better = min if dn else max
+            if prev:
+                i = better(range(len(prev)), key=lambda k: (pick(prev[k]), k if dn else -k))
+                cands.append((pick(prev[i]), cur_i - i >= age))
+            td = self.levels.get("td_lo" if dn else "td_hi")
+            if td is not None:
+                cands.append((td, True))
+            if self.seed_key == skey:
+                sd = self.seed_lo if dn else self.seed_hi
+                if sd is not None:
+                    cands.append((sd, True))
+            if not cands:
+                continue
+            lvl = better(c[0] for c in cands)
+            if not any(c[1] for c in cands if c[0] == lvl):     # 全日低（高）是剛剛才創的：連續下殺，不算站穩後被跌破
+                continue
+            if not ((bar["c"] <= lvl - mn) if dn else (bar["c"] >= lvl + mn)):
+                continue
+            key = (skey, d, lvl)
+            if key in done or not ready(("brk", d)):
+                continue
+            done.add(key)
+            last[("brk", d)] = self.nbars
+            far_n, near_n = _cfg("FUT_BREAK_FAR", 12), _cfg("FUT_BREAK_NEAR", 3)
+            seg = self.hist[-far_n:]
+            ext = max(b["h"] for b in seg) if dn else min(b["l"] for b in seg)
+            nseg = self.hist[-near_n:]
+            near = max(b["h"] for b in nseg) if dn else min(b["l"] for b in nseg)
+            s = {"dir": d, "name": f"brk_{bar['t']}", "level": lvl, "ext": ext, "near": near, "pierce": abs(bar["c"] - lvl),
+                 "n": 0, "tier": "破", "t": bar["t"]}
+            self._trend_tag(s, dn, bar)
+            self.journal.opened(s, bar, None)
+            self.journal.confirmed(s, bar)
 
 
 # ───────────── 報價 ─────────────
