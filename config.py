@@ -154,6 +154,7 @@ FUT_SWEEP_SWING_DIST = 150       # 收回時離波段價位超過幾點就不提
 FUT_SWEEP_SESS_AGE = 6           # 本盤高（低）要形成幾根 5 分K（6 根＝30 分鐘）以上，才算大價位
 FUT_NEAR_ALERT_ON = True         # 有部位時，價格離前高（做多）／前低（做空）FUT_NEAR_LEVEL 點內，提醒考慮減碼或停利
 FUT_NEAR_LEVEL = 30
+FUT_NEAR_MIN = 3                 # 離本盤高低不到幾點就不算「接近」（那是創高／創低）
 FUT_NEAR_COOL = 1800             # 本盤前高（低）靠近的提醒，同一邊最少隔幾秒
 FUT_SWING_MIN_STEP = 100         # 新轉折低點要比目前停損／上次提醒的位置再有利幾點才提醒
 FUT_HL_ON = True                 # 創本盤新高／新低提醒（不管有沒有部位）
