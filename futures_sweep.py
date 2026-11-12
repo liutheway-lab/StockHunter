@@ -57,6 +57,16 @@ def f0(x):
     return f"{x:,.0f}"
 
 
+def _hm(t):
+    """HHMM（整數）→ "HH:MM"；沒有時間回空字串"""
+    return "" if t is None else f"{int(t) // 100:02d}:{int(t) % 100:02d}"
+
+
+def _at(price, t):
+    """價位後面加上形成時間，例如 43,433@10:55；沒有時間就只有價位"""
+    return f0(price) + (f"@{_hm(t)}" if t is not None else "")
+
+
 # ───────────── 5 分K 組合 ─────────────
 class BarBuilder:
     """把一次一次抓到的報價組成 5 分K。feed() 回傳這次完成的 5 分K 清單（含成交量 v，算不出來是 None）"""
@@ -341,6 +351,7 @@ class Engine:
         self.days = {k: dict(v) for k, v in ((levels or {}).get("days") or {}).items() if isinstance(v, dict)}
         self.prev = None                                   # 上個交易日 {"day","hi","lo","c"}
         self.manual = {}                                   # 手動指定的價位（SWEEP_LEVELS），refresh 時不被蓋掉
+        self.level_t = {}                                  # 每個價位是哪個時間形成的：{價位名稱: HHMM}，顯示在提醒裡
         if self.days:
             self.refresh(G.trade_day(datetime.now(TZ)))
         self.journal = None                                # 掃蕩紀錄（Journal），沒有就不記
@@ -366,36 +377,40 @@ class Engine:
         cur_day＝目前的交易日（YYYY-MM-DD）。日盤收盤後這一天就算完整，變成「上個交易日」"""
         for k in ("prev_hi", "prev_lo", "td_hi", "td_lo"):
             self.levels.pop(k, None)
+            self.level_t.pop(k, None)
         self.prev = None
         done = sorted(d for d, g in self.days.items() if g.get("d_hi") is not None and d <= cur_day)
         if done:
             g = self.days[done[-1]]
-            his = [v for v in (g.get("n_hi"), g["d_hi"]) if v is not None]
-            los = [v for v in (g.get("n_lo"), g["d_lo"]) if v is not None]
-            hi, lo, c = max(his), min(los), g.get("d_c")
+            hc = [(g[k], g.get(k + "_t")) for k in ("n_hi", "d_hi") if g.get(k) is not None]
+            lc = [(g[k], g.get(k + "_t")) for k in ("n_lo", "d_lo") if g.get(k) is not None]
+            (hi, hi_t), (lo, lo_t) = max(hc, key=lambda x: x[0]), min(lc, key=lambda x: x[0])
+            c = g.get("d_c")
             self.prev = {"day": done[-1], "hi": hi, "lo": lo, "c": c}
             self.levels["prev_hi"], self.levels["prev_lo"] = hi, lo
+            self.level_t["prev_hi"], self.level_t["prev_lo"] = hi_t, lo_t
             if c is not None:
                 self.pivot = (hi + lo + c) / 3
         g = self.days.get(cur_day)
         if g and g.get("d_hi") is None and g.get("n_hi") is not None and g.get("n_lo") is not None:
             self.levels["td_hi"], self.levels["td_lo"] = g["n_hi"], g["n_lo"]
+            self.level_t["td_hi"], self.level_t["td_lo"] = g.get("n_hi_t"), g.get("n_lo_t")
         self.levels.update(self.manual)
 
     # 盤結束：把這個盤的高低記進它所屬的交易日（夜盤 → 隔天那個交易日，日盤 → 當天）
-    def close_session(self, sess, hi, lo, day=None):
+    def close_session(self, sess, hi, lo, day=None, hi_t=None, lo_t=None):
         if hi is None or lo is None:
             return False
         day = day or (self.skey[0] if self.skey else G.trade_day(datetime.now(TZ)))
         g = self.days.setdefault(day, {})
         if sess == "0":
-            g["d_hi"], g["d_lo"] = hi, lo
+            g["d_hi"], g["d_lo"], g["d_hi_t"], g["d_lo_t"] = hi, lo, hi_t, lo_t
             if self.last_c and self.last_c[0] == "0":
                 g["d_c"] = self.last_c[1]
             self.levels.pop("or_hi", None)
             self.levels.pop("or_lo", None)
         else:
-            g["n_hi"], g["n_lo"] = hi, lo
+            g["n_hi"], g["n_lo"], g["n_hi_t"], g["n_lo_t"] = hi, lo, hi_t, lo_t
         for k in sorted(self.days)[:-KEEP_DAYS]:
             del self.days[k]
         self.refresh(day)
@@ -424,16 +439,31 @@ class Engine:
         return "級別 影線" if s["tier"] == "影線" else f"級別 {s['tier']}價位"
 
     @staticmethod
+    def _name_lines(s):
+        """卡片用的「哪一個價位」：有形成時間時，一行放得下就 名稱 價位@時間，放不下就拆兩行"""
+        t = s.get("lt")
+        if t is None or s["tier"] not in ("大", "小", "破"):
+            return [Engine._name_line(s)]
+        head = (NAMES[s["name"]] if s["tier"] == "大" else
+                ("盤中波段高" if s["dir"] == "short" else "盤中波段低") if s["tier"] == "小" else
+                ("創新低追空" if s["dir"] == "short" else "創新高追多"))
+        one = f"{head} {_at(s['level'], t)}"
+        if cells(one) <= 24:
+            return [one]
+        return [f"{head} {f0(s['level'])}", f"形成 {_hm(t)}"]
+
+    @staticmethod
     def _name_line(s):
+        lv = _at(s["level"], s.get("lt"))
         if s["tier"] == "滯漲":
             return f"{'高檔放量滯漲' if s['dir'] == 'short' else '低檔放量不跌'} {f0(s['level'])}"
         if s["tier"] == "轉折":
             return f"{'高點降低' if s['dir'] == 'short' else '低點墊高'} {f0(s['level'])}"
         if s["tier"] == "破":
-            return f"{'創新低追空' if s['dir'] == 'short' else '創新高追多'} {f0(s['level'])}"
+            return f"{'創新低追空' if s['dir'] == 'short' else '創新高追多'} {lv}"
         if s["tier"] == "影線":
             return f"{'長上影線高點' if s['dir'] == 'short' else '長下影線低點'} {f0(s['level'])}"
-        return f"{NAMES[s['name']]} {f0(s['level'])}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {f0(s['level'])}"
+        return f"{NAMES[s['name']]} {lv}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {lv}"
 
     def _trend_tag(self, s, up, bar):
         """今日偏多／偏空與順勢逆勢的標籤（同時記到 s["trend"] 給紀錄用）"""
@@ -468,7 +498,7 @@ class Engine:
         up = s["dir"] == "short"
         tag = self._trend_tag(s, up, bar)
         sign = "高" if up else "低"
-        L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", self._tier_line(s), self._name_line(s)]
+        L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", self._tier_line(s), *self._name_lines(s)]
         if s["tier"] == "小":
             L.append(f"{s['t'] // 100:02d}:{s['t'] % 100:02d} 形成")
         L += [f"刺破 {s['pierce']:.0f} 點 {sign} {f0(s['ext'])}"]
@@ -518,6 +548,8 @@ class Engine:
             if bar["sess"] == "0":
                 self.levels.pop("or_hi", None)
                 self.levels.pop("or_lo", None)
+                self.level_t.pop("or_hi", None)
+                self.level_t.pop("or_lo", None)
         if self.sess_open is None:
             self.sess_open = bar["o"]
         self.nbars += 1
@@ -531,8 +563,9 @@ class Engine:
             if bar["t"] < 915:
                 self.or_bars.append(bar)
             elif "or_hi" not in self.levels and len(self.or_bars) >= 6:
-                self.levels["or_hi"] = max(b["h"] for b in self.or_bars)
-                self.levels["or_lo"] = min(b["l"] for b in self.or_bars)
+                ob_h, ob_l = max(self.or_bars, key=lambda b: b["h"]), min(self.or_bars, key=lambda b: b["l"])
+                self.levels["or_hi"], self.levels["or_lo"] = ob_h["h"], ob_l["l"]
+                self.level_t["or_hi"], self.level_t["or_lo"] = ob_h["t"], ob_l["t"]
         # 1. 先處理已經在等確認的掃蕩
         keep = []
         for s in self.pending:
@@ -545,11 +578,11 @@ class Engine:
             if broke or back:
                 why = ("又創高 " if up else "又創低 ") + f0(bar["h"] if up else bar["l"]) if broke else \
                       ("收盤又站上 " if up else "收盤又跌破 ") + f0(s["level"])
-                out.append([f"❌ 掃蕩失敗{who}", self._tier_line(s), self._name_line(s), why, "這個訊號不用看了"])
+                out.append([f"❌ 掃蕩失敗{who}", self._tier_line(s), *self._name_lines(s), why, "這個訊號不用看了"])
                 if self.journal:
                     self.journal.failed(s)
             elif s["n"] >= need:
-                out.append([f"✅ 掃蕩確認{who}", self._tier_line(s), self._name_line(s),
+                out.append([f"✅ 掃蕩確認{who}", self._tier_line(s), *self._name_lines(s),
                             f"連 {need} 根 沒再創{'高' if up else '低'}", f"現價 {f0(bar['c'])}",
                             f"停損參考 {f0(s['ext'])} {'上' if up else '下'}"])
                 if self.journal:
@@ -565,7 +598,7 @@ class Engine:
             hit = (bar["h"] > w["a"]) if w["up"] else (bar["l"] < w["a"])
             if hit:
                 out.append(["👀 留意作廢", f"又{'創高' if w['up'] else '創低'} {f0(bar['h'] if w['up'] else bar['l'])}",
-                            f"{'高點' if w['up'] else '低點'} {f0(w['a'])} 已被突破", "這個形態不成立"])
+                            f"{'高點' if w['up'] else '低點'} {_at(w['a'], w.get('at'))}", "已被突破", "這個形態不成立"])
             elif w["age"] < 12:
                 keep_w.append(w)
         self.watch_live = keep_w
@@ -600,12 +633,18 @@ class Engine:
                 cur_i = len(self.hist) - 1
                 if cur_i - hi_i >= _cfg("FUT_SWEEP_SESS_AGE", 6):
                     lv["sess_hi"] = prev[hi_i]["h"]
+                    self.level_t["sess_hi"] = prev[hi_i]["t"]
                 if cur_i - lo_i >= _cfg("FUT_SWEEP_SESS_AGE", 6):
                     lv["sess_lo"] = prev[lo_i]["l"]
+                    self.level_t["sess_lo"] = prev[lo_i]["t"]
             if self.seed_key == skey:
                 if self.seed_hi is not None:
+                    if self.seed_hi >= lv.get("sess_hi", -1):
+                        self.level_t["sess_hi"] = None           # 重啟前的高點：時間不知道
                     lv["sess_hi"] = max(lv.get("sess_hi", self.seed_hi), self.seed_hi)
                 if self.seed_lo is not None:
+                    if self.seed_lo <= lv.get("sess_lo", 1e9):
+                        self.level_t["sess_lo"] = None
                     lv["sess_lo"] = min(lv.get("sess_lo", self.seed_lo), self.seed_lo)
             for name, level in lv.items():
                 dk = (bar["day"], bar["sess"], name if not name.startswith("sess_") else f"{name}@{level}")
@@ -634,7 +673,8 @@ class Engine:
                 if (up and far < level + mn) or ((not up) and far > level - mn):
                     continue
                 s = {"dir": "short" if up else "long", "name": name, "level": level, "ext": far,
-                     "pierce": (far - level) if up else (level - far), "n": 0, "tier": "大", "held": ex["n"] if ex else 0}
+                     "pierce": (far - level) if up else (level - far), "n": 0, "tier": "大", "held": ex["n"] if ex else 0,
+                     "lt": self.level_t.get(name)}
                 self.done.add(dk)
                 self.pending.append(s)
                 fired.add(s["dir"])
@@ -659,7 +699,7 @@ class Engine:
                         continue
                     w = max(ws, key=lambda x: x["level"]) if d == "short" else min(ws, key=lambda x: x["level"])
                     up = d == "short"
-                    s = {"dir": d, "name": w["name"], "level": w["level"], "t": w["t"], "n": 0, "tier": "小",
+                    s = {"dir": d, "name": w["name"], "level": w["level"], "t": w["t"], "lt": w["t"], "n": 0, "tier": "小",
                          "ext": bar["h"] if up else bar["l"], "pierce": (bar["h"] - w["level"]) if up else (w["level"] - bar["l"])}
                     self.pending.append(s)
                     out.append(self._sweep_text(s, bar, ratio))
@@ -675,7 +715,7 @@ class Engine:
                 if d in fresh or any(p["tier"] == "影線" and p["dir"] == d for p in self.pending):
                     continue
                 lvl = bar["l"] if d == "long" else bar["h"]
-                w = {"dir": d, "name": f"wick_{bar['t']}", "level": lvl, "ext": lvl, "pierce": wick, "n": 0, "tier": "影線", "t": bar["t"]}
+                w = {"dir": d, "name": f"wick_{bar['t']}", "level": lvl, "ext": lvl, "pierce": wick, "n": 0, "tier": "影線", "t": bar["t"], "lt": bar["t"]}
                 self.pending.append(w)
                 out.append(self._wick_text(w, bar, ratio))
         if _cfg("FUT_PAT_ON", True) and not last_bar:
@@ -748,12 +788,14 @@ class Engine:
                     if _cfg("FUT_STRUCT_WATCH", True) and wkey not in done and ready(("watch", d)):
                         done.add(wkey)
                         last[("watch", d)] = self.nbars
-                        self.watch_live.append({"up": up, "a": a["level"], "age": 0})
+                        self.watch_live.append({"up": up, "a": a["level"], "at": a["t"], "age": 0})
                         out.append(["👀 高點降低（留意轉空）" if up else "👀 低點墊高（留意轉多）", "級別 結構轉換（未確認）",
-                                    f"{'高點降低' if up else '低點墊高'} {f0(a['level'])}→{f0(b['level'])}",
+                                    f"{'高點降低' if up else '低點墊高'} {_at(a['level'], a['t'])}",
+                                    f"→ {_at(b['level'], b['t'])}",
                                     f"頸線 {f0(neck)}",
                                     f"收盤{'跌破' if up else '站上'}才確認",
-                                    f"{'站回' if up else '跌破'} {f0(a['level'])} {'上' if up else '下'}就失效",
+                                    f"{'站回' if up else '跌破'} {_at(a['level'], a['t'])}",
+                                    f"{'上' if up else '下'}就失效",
                                     f"現價 {f0(bar['c'])}"])
                     continue
                 done.add(key)
@@ -762,7 +804,7 @@ class Engine:
                 last[("struct", d)] = self.nbars
                 s = {"dir": d, "name": f"struct_{bar['t']}", "level": b["level"], "ext": b["level"], "pierce": 0, "n": 0, "tier": "轉折", "t": bar["t"]}
                 out.append(self._pat_card(s, bar, ["🔻 結構轉換（轉空）" if up else "🔺 結構轉換（轉多）", "級別 結構轉換",
-                                                   f"{'高點降低' if up else '低點墊高'} {f0(a['level'])}→{f0(b['level'])}",
+                                                   f"{'高點降低' if up else '低點墊高'} {_at(a['level'], a['t'])}", f"→ {_at(b['level'], b['t'])}",
                                                    f"收盤{'跌破' if up else '站上'} {f0(neck)}", f"收盤 {f0(bar['c'])}"] ) + ["建議 1 口小試"])
         # ③ 創新低追空／創新高追多：收盤跌破（站上）「全日（含夜盤）」的低（高）點。只記進掃蕩紀錄，不推播
         if _cfg("FUT_BREAK_ON", True) and self.journal:
@@ -778,22 +820,23 @@ class Engine:
         done = self.__dict__.setdefault("_brk_done", set())
         for d in ("short", "long"):
             dn = d == "short"                                   # short＝跌破低點追空；long＝站上高點追多
-            cands = []                                          # (價位, 是不是已經站穩)
+            cands = []                                          # (價位, 是不是已經站穩, 形成時間)
             pick = (lambda b: b["l"]) if dn else (lambda b: b["h"])
             better = min if dn else max
             if prev:
                 i = better(range(len(prev)), key=lambda k: (pick(prev[k]), k if dn else -k))
-                cands.append((pick(prev[i]), cur_i - i >= age))
+                cands.append((pick(prev[i]), cur_i - i >= age, prev[i]["t"]))
             td = self.levels.get("td_lo" if dn else "td_hi")
             if td is not None:
-                cands.append((td, True))
+                cands.append((td, True, self.level_t.get("td_lo" if dn else "td_hi")))
             if self.seed_key == skey:
                 sd = self.seed_lo if dn else self.seed_hi
                 if sd is not None:
-                    cands.append((sd, True))
+                    cands.append((sd, True, None))
             if not cands:
                 continue
             lvl = better(c[0] for c in cands)
+            lvl_t = next(c[2] for c in cands if c[0] == lvl)
             if not any(c[1] for c in cands if c[0] == lvl):     # 全日低（高）是剛剛才創的：連續下殺，不算站穩後被跌破
                 continue
             if not ((bar["c"] <= lvl - mn) if dn else (bar["c"] >= lvl + mn)):
@@ -809,7 +852,7 @@ class Engine:
             nseg = self.hist[-near_n:]
             near = max(b["h"] for b in nseg) if dn else min(b["l"] for b in nseg)
             s = {"dir": d, "name": f"brk_{bar['t']}", "level": lvl, "ext": ext, "near": near, "pierce": abs(bar["c"] - lvl),
-                 "n": 0, "tier": "破", "t": bar["t"]}
+                 "n": 0, "tier": "破", "t": bar["t"], "lt": lvl_t}
             self._trend_tag(s, dn, bar)
             self.journal.opened(s, bar, None)
             self.journal.confirmed(s, bar)
@@ -917,28 +960,31 @@ def seed_levels(now, fetch=fetch_zip, files=3):
                     continue
                 v = seg.get(k)
                 if v is None:
-                    seg[k] = [px, px]
+                    seg[k] = [px, px, t // 100, t // 100]
                 else:
-                    v[0], v[1] = max(v[0], px), min(v[1], px)
+                    if px > v[0]:
+                        v[0], v[2] = px, t // 100
+                    if px < v[1]:
+                        v[1], v[3] = px, t // 100
     best = {}                                     # {(盤別, 起算日): (到期月, 高, 低)}，只收已經結束、資料齊的盤
-    for (sk, day, exp), (hi, lo) in seg.items():
+    for (sk, day, exp), (hi, lo, hit, lot) in seg.items():
         end = datetime(day.year, day.month, day.day, 13, 45, tzinfo=TZ) if sk == "0" else datetime(day.year, day.month, day.day, 5, 0, tzinfo=TZ) + timedelta(days=1)
         if end > now:
             continue
         if sk == "1" and tail.get((day, exp), 0) < 43000:           # 夜盤後半段的檔案還沒出來：不是完整的夜盤，不用
             continue
         if (sk, day) not in best or exp < best[(sk, day)][0]:      # 同一天有兩個到期月：用最近月
-            best[(sk, day)] = (exp, hi, lo)
+            best[(sk, day)] = (exp, hi, lo, hit, lot)
     days = {}
-    for (sk, day), (exp, hi, lo) in best.items():
+    for (sk, day), (exp, hi, lo, hit, lot) in best.items():
         if sk == "0":                                              # 日盤 → 當天
             rec = days.setdefault(day.isoformat(), {})
-            rec["d_hi"], rec["d_lo"] = hi, lo
+            rec["d_hi"], rec["d_lo"], rec["d_hi_t"], rec["d_lo_t"] = hi, lo, hit, lot
             if ("0", day, exp) in lastp:
                 rec["d_c"] = lastp[("0", day, exp)]                # 日盤最後一筆成交價＝收盤價
         else:                                                      # 夜盤 → 隔天的交易日
             rec = days.setdefault(G.trade_day(datetime(day.year, day.month, day.day, 15, 0, tzinfo=TZ)), {})
-            rec["n_hi"], rec["n_lo"] = hi, lo
+            rec["n_hi"], rec["n_lo"], rec["n_hi_t"], rec["n_lo_t"] = hi, lo, hit, lot
     return {"days": days} if days else {}
 
 
@@ -1056,7 +1102,9 @@ class Runner:
                         self.send(lines)
                         n += 1
                 self.eng.events = []
-                if self.eng.close_session(sess, hi, lo):
+                hi_t = max(bars, key=lambda b: b["h"])["t"] if bars else None
+                lo_t = min(bars, key=lambda b: b["l"])["t"] if bars else None
+                if self.eng.close_session(sess, hi, lo, hi_t=hi_t, lo_t=lo_t):
                     self._save(now)
                     if sess == "0":
                         self._off_day = G.trade_day(now)            # 等官方收盤價
@@ -1173,15 +1221,19 @@ class Runner:
         pos = self._positions()
         price, near = q["last"], _cfg("FUT_NEAR_LEVEL", 30)
         sess, day = G.session_of(now), G.trade_day(now)
-        cands = {"多": [(NAMES[k], v) for k, v in self.eng.levels.items() if k.endswith("_hi")],
-                 "空": [(NAMES[k], v) for k, v in self.eng.levels.items() if k.endswith("_lo")]}
+        cands = {"多": [(NAMES[k], v, self.eng.level_t.get(k)) for k, v in self.eng.levels.items() if k.endswith("_hi")],
+                 "空": [(NAMES[k], v, self.eng.level_t.get(k)) for k, v in self.eng.levels.items() if k.endswith("_lo")]}
         hi_, lo_ = q.get("high"), q.get("low")                       # 本盤高低用期交所報價的（機器人重啟後，自己組的 5 分K 只有重啟之後的，會漏掉更高的高點）
+        hb_ = lb_ = None
+        if self.eng.hist:
+            hb_ = max(self.eng.hist, key=lambda b: b["h"])
+            lb_ = min(self.eng.hist, key=lambda b: b["l"])
         if (hi_ is None or lo_ is None) and self.eng.hist:
-            hi_, lo_ = max(b["h"] for b in self.eng.hist), min(b["l"] for b in self.eng.hist)
+            hi_, lo_ = hb_["h"], lb_["l"]
         if hi_ is not None:
-            cands["多"].append(("本盤前高", hi_))
+            cands["多"].append(("本盤前高", hi_, hb_["t"] if hb_ else None))
         if lo_ is not None:
-            cands["空"].append(("本盤前低", lo_))
+            cands["空"].append(("本盤前低", lo_, lb_["t"] if lb_ else None))
         edge = _cfg("FUT_NEAR_MIN", 3)                               # 離本盤高低不到 3 點＝就在高低點上，那是「創高／創低」，不算接近
         sent = self.__dict__.setdefault("_near_sent", set())
         cool = self.__dict__.setdefault("_near_ts", {})
@@ -1194,14 +1246,14 @@ class Runner:
                 return 0
             pv = getattr(self.eng, "pivot", None)
             for side in ("多", "空"):
-                for name, level in cands[side]:
+                for name, level, lt in cands[side]:
                     hi = side == "多"
                     gap = (level - price) if hi else (price - level)
                     key = ("flat", day, sess, name) if name.startswith("本盤") else ("flat", day, sess, name, level)
                     if (edge if name.startswith("本盤") else 0) <= gap <= near and key not in sent:
                         sent.add(key)
                         self._flat_ts = ts
-                        L = [f"📍 空手 接近{'前高' if hi else '前低'}", f"{name} {f0(level)}", f"現價 {f0(price)}", f"還差 {gap:.0f} 點"]
+                        L = [f"📍 空手 接近{'前高' if hi else '前低'}", f"{name} {f0(level)}"] + ([f"形成 {_hm(lt)}"] if lt is not None else []) + [f"現價 {f0(price)}", f"還差 {gap:.0f} 點"]
                         if pv:
                             L.append(f"多空分界 {f0(pv)}（{'偏多' if price > pv else '偏空'}）")
                         L.append("留意突破或被壓回" if hi else "留意跌破或撐住")
@@ -1209,7 +1261,7 @@ class Runner:
                         return 1
             return 0
         for p in pos:
-            for name, level in cands.get(p["side"], []):
+            for name, level, lt in cands.get(p["side"], []):
                 gap = (level - price) if p["side"] == "多" else (price - level)
                 live = name.startswith("本盤")                      # 本盤高低會一直被刷新：不要每換一個價位就再提醒
                 key = (day, sess, p["side"], p["kind"], name) if live else (day, sess, p["side"], p["kind"], name, level)
@@ -1220,7 +1272,7 @@ class Runner:
                     sent.add(key)
                     cool[ck] = now.timestamp()
                     hi = p["side"] == "多"
-                    self.send([f"📍 接近{'前高' if hi else '前低'}", f"{p['side']} {p['kind']} {p['qty']}口", f"{name} {f0(level)}",
+                    self.send([f"📍 接近{'前高' if hi else '前低'}", f"{p['side']} {p['kind']} {p['qty']}口", f"{name} {f0(level)}"] + ([f"形成 {_hm(lt)}"] if lt is not None else []) + [
                                f"現價 {f0(price)}", f"還差 {gap:.0f} 點", "可考慮減碼或停利"])
                     n += 1
         return n
@@ -1260,7 +1312,7 @@ class Runner:
                 trig = (cur - ref >= step) if up else (ref - cur >= step)
             if not trig:
                 continue
-            names = [NAMES[k] + " " + f0(v) for k, v in self.eng.levels.items()
+            names = [NAMES[k] + " " + f0(v) + (f"（形成 {_hm(self.eng.level_t.get(k))}）" if self.eng.level_t.get(k) is not None else "") for k, v in self.eng.levels.items()
                      if k in (("prev_hi", "td_hi", "or_hi") if up else ("prev_lo", "td_lo", "or_lo")) and ((ref < v <= cur) if up else (cur <= v < ref))]
             L = [("🔺 創本盤新高" if up else "🔻 創本盤新低") if sess == "0" else ("🔺 創夜盤新高" if up else "🔻 創夜盤新低"),
                  f"{'新高' if up else '新低'} {f0(cur)}", f"{'上一個高' if up else '上一個低'} {f0(ref)}"]
