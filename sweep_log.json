@@ -50,8 +50,8 @@
    "ext": 43822.0,
    "trend": "順勢",
    "ratio": null,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 44148.0,
    "stop": 43822.0,
    "stop2": 44088.0,
@@ -75,6 +75,21 @@
    "ratio": 0.5,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-12",
+   "sess": "0",
+   "t": 1135,
+   "ts": "2026-11-12T11:40+08:00",
+   "name": "長下影線低點 44,050",
+   "tier": "影線",
+   "dir": "long",
+   "level": 44050.0,
+   "ext": 44050.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
