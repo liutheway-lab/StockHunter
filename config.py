@@ -164,6 +164,7 @@ FUT_STRUCT_ON = True             # 結構轉換
 FUT_STRUCT_LH = 15               # 後面的轉折高要比前面低（轉折低要比前面高）幾點以上
 FUT_STRUCT_NEAR = 50             # 前面那個轉折高（低）要離本盤高（低）幾點內，確保是頭部（底部）
 FUT_STRUCT_AGE = 24              # 第二個轉折點形成後，幾根 5分K 內跌破（站上）頸線才算
+FUT_STRUCT_WATCH = True          # 高點降低成立、還沒跌破頸線時，先提醒「留意」（False＝只在跌破頸線時提醒）
 FUT_NEAR_MIN = 3                 # 離本盤高低不到幾點就不算「接近」（那是創高／創低）
 FUT_NEAR_COOL = 1800             # 本盤前高（低）靠近的提醒，同一邊最少隔幾秒
 FUT_SWING_MIN_STEP = 100         # 新轉折低點要比目前停損／上次提醒的位置再有利幾點才提醒
