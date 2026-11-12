@@ -844,7 +844,7 @@ class Runner:
                 self.send(lines)
                 n += 1
         try:
-            n += self._handle_events() + self._near_check(now, q)
+            n += self._handle_events() + self._near_check(now, q) + self._hl_check(now, q)
         except Exception as e:
             print("持倉提醒失敗：", repr(e)[:100], flush=True)
         return n
@@ -879,6 +879,16 @@ class Runner:
                 if not ok:
                     continue
                 up = kind == "low"
+                key = (p["kind"], p["side"], round(p["avg"]))
+                last = self.__dict__.setdefault("_swing_last", {}).get(key)
+                if stop is None:
+                    if last is not None:
+                        continue                                  # 沒設停損：已經提醒過一次，不再每個轉折都跳
+                else:
+                    ref = stop if last is None else (max(stop, last) if up else min(stop, last))
+                    if (level - ref if up else ref - level) < _cfg("FUT_SWING_MIN_STEP", 30):
+                        continue                                  # 比上次提醒（或目前停損）改善不到 N 點：不吵你
+                self._swing_last[key] = level
                 self.send([f"📍 新轉折{'低' if up else '高'}點", f"{p['side']} {p['kind']} {p['qty']}口", f"{t // 100:02d}:{t % 100:02d} 形成",
                            f"轉折{'低' if up else '高'}點 {f0(level)}", f"目前停損 {f0(stop) if stop is not None else '未設'}",
                            f"可考慮把停損{'上' if up else '下'}移", "按「期貨→停利/停損」改"])
@@ -898,6 +908,7 @@ class Runner:
             cands["多"].append(("本盤前高", max(b["h"] for b in self.eng.hist)))
             cands["空"].append(("本盤前低", min(b["l"] for b in self.eng.hist)))
         sent = self.__dict__.setdefault("_near_sent", set())
+        cool = self.__dict__.setdefault("_near_ts", {})
         n = 0
         if not pos:                                                  # 空手：提醒價格靠近前高前低，讓你留意建倉機會
             if not _cfg("FUT_FLAT_NEAR_ON", True):
@@ -910,7 +921,7 @@ class Runner:
                 for name, level in cands[side]:
                     hi = side == "多"
                     gap = (level - price) if hi else (price - level)
-                    key = ("flat", day, sess, name, level)
+                    key = ("flat", day, sess, name) if name.startswith("本盤") else ("flat", day, sess, name, level)
                     if 0 <= gap <= near and key not in sent:
                         sent.add(key)
                         self._flat_ts = ts
@@ -924,13 +935,66 @@ class Runner:
         for p in pos:
             for name, level in cands.get(p["side"], []):
                 gap = (level - price) if p["side"] == "多" else (price - level)
-                key = (day, sess, p["side"], p["kind"], name, level)
+                live = name.startswith("本盤")                      # 本盤高低會一直被刷新：不要每換一個價位就再提醒
+                key = (day, sess, p["side"], p["kind"], name) if live else (day, sess, p["side"], p["kind"], name, level)
+                ck = (p["side"], p["kind"], name)
+                if live and now.timestamp() - cool.get(ck, 0) < _cfg("FUT_NEAR_COOL", 1800):
+                    continue
                 if 0 <= gap <= near and key not in sent:
                     sent.add(key)
+                    cool[ck] = now.timestamp()
                     hi = p["side"] == "多"
                     self.send([f"📍 接近{'前高' if hi else '前低'}", f"{p['side']} {p['kind']} {p['qty']}口", f"{name} {f0(level)}",
                                f"現價 {f0(price)}", f"還差 {gap:.0f} 點", "可考慮減碼或停利"])
                     n += 1
+        return n
+
+    def _hl_check(self, now, q):
+        """創本盤新高／新低：不管有沒有部位都提醒（空手也是在等進場）。
+        開盤前 FUT_HL_WARM 分鐘只記錄；之後第一次突破馬上提醒，接著要再創高（低）FUT_HL_STEP 點以上才再提醒，
+        並註明這次突破了哪些關鍵價位（上個日盤高、上個夜盤高、開盤30分高…）"""
+        if not _cfg("FUT_HL_ON", True) or not q or q.get("high") is None or q.get("low") is None:
+            return 0
+        sess = G.session_of(now)
+        if sess is None:
+            return 0
+        key = (G.trade_day(now), sess)
+        hl = self.__dict__.setdefault("_hl", {})
+        if key not in hl:
+            hl.clear()
+            start = now.replace(hour=8, minute=45, second=0, microsecond=0) if sess == "0" else now.replace(hour=15, minute=0, second=0, microsecond=0)
+            if sess == "1" and now.hour < 15:
+                start -= timedelta(days=1)
+            hl[key] = {"start": start, "hi": q["high"], "lo": q["low"], "ready": False, "ah": None, "al": None}
+        h = hl[key]
+        if not h["ready"]:                                      # 暖機：只記錄，不提醒
+            h["hi"], h["lo"] = q["high"], q["low"]
+            if (now - h["start"]).total_seconds() >= _cfg("FUT_HL_WARM", 30) * 60:
+                h["ready"] = True
+            return 0
+        step, n = _cfg("FUT_HL_STEP", 30), 0
+        price = q.get("last")
+        for up in (True, False):
+            cur = q["high"] if up else q["low"]
+            ref = h["ah" if up else "al"]
+            if ref is None:
+                ref = h["hi" if up else "lo"]
+                trig = cur > ref if up else cur < ref
+            else:
+                trig = (cur - ref >= step) if up else (ref - cur >= step)
+            if not trig:
+                continue
+            names = [NAMES[k] + " " + f0(v) for k, v in self.eng.levels.items()
+                     if k in (("day_hi", "night_hi", "or_hi") if up else ("day_lo", "night_lo", "or_lo")) and ((ref < v <= cur) if up else (cur <= v < ref))]
+            L = [("🔺 創本盤新高" if up else "🔻 創本盤新低") if sess == "0" else ("🔺 創夜盤新高" if up else "🔻 創夜盤新低"),
+                 f"{'新高' if up else '新低'} {f0(cur)}", f"{'上一個高' if up else '上一個低'} {f0(ref)}"]
+            if price is not None:
+                L.append(f"現價 {f0(price)}")
+            for nm in names:
+                L.append(f"突破 {nm}" if up else f"跌破 {nm}")
+            self.send(L)
+            h["ah" if up else "al"] = cur
+            n += 1
         return n
 
     def _digest_check(self, now=None):
