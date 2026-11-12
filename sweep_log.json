@@ -128,6 +128,21 @@
    "ratio": null,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-13",
+   "sess": "1",
+   "t": 1520,
+   "ts": "2026-11-12T15:25+08:00",
+   "name": "長下影線低點 43,101",
+   "tier": "影線",
+   "dir": "long",
+   "level": 43101.0,
+   "ext": 43101.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
