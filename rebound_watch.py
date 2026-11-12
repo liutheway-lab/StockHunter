@@ -11,6 +11,7 @@
 """
 import datetime as dt
 import os
+import re
 import time
 from collections import deque
 
@@ -36,6 +37,102 @@ _hist = {}                # 代號 → deque[(時間戳, 成交價, 累計張數
 _names = {}               # 代號 → 名稱（每檔只存一次）
 _last_push = {}           # 代號 → 上次推播時間戳
 _day = {"d": None}
+
+
+# ───────────── 處置股（證交所、櫃買中心公告，自動抓）─────────────
+# 處置股約每 2 分鐘才撮合一次，價格是一階一階跳、量也少：殺低、反彈的樣態跟平常不一樣，卡片上標出來讓你打折看
+_DISP = {"codes": {}, "at": 0.0, "try": 0.0, "ok": False}      # codes：代號 → 處置結束日
+DISP_URLS = [
+    "https://www.twse.com.tw/rwd/zh/announcement/punish?response=json",
+    "https://www.twse.com.tw/announcement/punish?response=json",
+    "https://www.twse.com.tw/announcement/punish?response=html",
+    "https://www.tpex.org.tw/www/zh-tw/bulletin/disposal?response=json",
+    "https://www.tpex.org.tw/web/bulletin/disposal_information/disposal_information_result.php?l=zh-tw&o=json",
+]
+DISP_REFRESH = 3 * 3600      # 名單每 3 小時更新一次
+DISP_RETRY = 600             # 抓不到的話，10 分鐘後再試
+_RANGE = re.compile(r"(\d{2,3})/(\d{1,2})/(\d{1,2})\s*[～~\-–至到]+\s*(\d{2,3})/(\d{1,2})/(\d{1,2})")
+
+
+def _roc(y, m, d):
+    return dt.date(int(y) + 1911, int(m), int(d))
+
+
+def _rows(obj):
+    """把 JSON 或 HTML 裡「一列一列」的資料找出來，每列轉成文字清單"""
+    out = []
+    if isinstance(obj, str):
+        for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", obj, flags=re.S | re.I):
+            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.S | re.I)]
+            if cells:
+                out.append(cells)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            out += _rows(v)
+    elif isinstance(obj, list):
+        if obj and all(isinstance(r, list) for r in obj):
+            out += [[str(c) for c in r] for r in obj]
+        else:
+            for v in obj:
+                out += _rows(v)
+    return out
+
+
+def parse_disposal(obj, today):
+    """從公告資料找出「今天正在處置」的股票，回傳 {代號: 結束日}"""
+    res = {}
+    for cells in _rows(obj):
+        code = next((c.strip() for c in cells if re.fullmatch(r"\d{4,6}[A-Z]?", c.strip())), None)
+        m = _RANGE.search(" ".join(cells))
+        if not (code and m):
+            continue
+        try:
+            a, b = _roc(*m.groups()[:3]), _roc(*m.groups()[3:])
+        except ValueError:
+            continue
+        if a <= today <= b:
+            res[code] = max(b, res.get(code, b))
+    return res
+
+
+def refresh_disposal(now=None, force=False):
+    """更新處置股名單（在背景迴圈裡呼叫，不會卡住推播）。抓不到就沿用舊名單，不影響偵測"""
+    now = now or time.time()
+    age = now - _DISP["at"]
+    if not force and age < DISP_REFRESH and _DISP["ok"]:
+        return
+    if not force and now - _DISP["try"] < DISP_RETRY:
+        return
+    _DISP["try"] = now
+    today = dt.datetime.fromtimestamp(now, TPE).date()
+    codes, got = {}, 0
+    for url in DISP_URLS:
+        try:
+            r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code != 200:
+                continue
+            try:
+                part = parse_disposal(r.json(), today)
+            except ValueError:
+                part = parse_disposal(r.text, today)
+            if part:
+                got += 1
+                codes.update(part)
+        except Exception as e:
+            print("處置股名單抓取失敗：", url[:50], repr(e)[:60])
+    for c in (os.getenv("DISPOSAL_CODES", "") or "").replace("，", ",").split(","):   # 手動補充：Render 環境變數 DISPOSAL_CODES=2360,3037
+        if c.strip():
+            codes.setdefault(c.strip(), today)
+    if got:
+        _DISP.update(codes=codes, at=now, ok=True)
+        print(f"處置股名單更新：{len(codes)} 檔", flush=True)
+    elif codes:                                     # 公告抓不到：只加上手動補充的，原本抓到的名單保留
+        _DISP["codes"].update(codes)
+
+
+def disposal_end(code):
+    """這檔今天正在處置就回傳結束日，否則 None"""
+    return _DISP["codes"].get(str(code).strip())
 
 
 def _num(v):
@@ -164,8 +261,11 @@ def message(hs):
             f"🟢 {code} {name}",
             f"　📉 殺低 {drop * 100:.1f}%　📈 反彈 +{reb * 100:.1f}%",
             f"　💰 現價 {z:g}　📊 今日量 {lots:,.0f} 張",
-            "",
         ]
+        end = disposal_end(code)
+        if end:
+            lines += [f"　⚠️ 處置股（到 {end:%m/%d}）", "　約每 2 分鐘撮合，訊號偏慢"]
+        lines.append("")
     lines += [
         "━━━━━━━━━━━━━━",
         "⚠️ 條件符合，不代表可以買",
@@ -210,6 +310,7 @@ def loop(interval=90, get_dir=None):
         try:
             if in_session():
                 _reset_if_new_day()
+                refresh_disposal()
                 if universe is None:
                     d = get_dir() if get_dir else D.get_directory()
                     if d is not None:
