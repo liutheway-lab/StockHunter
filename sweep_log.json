@@ -378,16 +378,16 @@
    "ext": 42762.0,
    "trend": "順勢",
    "ratio": null,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 42543.0,
    "stop": 42762.0,
    "stop2": 42658.0,
-   "bars": 2,
+   "bars": 3,
    "rf": 0.7853881278538812,
    "rn": 1.4956521739130435,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {}
