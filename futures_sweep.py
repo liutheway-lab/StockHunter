@@ -3,7 +3,8 @@
 什麼是掃蕩：價格刺破一個關鍵高（低）點，把停損單掃掉，然後 5 分K 又收回去。
   掃上方：高點被刺破，5 分K 收在高點下方 → 留意做空
   掃下方：低點被刺破，5 分K 收在低點上方 → 留意做多
-關鍵價位（大價位）：上個日盤高低、上個夜盤高低、今天開盤 30 分鐘高低、本盤（目前這個盤）到目前的高低（要形成 30 分鐘以上）
+關鍵價位（大價位）：上個交易日高低、今日全天高低（含昨夜盤）、今天開盤 30 分鐘高低、本盤（目前這個盤）到目前的高低（要形成 30 分鐘以上）
+  一個交易日＝夜盤＋日盤：昨天 15:00 開的夜盤，和今天的日盤是同一天；昨天日盤和前天夜盤是同一天
 盤中波段（小價位）：左右各 2 根 5 分K 都比它低（高）的點；只看最近 3 小時、離現價 150 點內，同方向同時只提醒一個
 價格先站上（跌破）價位再回來也算（最多停留 3 根 5 分K），停損參考用這段期間最極端的點
 提醒裡會標「大價位／小價位」，並附這根 5 分K 的成交量是近 20 根平均的幾倍（只是參考，不拿來過濾）
@@ -36,9 +37,11 @@ LEVEL_FILE = "/tmp/futures_levels.json"
 ZIP_URL = "https://www.taifex.com.tw/file/taifex/Dailydownload/DailydownloadCSV/Daily_{d}.zip"
 HEAD = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Referer": "https://www.taifex.com.tw/cht/3/dlFutPrevious30DaysSalesData"}
-NAMES = {"day_hi": "上個日盤高", "day_lo": "上個日盤低", "night_hi": "上個夜盤高", "night_lo": "上個夜盤低",
+NAMES = {"prev_hi": "上個交易日高", "prev_lo": "上個交易日低", "td_hi": "今日全天高", "td_lo": "今日全天低",
          "or_hi": "今日開盤30分高", "or_lo": "今日開盤30分低", "sess_hi": "本盤高", "sess_lo": "本盤低"}
-STORED = ("day_hi", "day_lo", "night_hi", "night_lo", "or_hi", "or_lo")      # 會存檔的價位（本盤高低隨時在變，不存）
+STORED = ("prev_hi", "prev_lo", "td_hi", "td_lo", "or_hi", "or_lo")      # 會存檔的價位（本盤高低隨時在變，不存）
+ALIAS = {"day_hi": "prev_hi", "day_lo": "prev_lo", "night_hi": "td_hi", "night_lo": "td_lo"}   # 舊的手動設定名稱（SWEEP_LEVELS）
+KEEP_DAYS = 6                                                               # 存檔保留最近幾個交易日的夜盤／日盤紀錄
 SESS_NAME = {"0": "日盤", "1": "夜盤"}
 
 
@@ -332,7 +335,13 @@ class Journal:
 class Engine:
     def __init__(self, levels=None):
         self.levels = {k: v for k, v in (levels or {}).items() if k in STORED and v}
-        self.pivot = (levels or {}).get("pivot") or None   # 基準價＝前一個日盤 (高+低+收)/3；收盤在它上面算偏多，下面算偏空
+        self.pivot = (levels or {}).get("pivot") or None   # 基準價＝上個交易日 (高+低+收)/3；收盤在它上面算偏多，下面算偏空
+        # 每個交易日一筆：夜盤 n_hi/n_lo、日盤 d_hi/d_lo/d_c（收盤）。夜盤算進「隔天」的交易日（昨夜盤 + 今日日盤 = 今日）
+        self.days = {k: dict(v) for k, v in ((levels or {}).get("days") or {}).items() if isinstance(v, dict)}
+        self.prev = None                                   # 上個交易日 {"day","hi","lo","c"}
+        self.manual = {}                                   # 手動指定的價位（SWEEP_LEVELS），refresh 時不被蓋掉
+        if self.days:
+            self.refresh(G.trade_day(datetime.now(TZ)))
         self.journal = None                                # 掃蕩紀錄（Journal），沒有就不記
         self.events = []                                   # 新形成的轉折高低點：[("low"／"high", 價位, 時間)]，給持倉的「停損上移」提醒用
         self.last_c = None                                 # (盤別, 最近一根收盤)，日盤結束時算基準價用
@@ -351,17 +360,44 @@ class Engine:
         self.seed_hi = None
         self.seed_lo = None
 
-    # 盤結束：把這個盤的高低存成「上個日盤／夜盤」
-    def close_session(self, sess, hi, lo):
+    def refresh(self, cur_day):
+        """由每個交易日的紀錄算出：上個交易日（前夜盤＋日盤）高低收、今日全天（已結束的夜盤段）高低、基準價。
+        cur_day＝目前的交易日（YYYY-MM-DD）。日盤收盤後這一天就算完整，變成「上個交易日」"""
+        for k in ("prev_hi", "prev_lo", "td_hi", "td_lo"):
+            self.levels.pop(k, None)
+        self.prev = None
+        done = sorted(d for d, g in self.days.items() if g.get("d_hi") is not None and d <= cur_day)
+        if done:
+            g = self.days[done[-1]]
+            his = [v for v in (g.get("n_hi"), g["d_hi"]) if v is not None]
+            los = [v for v in (g.get("n_lo"), g["d_lo"]) if v is not None]
+            hi, lo, c = max(his), min(los), g.get("d_c")
+            self.prev = {"day": done[-1], "hi": hi, "lo": lo, "c": c}
+            self.levels["prev_hi"], self.levels["prev_lo"] = hi, lo
+            if c is not None:
+                self.pivot = (hi + lo + c) / 3
+        g = self.days.get(cur_day)
+        if g and g.get("d_hi") is None and g.get("n_hi") is not None and g.get("n_lo") is not None:
+            self.levels["td_hi"], self.levels["td_lo"] = g["n_hi"], g["n_lo"]
+        self.levels.update(self.manual)
+
+    # 盤結束：把這個盤的高低記進它所屬的交易日（夜盤 → 隔天那個交易日，日盤 → 當天）
+    def close_session(self, sess, hi, lo, day=None):
         if hi is None or lo is None:
             return False
-        pre = "day" if sess == "0" else "night"
-        self.levels[pre + "_hi"], self.levels[pre + "_lo"] = hi, lo
-        if sess == "0" and self.last_c and self.last_c[0] == "0":
-            self.pivot = (hi + lo + self.last_c[1]) / 3
+        day = day or (self.skey[0] if self.skey else G.trade_day(datetime.now(TZ)))
+        g = self.days.setdefault(day, {})
         if sess == "0":
+            g["d_hi"], g["d_lo"] = hi, lo
+            if self.last_c and self.last_c[0] == "0":
+                g["d_c"] = self.last_c[1]
             self.levels.pop("or_hi", None)
             self.levels.pop("or_lo", None)
+        else:
+            g["n_hi"], g["n_lo"] = hi, lo
+        for k in sorted(self.days)[:-KEEP_DAYS]:
+            del self.days[k]
+        self.refresh(day)
         self.pending, self.swings = [], []
         return True
 
@@ -718,7 +754,7 @@ def load_levels(now=None):
         with open(LEVEL_FILE, encoding="utf-8") as f:
             j = json.load(f)
         if now - datetime.fromisoformat(j["asof"]) < timedelta(days=4):
-            return {k: v for k, v in j["levels"].items() if k in STORED or k == "pivot"}
+            return {k: v for k, v in j["levels"].items() if k in STORED or k in ("pivot", "days")}
     except Exception:
         pass
     return {}
@@ -744,10 +780,12 @@ def fetch_zip(d):
 
 
 def seed_levels(now, fetch=fetch_zip, files=3):
-    """機器人剛啟動、沒有存檔時：從期交所最近幾天的逐筆檔，算出最近一個完整的日盤／夜盤高低。
+    """機器人剛啟動、沒有存檔時：從期交所最近幾天的逐筆檔，算出最近幾個完整的日盤／夜盤高低，
+    回傳 {"days": {交易日: {n_hi, n_lo（夜盤）, d_hi, d_lo, d_c（日盤，含收盤）}}}。夜盤算進隔天的交易日。
     一行一行讀、不把整個檔案放進記憶體（Render 只有 512MB）"""
     seg = {}                                      # {(盤別, 起算日, 到期月): [高, 低]}
     lastt, lastp = {}, {}
+    tail = {}                                     # {(起算日, 到期月): 夜盤跨午夜之後最晚的成交時間}，要到 04:30 以後才算夜盤資料齊了
     got, d = 0, now.date()
     for _ in range(8):
         if got >= files:
@@ -776,6 +814,7 @@ def seed_levels(now, fetch=fetch_zip, files=3):
                     k = ("1", day, row[2].strip())
                 elif t < 50000:
                     k = ("1", day - timedelta(days=1), row[2].strip())
+                    tail[(k[1], k[2])] = max(tail.get((k[1], k[2]), 0), t)
                 else:
                     continue
                 v = seg.get(k)
@@ -783,29 +822,26 @@ def seed_levels(now, fetch=fetch_zip, files=3):
                     seg[k] = [px, px]
                 else:
                     v[0], v[1] = max(v[0], px), min(v[1], px)
-    best = {}                                     # {盤別: (起算日, 高, 低)}，只收已經結束的盤
-    for s in ("0", "1"):
-        ends = {}
-        for (sk, day, exp), (hi, lo) in seg.items():
-            if sk != s:
-                continue
-            end = datetime(day.year, day.month, day.day, 13, 45, tzinfo=TZ) if s == "0" else datetime(day.year, day.month, day.day, 5, 0, tzinfo=TZ) + timedelta(days=1)
-            if end <= now:
-                if day not in ends or exp < ends[day][0]:           # 同一天有兩個到期月：用最近月
-                    ends[day] = (exp, hi, lo)
-        if ends:
-            day = max(ends)
-            best[s] = (day, ends[day][1], ends[day][2])
-            if s == "0" and (s, day, ends[day][0]) in lastp:
-                best["close"] = lastp[(s, day, ends[day][0])]
-    out = {}
-    if "0" in best:
-        out["day_hi"], out["day_lo"] = best["0"][1], best["0"][2]
-        if "close" in best:
-            out["pivot"] = (best["0"][1] + best["0"][2] + best["close"]) / 3
-    if "1" in best:
-        out["night_hi"], out["night_lo"] = best["1"][1], best["1"][2]
-    return out
+    best = {}                                     # {(盤別, 起算日): (到期月, 高, 低)}，只收已經結束、資料齊的盤
+    for (sk, day, exp), (hi, lo) in seg.items():
+        end = datetime(day.year, day.month, day.day, 13, 45, tzinfo=TZ) if sk == "0" else datetime(day.year, day.month, day.day, 5, 0, tzinfo=TZ) + timedelta(days=1)
+        if end > now:
+            continue
+        if sk == "1" and tail.get((day, exp), 0) < 43000:           # 夜盤後半段的檔案還沒出來：不是完整的夜盤，不用
+            continue
+        if (sk, day) not in best or exp < best[(sk, day)][0]:      # 同一天有兩個到期月：用最近月
+            best[(sk, day)] = (exp, hi, lo)
+    days = {}
+    for (sk, day), (exp, hi, lo) in best.items():
+        if sk == "0":                                              # 日盤 → 當天
+            rec = days.setdefault(day.isoformat(), {})
+            rec["d_hi"], rec["d_lo"] = hi, lo
+            if ("0", day, exp) in lastp:
+                rec["d_c"] = lastp[("0", day, exp)]                # 日盤最後一筆成交價＝收盤價
+        else:                                                      # 夜盤 → 隔天的交易日
+            rec = days.setdefault(G.trade_day(datetime(day.year, day.month, day.day, 15, 0, tzinfo=TZ)), {})
+            rec["n_hi"], rec["n_lo"] = hi, lo
+    return {"days": days} if days else {}
 
 
 # ───────────── 背景執行 ─────────────
@@ -815,6 +851,7 @@ def parse_manual(txt):
     for part in (txt or "").replace("，", ",").split(","):
         k, _, v = part.partition("=")
         k = k.strip()
+        k = ALIAS.get(k, k)
         try:
             if k in NAMES:
                 out[k] = float(v.strip().replace(",", ""))
@@ -846,7 +883,7 @@ class Runner:
         self.last_at = None
 
     def _save(self, now):
-        save_levels({**self.eng.levels, **({"pivot": self.eng.pivot} if self.eng.pivot else {})}, now)
+        save_levels({**self.eng.levels, "days": self.eng.days, **({"pivot": self.eng.pivot} if self.eng.pivot else {})}, now)
 
     def level_lines(self, now=None):
         """目前所有價位，給「期貨→行情」和開機卡片用。照時間分組、組與組之間空一行"""
@@ -857,14 +894,22 @@ class Runner:
         if self.last_q and self.last_q.get("last") is not None and sess is not None:
             G_.append([f"現價 {f0(self.last_q['last'])}"])
         if sess is not None and self.bb.hi is not None and self.bb.lo is not None:
-            G_.append(["今日盤" if sess == "0" else "今夜盤", f"高 {f0(self.bb.hi)}", f"低 {f0(self.bb.lo)}"])
+            hi, lo, title = self.bb.hi, self.bb.lo, "今夜盤"
+            if sess == "0":                                       # 日盤：今日全天＝昨夜盤＋今日日盤到目前
+                title = "今日日盤"
+                if "td_hi" in lv and "td_lo" in lv:
+                    hi, lo, title = max(hi, lv["td_hi"]), min(lo, lv["td_lo"]), "今日全天"
+            G_.append([title, f"高 {f0(hi)}", f"低 {f0(lo)}"])
         if "or_hi" in lv and "or_lo" in lv:
             G_.append(["開盤30分", f"高 {f0(lv['or_hi'])}", f"低 {f0(lv['or_lo'])}"])
-        for pre, nm in (("day", "上個日盤"), ("night", "上個夜盤")):
-            if pre + "_hi" in lv and pre + "_lo" in lv:
-                G_.append([nm, f"高 {f0(lv[pre + '_hi'])}", f"低 {f0(lv[pre + '_lo'])}"])
+        pv = self.eng.prev
+        if pv:                                                    # 上個交易日＝前夜盤＋日盤，含收盤
+            g = ["上個交易日", f"高 {f0(pv['hi'])}", f"低 {f0(pv['lo'])}"]
+            if pv.get("c") is not None:
+                g.append(f"收 {f0(pv['c'])}")
+            G_.append(g)
         if self.eng.pivot:
-            G_.append([f"多空分界 {f0(self.eng.pivot)}", "（前一日盤 高低收 平均）"])
+            G_.append([f"多空分界 {f0(self.eng.pivot)}", "（高低收 平均）"])
         if sess is None:
             G_.insert(0, ["目前沒開盤"])
         L = []
@@ -879,17 +924,19 @@ class Runner:
             return
         self.seeded = True
         manual = parse_manual(os.getenv("SWEEP_LEVELS", ""))
-        if manual:                                  # 手動指定的價位（例：今天日盤高低，期交所檔案還沒出來時用）
+        if manual:                                  # 手動指定的價位（例：期交所檔案還沒出來時用）
+            self.eng.manual = manual
             self.eng.levels.update(manual)
             print("掃蕩關鍵價位（手動）：", manual, flush=True)
-        if not all(k in self.eng.levels for k in ("day_hi", "night_hi")) or not self.eng.pivot:
+        if "prev_hi" not in self.eng.levels or not self.eng.pivot:
             try:
-                got = self.seed(now)
-                if got.get("pivot") and not self.eng.pivot:
-                    self.eng.pivot = got["pivot"]
-                for k, v in got.items():
-                    if k != "pivot":
-                        self.eng.levels.setdefault(k, v)
+                got = self.seed(now) or {}
+                for day, rec in (got.get("days") or {}).items():     # 已經記錄的欄位不蓋掉，只補沒有的
+                    cur = self.eng.days.setdefault(day, {})
+                    for k, v in rec.items():
+                        cur.setdefault(k, v)
+                if got.get("days"):
+                    self.eng.refresh(G.trade_day(now))
                 self._save(now)
                 print("掃蕩關鍵價位：", {NAMES[k]: v for k, v in self.eng.levels.items()}, "基準價", self.eng.pivot, flush=True)
             except Exception as e:
@@ -1049,7 +1096,7 @@ class Runner:
     def _hl_check(self, now, q):
         """創本盤新高／新低：不管有沒有部位都提醒（空手也是在等進場）。
         開盤前 FUT_HL_WARM 分鐘只記錄；之後第一次突破馬上提醒，接著要再創高（低）FUT_HL_STEP 點以上才再提醒，
-        並註明這次突破了哪些關鍵價位（上個日盤高、上個夜盤高、開盤30分高…）"""
+        並註明這次突破了哪些關鍵價位（上個交易日高、今日全天高、開盤30分高…）"""
         if not _cfg("FUT_HL_ON", True) or not q or q.get("high") is None or q.get("low") is None:
             return 0
         sess = G.session_of(now)
@@ -1082,7 +1129,7 @@ class Runner:
             if not trig:
                 continue
             names = [NAMES[k] + " " + f0(v) for k, v in self.eng.levels.items()
-                     if k in (("day_hi", "night_hi", "or_hi") if up else ("day_lo", "night_lo", "or_lo")) and ((ref < v <= cur) if up else (cur <= v < ref))]
+                     if k in (("prev_hi", "td_hi", "or_hi") if up else ("prev_lo", "td_lo", "or_lo")) and ((ref < v <= cur) if up else (cur <= v < ref))]
             L = [("🔺 創本盤新高" if up else "🔻 創本盤新低") if sess == "0" else ("🔺 創夜盤新高" if up else "🔻 創夜盤新低"),
                  f"{'新高' if up else '新低'} {f0(cur)}", f"{'上一個高' if up else '上一個低'} {f0(ref)}"]
             if price is not None:
