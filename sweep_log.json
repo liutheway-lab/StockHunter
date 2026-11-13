@@ -912,16 +912,16 @@
    "ext": 44051.0,
    "trend": "順勢",
    "ratio": null,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 44374.0,
    "stop": 44051.0,
    "stop2": 44076.0,
-   "bars": 10,
+   "bars": 11,
    "rf": 0.0,
    "rn": 0.0,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {
