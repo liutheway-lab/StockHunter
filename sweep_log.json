@@ -823,6 +823,21 @@
    "ratio": 0.5,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-16",
+   "sess": "1",
+   "t": 1715,
+   "ts": "2026-11-13T17:20+08:00",
+   "name": "盤中波段高 44,065@15:55",
+   "tier": "小",
+   "dir": "short",
+   "level": 44065.0,
+   "ext": 44072.0,
+   "trend": "逆勢",
+   "ratio": 1.4,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
