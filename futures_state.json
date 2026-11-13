@@ -1,17 +1,5 @@
 {
  "day": "2026-11-16",
- "realized": 0.0,
- "positions": [
-  {
-   "kind": "大台",
-   "side": "空",
-   "qty": 2,
-   "avg": 44490.0,
-   "stop": 44168.0,
-   "exit2": {
-    "px": 44330.0,
-    "qty": 1
-   }
-  }
- ]
+ "realized": 117000.0,
+ "positions": []
 }
