@@ -935,8 +935,8 @@
    "ext": 44045.0,
    "trend": "順勢",
    "ratio": 1.6,
-   "status": "wait",
-   "result": null
+   "status": "done",
+   "result": "失敗"
   },
   {
    "day": "2026-11-16",
@@ -955,9 +955,9 @@
    "entry": 44057.0,
    "stop": 44268.0,
    "stop2": 44268.0,
-   "bars": 0,
-   "rf": 0.0,
-   "rn": 0.0,
+   "bars": 1,
+   "rf": 0.5071090047393365,
+   "rn": 0.5071090047393365,
    "sf": false,
    "sn": false
   }
