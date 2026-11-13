@@ -798,16 +798,16 @@
    "ext": 44065.0,
    "trend": "逆勢",
    "ratio": null,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 43910.0,
    "stop": 44065.0,
    "stop2": 44065.0,
-   "bars": 12,
+   "bars": 13,
    "rf": 1.135483870967742,
    "rn": 1.135483870967742,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   },
   {
    "day": "2026-11-16",
