@@ -318,12 +318,12 @@ def _gh_load():
 
 
 def _clear_hint(p, key):
-    """出場價／目標價已經有值才提示「不設」可以清掉；還沒設就不出現"""
-    return ["要清掉就按「不設」"] if p.get(key) is not None else []
+    """出場價／目標價已經有值才提示「清除」可以清掉；還沒設就不出現"""
+    return ["要清掉就按「清除」"] if p.get(key) is not None else []
 
 
 def _clear_kb(p, key):
-    return [["不設"]] if p.get(key) is not None else []
+    return [["清除"]] if p.get(key) is not None else []
 
 
 def _gh_save(st):
@@ -804,11 +804,11 @@ def handle(cid, text, mid0, ctx):
             px = current_price()
             tip = [f"現價 {px:,.0f}"] if px else []
             if f["which"] == "tps":
-                ask("分批目標\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", f"共 {p['qty']} 口", "格式：價格 口數，用逗號分隔", "例：44500 1, 44700 1", "最後一組可以只寫價格（剩下的全部）", "輸入「不設」可清除"]), [["不設"]])
+                ask("分批目標\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", f"共 {p['qty']} 口", "格式：價格 口數，用逗號分隔", "例：44500 1, 44700 1", "最後一組可以只寫價格（剩下的全部）"] + (["要清掉就按「清除」"] if p.get("tps") else [])), [["清除"]] if p.get("tps") else [])
             elif f["which"] == "exit2":
-                ask("第二出場價\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", f"共 {p['qty']} 口", "格式：價格 口數", "例：44400 1", "口數可省略（不指定）", "跟出場價各自獨立提醒", "可設在成本任一側"] + (["輸入「不設」可清除"] if p.get("exit2") else [])), [["不設"]] if p.get("exit2") else [])
+                ask("第二出場價\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", f"共 {p['qty']} 口", "格式：價格 口數", "例：44400 1", "口數可省略（不指定）", "跟出場價各自獨立提醒", "可設在成本任一側"] + (["要清掉就按「清除」"] if p.get("exit2") else [])), [["清除"]] if p.get("exit2") else [])
             elif f["which"] == "ladder":
-                ask("出場階梯\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "格式：到價 出場價改到，用逗號分隔", "例：44500 44350, 44700 44500", "到第一個價位，出場價移到 44350", "輸入「不設」可清除"]), [["不設"]])
+                ask("出場階梯\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "格式：到價 出場價改到，用逗號分隔", "例：44500 44350, 44700 44500", "到第一個價位，出場價移到 44350"] + (["要清掉就按「清除」"] if p.get("ladder") else [])), [["清除"]] if p.get("ladder") else [])
             elif f["which"] == "stop":
                 ask("新的出場價？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）"] + _clear_hint(p, "stop")), _clear_kb(p, "stop"))
             elif f["which"] == "risk":
@@ -817,39 +817,39 @@ def handle(cid, text, mid0, ctx):
                 ask("目標價多少？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "到價會提醒你"] + _clear_hint(p, "target")), _clear_kb(p, "target"))
             return True
         if flow == "stop" and f.get("which") == "exit2":
-            if t == "不設" and p.get("exit2"):
+            if t in ("清除", "不設") and p.get("exit2"):
                 p["exit2"] = None
                 done_save(["✅ 已清除第二出場價", label(p)])
                 return True
             parts = t.split()
             if not (1 <= len(parts) <= 2) or not re.fullmatch(r"\d+(\.\d+)?", parts[0]) or (len(parts) == 2 and (not re.fullmatch(r"\d+", parts[1]) or not 0 < int(parts[1]) <= p["qty"])):
-                ask(f"格式：價格 口數\n例：44400 1\n口數不能超過 {p['qty']} 口", [["不設"]] if p.get("exit2") else [])
+                ask(f"格式：價格 口數\n例：44400 1\n口數不能超過 {p['qty']} 口", [["清除"]] if p.get("exit2") else [])
                 return True
             px2 = float(parts[0])
             ref = current_price()
             if ref and ((ref <= px2) if p["side"] == "多" else (ref >= px2)):
-                ask(f"做{p['side']}的出場價\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {ref:,.0f}\n不然會馬上被打到\n請重新輸入", [["不設"]] if p.get("exit2") else [])
+                ask(f"做{p['side']}的出場價\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {ref:,.0f}\n不然會馬上被打到\n請重新輸入", [["清除"]] if p.get("exit2") else [])
                 return True
             p["exit2"] = {"px": px2, "qty": int(parts[1]) if len(parts) == 2 else None}
             done_save(["✅ 已設定第二出場價", label(p), "　出場價 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設"), f"　出場價2 {fmt(px2)}"] + ([f"　　到價出 {parts[1]} 口"] if len(parts) == 2 else []))
             return True
         if flow == "stop" and f.get("which") in ("tps", "ladder"):
             key = f["which"]
-            if t == "不設":
+            if t in ("清除", "不設"):
                 p[key] = None
                 done_save([f"✅ 已清除{'分批目標' if key == 'tps' else '出場階梯'}", label(p)])
                 return True
             if key == "tps":
                 res, err = _parse_tps(t, p)
                 if err:
-                    ask(err + "\n請重新輸入", [["不設"]])
+                    ask(err + "\n請重新輸入", [["清除"]] if p.get(key) else [])
                     return True
                 p["tps"] = res
                 done_save(["✅ 已設定分批目標", label(p)] + [f"　{fmt(x['px'])} 出 {x['qty']} 口" for x in res])
             else:
                 res, err = _parse_ladder(t, p)
                 if err:
-                    ask(err + "\n請重新輸入", [["不設"]])
+                    ask(err + "\n請重新輸入", [["清除"]] if p.get(key) else [])
                     return True
                 p["ladder"] = res
                 done_save(["✅ 已設定出場階梯", label(p)] + [f"　到 {fmt(x['at'])} → 出場價 {fmt(x['to'])}" for x in res])
@@ -863,12 +863,12 @@ def handle(cid, text, mid0, ctx):
             done_save(["✅ 已設定 R", label(p), f"　1R = {p['risk']:g} 點"] + r_lines(p, current_price())[1:])
             return True
         if flow == "stop" and f.get("which") == "target":
-            if t == "不設":
+            if t in ("清除", "不設"):
                 p["target"] = None
             else:
                 v = _price(t)
                 if v is None:
-                    ask("價格看起來不對\n請輸入目標價" + ("，或按「不設」" if p.get("target") is not None else ""), _clear_kb(p, "target"))
+                    ask("價格看起來不對\n請輸入目標價" + ("，或按「清除」" if p.get("target") is not None else ""), _clear_kb(p, "target"))
                     return True
                 px = current_price()
                 if px and ((p["side"] == "多" and v <= px) or (p["side"] == "空" and v >= px)):
@@ -878,12 +878,12 @@ def handle(cid, text, mid0, ctx):
             done_save(["✅ 已更新目標價", label(p), "　目標價 " + (fmt(p["target"]) if p.get("target") is not None else "未設")])
             return True
         if flow == "stop":
-            if t == "不設":
+            if t in ("清除", "不設"):
                 p["stop"] = None
             else:
                 v = _price(t)
                 if v is None:
-                    ask("價格看起來不對\n請輸入出場價" + ("，或按「不設」" if p.get("stop") is not None else ""), _clear_kb(p, "stop"))
+                    ask("價格看起來不對\n請輸入出場價" + ("，或按「清除」" if p.get("stop") is not None else ""), _clear_kb(p, "stop"))
                     return True
                 px = current_price()
                 if px and ((p["side"] == "多" and v >= px) or (p["side"] == "空" and v <= px)):
