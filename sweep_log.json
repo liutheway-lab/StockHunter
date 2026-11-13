@@ -663,6 +663,29 @@
    "rn": 1.864516129032258,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-13",
+   "sess": "0",
+   "t": 1155,
+   "ts": "2026-11-13T12:00+08:00",
+   "name": "低檔放量不跌 43,702",
+   "tier": "滯漲",
+   "dir": "long",
+   "level": 43702.0,
+   "ext": 43702.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 43868.0,
+   "stop": 43702.0,
+   "stop2": 43702.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {}
