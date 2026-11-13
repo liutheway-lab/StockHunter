@@ -579,6 +579,21 @@
    "rn": 2.2447916666666665,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-13",
+   "sess": "0",
+   "t": 910,
+   "ts": "2026-11-13T09:15+08:00",
+   "name": "長下影線低點 44,220",
+   "tier": "影線",
+   "dir": "long",
+   "level": 44220.0,
+   "ext": 44220.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
