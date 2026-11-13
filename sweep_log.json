@@ -876,6 +876,29 @@
    "ratio": 0.7,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-16",
+   "sess": "1",
+   "t": 1945,
+   "ts": "2026-11-13T19:50+08:00",
+   "name": "創新高追多 44,231@15:15",
+   "tier": "破",
+   "dir": "long",
+   "level": 44231.0,
+   "ext": 44005.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 44236.0,
+   "stop": 44005.0,
+   "stop2": 44099.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {}
