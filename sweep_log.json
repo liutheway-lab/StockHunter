@@ -747,6 +747,21 @@
    "ratio": 1.4,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-13",
+   "sess": "0",
+   "t": 1325,
+   "ts": "2026-11-13T13:30+08:00",
+   "name": "盤中波段低 43,783@12:15",
+   "tier": "小",
+   "dir": "long",
+   "level": 43783.0,
+   "ext": 43775.0,
+   "trend": "順勢",
+   "ratio": 0.7,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {}
