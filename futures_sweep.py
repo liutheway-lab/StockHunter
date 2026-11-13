@@ -489,7 +489,7 @@ class Engine:
              f"{'高' if up else '低'}點 {f0(s['level'])}", f"收盤 {f0(bar['c'])}"]
         if ratio is not None:
             L.append(f"這根成交量 {ratio:.1f} 倍均量")
-        L += [self._trend_tag(s, up, bar), f"停損參考 {f0(s['ext'])} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
+        L += [self._trend_tag(s, up, bar), f"停損參考 {_at(s['ext'], s.get('ext_t'))} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
         if self.journal:
             self.journal.opened(s, bar, ratio)
         return L
@@ -507,7 +507,7 @@ class Engine:
         L.append(f"5分K 收回 {f0(bar['c'])}")
         if ratio is not None:
             L.append(f"這根成交量 {ratio:.1f} 倍均量")
-        L += [tag, f"停損參考 {f0(s['ext'])} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
+        L += [tag, f"停損參考 {_at(s['ext'], s.get('ext_t'))} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
         if self.journal:
             self.journal.opened(s, bar, ratio)
         return L
@@ -584,10 +584,10 @@ class Engine:
             elif s["n"] >= need:
                 out.append([f"✅ 掃蕩確認{who}", self._tier_line(s), *self._name_lines(s),
                             f"連 {need} 根 沒再創{'高' if up else '低'}", f"現價 {f0(bar['c'])}",
-                            f"停損參考 {f0(s['ext'])} {'上' if up else '下'}"])
+                            f"停損參考 {_at(s['ext'], s.get('ext_t'))} {'上' if up else '下'}"])
                 if self.journal:
                     self.journal.confirmed(s, bar)
-                self.trail.append({"dir": s["dir"], "ext": s["ext"], "n": 0})     # 確認後還會再盯一陣子，有更高的點就跟著移
+                self.trail.append({"dir": s["dir"], "ext": s["ext"], "et": s.get("ext_t"), "n": 0})     # 確認後還會再盯一陣子，有更高的點就跟著移
             else:
                 keep.append(s)
         self.pending = keep
@@ -611,9 +611,9 @@ class Engine:
             if hit:
                 newe = bar["h"] if up_t else bar["l"]
                 out.append([f"⚠️ 掃蕩確認後又{'創高' if up_t else '創低'}（{'做空' if up_t else '做多'}）",
-                            f"新{'高' if up_t else '低'} {f0(newe)}", f"停損參考 改放 {f0(newe)} {'上' if up_t else '下'}",
-                            f"原來 {f0(t['ext'])}"])
-                t["ext"] = newe
+                            f"新{'高' if up_t else '低'} {_at(newe, bar['t'])}", f"停損參考 改放 {f0(newe)} {'上' if up_t else '下'}",
+                            f"原來 {_at(t['ext'], t.get('et'))}"])
+                t["ext"], t["et"] = newe, bar["t"]
             if t["n"] < 6:
                 keep_t.append(t)
         self.trail = keep_t
@@ -660,6 +660,8 @@ class Engine:
                     if ex is None and reach:
                         ex = self.exc[xk] = {"ext": level, "n": 0}
                     if ex is not None and not ex.get("dead"):
+                        if (bar["h"] >= ex["ext"]) if up else (bar["l"] <= ex["ext"]):
+                            ex["et"] = bar["t"]                                     # 極端點是哪一根形成的
                         ex["ext"] = max(ex["ext"], bar["h"]) if up else min(ex["ext"], bar["l"])
                         ex["n"] += 1
                         if ex["n"] > hold:                                          # 站太久了：不算掃蕩，等它回來也不提醒
@@ -672,7 +674,8 @@ class Engine:
                 far = max(bar["h"], ex["ext"]) if (up and ex) else bar["h"] if up else (min(bar["l"], ex["ext"]) if ex else bar["l"])
                 if (up and far < level + mn) or ((not up) and far > level - mn):
                     continue
-                s = {"dir": "short" if up else "long", "name": name, "level": level, "ext": far,
+                far_t = (ex.get("et") if (ex and ((ex["ext"] > bar["h"]) if up else (ex["ext"] < bar["l"]))) else bar["t"])
+                s = {"dir": "short" if up else "long", "name": name, "level": level, "ext": far, "ext_t": far_t,
                      "pierce": (far - level) if up else (level - far), "n": 0, "tier": "大", "held": ex["n"] if ex else 0,
                      "lt": self.level_t.get(name)}
                 self.done.add(dk)
@@ -700,7 +703,7 @@ class Engine:
                     w = max(ws, key=lambda x: x["level"]) if d == "short" else min(ws, key=lambda x: x["level"])
                     up = d == "short"
                     s = {"dir": d, "name": w["name"], "level": w["level"], "t": w["t"], "lt": w["t"], "n": 0, "tier": "小",
-                         "ext": bar["h"] if up else bar["l"], "pierce": (bar["h"] - w["level"]) if up else (w["level"] - bar["l"])}
+                         "ext": bar["h"] if up else bar["l"], "ext_t": bar["t"], "pierce": (bar["h"] - w["level"]) if up else (w["level"] - bar["l"])}
                     self.pending.append(s)
                     out.append(self._sweep_text(s, bar, ratio))
         if _cfg("FUT_WICK_ON", True) and not last_bar:                                # 長影線：不需要任何價位，只看這根 K 棒本身
@@ -728,7 +731,7 @@ class Engine:
         """型態提醒：貼上走勢標籤與停損，並直接記進掃蕩紀錄（進場價＝這根收盤，停損＝停損參考）"""
         up = s["dir"] == "short"
         tag = self._trend_tag(s, up, bar)
-        L = lines + [tag, f"停損參考 {f0(s['ext'])} {'上' if up else '下'}"]
+        L = lines + [tag, f"停損參考 {_at(s['ext'], s.get('ext_t'))} {'上' if up else '下'}"]
         if self.journal:
             self.journal.opened(s, bar, None)
             self.journal.confirmed(s, bar)
