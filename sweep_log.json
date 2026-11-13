@@ -937,6 +937,29 @@
    "ratio": 1.6,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-16",
+   "sess": "1",
+   "t": 2225,
+   "ts": "2026-11-13T22:30+08:00",
+   "name": "高點降低 44,268",
+   "tier": "轉折",
+   "dir": "short",
+   "level": 44268.0,
+   "ext": 44268.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 44057.0,
+   "stop": 44268.0,
+   "stop2": 44268.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
