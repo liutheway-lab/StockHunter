@@ -744,15 +744,35 @@ RESULT_PATH = Path(__file__).parent / "scan_results.json"
 ORDER = ("pullback", "flag", "breakout", "dry")
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+SCAN_URL = "https://raw.githubusercontent.com/liutheway-lab/stockhunter/main/scan_results.json"
+
+
+@st.cache_data(ttl=120, show_spinner=False)
 def _load_scan(mtime):
-    with open(RESULT_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    """今日推薦：優先讀 GitHub 上最新的掃描結果（網頁不用等重新部署），讀不到才用網頁自己帶的那份；兩份取比較新的"""
+    local = None
+    try:
+        with open(RESULT_PATH, encoding="utf-8") as f:
+            local = json.load(f)
+    except Exception:
+        pass
+    remote = None
+    try:
+        import requests
+        r = requests.get(SCAN_URL, timeout=6, headers={"Cache-Control": "no-cache"})
+        if r.status_code == 200:
+            remote = r.json()
+    except Exception:
+        pass
+    cands = [x for x in (local, remote) if isinstance(x, dict) and x.get("data_date")]
+    if not cands:
+        return local or remote
+    return max(cands, key=lambda x: (str(x.get("data_date")), str(x.get("generated_at"))))
 
 
 def get_scan():
     try:
-        return _load_scan(RESULT_PATH.stat().st_mtime)
+        return _load_scan(RESULT_PATH.stat().st_mtime if RESULT_PATH.exists() else 0)
     except Exception:
         return None
 
