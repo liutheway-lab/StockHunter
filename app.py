@@ -267,8 +267,8 @@ def soft(color, a=0.5):
     return color
 
 
-def plot_k_vol(df, is_market=False, bars=65, stab=None):
-    """stab：大盤空頭時傳入 stabilization 結果，會畫出前低虛線與近 3 日色塊"""
+def plot_k_vol(df, is_market=False, bars=65):
+    """K 線＋成交量互動圖（個股用；大盤圖改用 chart_png，這裡只在大盤圖產生失敗時當備用）"""
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -287,53 +287,6 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
                   row=2, col=1)
     fig.add_trace(go.Scatter(x=dates, y=p["VMA20"], line=dict(color="#e67e22", width=1.1), name="20日均量"),
                   row=2, col=1)
-
-    if stab and stab.get("prior_low") is not None:
-        s0, s1 = f"{stab['recent_start']:%m/%d}", f"{stab['recent_end']:%m/%d}"
-        if s0 in dates and s1 in dates:
-            # 低點日起 3 天：淡黃色底，只蓋住上面的 K 線圖（不蓋成交金額）
-            fig.add_shape(type="rect", xref="x", yref="y domain", x0=dates.index(s0) - 0.5,
-                          x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.18)",
-                          line_width=0, layer="above")
-
-        def mark(day, val, text, color, ax, ay, row=1, xanchor="right", yanchor="middle"):
-            if day in dates:
-                # 細箭頭 + 靠右對齊的文字，沒有底色；文字放在圖上空白的位置，避免壓到 K 線
-                fig.add_annotation(x=day, y=val, text=text, showarrow=True, row=row, col=1,
-                                   arrowhead=2, arrowsize=0.8, arrowwidth=1, arrowcolor=soft(color),
-                                   ax=ax, ay=ay, xanchor=xanchor, yanchor=yanchor, font=dict(color=color, size=11))
-
-        # 前低：細虛線橫跨整張圖 + 箭頭，文字放在 K 線下方的空白處
-        fig.add_hline(y=stab["prior_low"], row=1, col=1,
-                      line=dict(color="rgba(0,168,214,0.8)", width=1, dash="dot"))
-        mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"低點日最低點 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
-        if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
-            mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
-                 f"低點日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#b388ff", -4, 108)
-
-        # 成交金額：爆量下跌日的量（橘框 + 虛線），以及近 3 日最大量是它的幾 %
-        dd, dv, rv = stab.get("dump_date"), stab.get("dump_vol"), stab.get("recent_vol")
-        if dd is not None and dv:
-            dv_b = dv / 1e8
-            fig.update_yaxes(range=[0, max(float(p["Plot_Vol"].max()), dv_b) * 2.3], row=2, col=1)
-            fig.add_hline(y=dv_b, row=2, col=1, line=dict(color="rgba(255,140,0,0.7)", width=1, dash="dot"))
-            dkey = f"{dd:%m/%d}"
-            if dkey in dates:
-                i = dates.index(dkey)
-                fig.add_shape(type="rect", x0=i - 0.5, x1=i + 0.5, y0=0, y1=dv_b, row=2, col=1,
-                              line=dict(color="#ff8c00", width=2), fillcolor="rgba(0,0,0,0)")
-                # 價格圖上也把爆量日那根 K 線框起來
-                lo_k, hi_k = float(p["Low"].iloc[i]), float(p["High"].iloc[i])
-                pad_k = (hi_k - lo_k) * 0.15 + 1e-9
-                fig.add_shape(type="rect", x0=i - 0.55, x1=i + 0.55, y0=lo_k - pad_k, y1=hi_k + pad_k, row=1, col=1,
-                              line=dict(color="#ff8c00", width=1.5), fillcolor="rgba(0,0,0,0)", layer="above")
-                # 文字往左移開，用細箭頭指到橘框，避免跟右邊「近3日最大量」重疊
-                mark(dkey, dv_b, f"爆量日 {dkey}", "#ff8c00", -70, -6, row=2)
-            if rv:
-                # 兩行短字放在右側長條上方（虛線以上的空白），只往左伸展，不碰到「爆量日」文字
-                mark(f"{stab.get('vol_date', stab['prior_low_date']):%m/%d}", rv / 1e8, f"低點日量<br>約為爆量日 {rv / dv * 100:.0f}%",
-                     "#00a8d6", -4, -40, row=2, yanchor="bottom")
 
     # ---- 前高 + 近期大量低點（最接近現價、成交量最大與次大的兩天，標出當天最低點）----
     hi_i = int(p["High"].to_numpy().argmax())
@@ -357,8 +310,6 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     band_px = 0.0
     if not is_market and info:
         band_px = 100.0 if info["sup"] else 56.0   # 下方空白帶：放「大量低點」文字的空間
-    elif is_market and stab and stab.get("prior_low") is not None:
-        band_px = 112.0
     # 總範圍 T：上方留 10%、下方留 4%，其餘 band_px 像素給文字
     T = rng_p * 1.14 / (1 - band_px / H)
     y_hi = hi_v + rng_p * 0.10
@@ -528,13 +479,6 @@ def px(x):
     return t_.rstrip("0").rstrip(".") if "." in t_ else t_      # 119.0 → 119、114.50 → 114.5
 
 
-def sdiff(x, ref):
-    """價差（帶正負號），小數位數跟著 ref 的跳動單位"""
-    t = S._tick_size(ref)
-    d = 0 if t >= 1 else (1 if t in (0.5, 0.1) else 2)
-    return f"{x:+,.{d}f}"
-
-
 def html_table(head, rows, wrap=(), left=(), bold_first=False):
     """有質感的表格：不換行（長文字欄除外）、淡色格線、表頭底色、數字靠右。放不下時可以左右滑動"""
     n = len(head)
@@ -591,7 +535,6 @@ def md_cond(rows):
 
 def md_fail(rows):
     """沒通過的條件：一條一組，名稱一行、現況一個句子一行，用整個畫面寬度，不會從句子中間斷開"""
-    import re as _re
     for name, detail in rows:
         parts = split_sents(detail)
         inner = "".join(f'<span class="p">{html.escape(x)}</span>' for x in parts)
@@ -704,8 +647,7 @@ if mk:
                     f"{mk['close']:,.2f}{_tail}</div>", unsafe_allow_html=True)
         st.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
 
-        show_stab = mk["stab"] if mk["layer"] in (4, 5) else None
-        if show_stab is not None or mk["layer"] in (4, 5):
+        if mk["layer"] in (4, 5):
             s_ = mk["stab"]
             if s_ is None:
                 st.markdown("🧱 **止跌確認**：資料不足")
@@ -739,7 +681,7 @@ if mk:
             st.image(chart_png.market_chart(mk), use_container_width=True)
         except Exception as e:                         # 萬一畫圖失敗，退回互動圖（並寫出原因，方便排查）
             st.caption(f"大盤圖產生失敗：{e!r}")
-            st.plotly_chart(plot_k_vol(mk["df"], is_market=True, stab=show_stab),
+            st.plotly_chart(plot_k_vol(mk["df"], is_market=True),
                             use_container_width=True, config={"displayModeBar": False, "staticPlot": True})
 
 # ==================== 今日推薦 ====================
