@@ -291,7 +291,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
     if stab and stab.get("prior_low") is not None:
         s0, s1 = f"{stab['recent_start']:%m/%d}", f"{stab['recent_end']:%m/%d}"
         if s0 in dates and s1 in dates:
-            # 近 3 日：淡黃色底，只蓋住上面的 K 線圖（不蓋成交金額）
+            # 低點日起 3 天：淡黃色底，只蓋住上面的 K 線圖（不蓋成交金額）
             fig.add_shape(type="rect", xref="x", yref="y domain", x0=dates.index(s0) - 0.5,
                           x1=dates.index(s1) + 0.5, y0=0, y1=1, fillcolor="rgba(255,221,0,0.18)",
                           line_width=0, layer="above")
@@ -307,7 +307,7 @@ def plot_k_vol(df, is_market=False, bars=65, stab=None):
         fig.add_hline(y=stab["prior_low"], row=1, col=1,
                       line=dict(color="rgba(0,168,214,0.8)", width=1, dash="dot"))
         mark(f"{stab['prior_low_date']:%m/%d}", stab["prior_low"],
-             f"近 {cfg.STAB_DAYS} 日最低點 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
+             f"低點日最低點 {stab['prior_low']:,.0f}（{stab['prior_low_date']:%m/%d}）", "#00a8d6", -4, 62)
         if stab.get("recent_low") is not None and stab.get("recent_low_date") is not None:
             mark(f"{stab['recent_low_date']:%m/%d}", stab["recent_low"],
                  f"低點日後最低 {stab['recent_low']:,.0f}（{stab['recent_low_date']:%m/%d}）", "#b388ff", -4, 108)
@@ -722,7 +722,10 @@ if mk:
                            f"之後 {da} 天最低 {s_['recent_low']:,.0f}，至少要 {nd} 天不破低")
                 md_cond([
                     (ok(s_["reb_ok"]), "反彈",
-                     f"收盤離低點日最低點 {s_['prior_low']:,.0f} 反彈 {s_['rebound'] * 100:+.1f}%，需 {cfg.STAB_REBOUND * 100:.0f}% 以上"),
+                     f"低點日最低點 {s_['prior_low']:,.0f}，"
+                     + (f"{s_['reb_date']:%m/%d} 收盤反彈達 {cfg.STAB_REBOUND * 100:.0f}%，" if s_.get("reb_date") is not None else "")
+                     + f"之後最多反彈 {s_['rebound_max'] * 100:+.1f}%，今天收盤 {s_['rebound'] * 100:+.1f}%，"
+                     f"需曾經 {cfg.STAB_REBOUND * 100:.0f}% 以上"),
                     ("✅" if s_["no_break"] else ("⏳" if s_["held"] else "❌"), "不破低", low_txt),
                 ])
                 st.caption(f"參考：量能約為爆量日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%")
