@@ -442,10 +442,10 @@ def load_market_hist():
     成交金額只在空頭層級時才需要（止跌確認），所以只抓那些月份，省時間"""
     import backtest as BT
     mkt = data._clean(yf.download("^TWII", period="8y", interval="1d", progress=False, auto_adjust=False))
-    layers = S.layer_series(mkt)
+    layers = S.layer_series(mkt, rebound=False)       # 這裡只用來挑要抓成交金額的月份（還沒有成交金額，不套空頭反彈）
     months = set()
     for d in mkt.index[layers.isin([4, 5]).to_numpy()]:
-        for back in (0, 1, 2, 3):                    # 止跌確認要往回看約 41 個交易日（爆量日 30 天＋低點日最多 10 天）
+        for back in (-1, 0, 1, 2, 3):                # 止跌確認要往回看約 41 個交易日（爆量日 30 天＋低點日最多 10 天）；-1＝空頭反彈升層的下個月
             p_ = (d - pd.DateOffset(months=back))
             months.add((p_.year, p_.month))
     vol = {}
@@ -647,7 +647,7 @@ if mk:
                     f"{mk['close']:,.2f}{_tail}</div>", unsafe_allow_html=True)
         st.metric(f"大盤層級（第 {mk['layer']} 層）", f"{LAYER_ICON[mk['layer']]} {mk['layer_name']}")
 
-        if mk["layer"] in (4, 5):
+        if mk.get("base_layer", mk["layer"]) in (4, 5):          # 空頭，或從空頭反彈升上來：都顯示止跌確認
             s_ = mk["stab"]
             if s_ is None:
                 st.markdown("🧱 **止跌確認**：資料不足")
