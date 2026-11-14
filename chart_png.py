@@ -135,7 +135,7 @@ def market_chart(mk, bars=45):
     d = full.iloc[-bars:]
     idx = d.index
     x = list(range(len(d)))
-    stab_mode = mk.get("layer") in (4, 5) and bool(mk.get("stab"))   # 空頭層級才畫止跌確認的標註
+    stab_mode = mk.get("base_layer", mk.get("layer")) in (4, 5) and bool(mk.get("stab"))   # 空頭（或從空頭反彈升上來）才畫止跌確認的標註
     s = (mk.get("stab") or {}) if stab_mode else {}
     has_vol = bool(d["Volume"].notna().any())
     nm = "低點日"
@@ -219,7 +219,7 @@ def market_chart(mk, bars=45):
                              xytext=(dp - 1, dv / 1e8 * 1.03), fontsize=9, color="#e67300", ha="right", fontweight="bold")
         rv = s.get("recent_vol")
         sp = _pos(idx, s.get("vol_date", pld))
-        if rv and dv and sp is not None:
+        if rv and dv and sp is not None and sp != _pos(idx, dd):   # 低點日就是爆量下跌日：只標爆量日，避免兩段字疊在一起
             axv.annotate(f"低點日量 = 爆量日的 {rv / dv * 100:.0f}%", xy=(sp, rv / 1e8),
                          xytext=(sp, max(float(v.max()), dv / 1e8) * 1.14), fontsize=9, color="#0086ad", ha="right",
                          arrowprops=dict(arrowstyle="->", color="#00a8d6"))
