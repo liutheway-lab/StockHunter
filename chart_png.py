@@ -157,6 +157,9 @@ def market_chart(mk, bars=45):
 
     # --- 近 3 日（灰色區） ---
     r0, r1 = _pos(idx, s.get("recent_start")), _pos(idx, s.get("recent_end"))
+    lp = _pos(idx, pld0) if (pld0 := s.get("prior_low_date")) is not None else None
+    if lp is not None:                                    # 黃色區＝低點日起算 3 天（含低點日），低點日之前的日子不上色
+        r0, r1 = lp, min(lp + cfg.STAB_DAYS - 1, len(d) - 1)
     if r0 is not None and r1 is not None:
         for a in (ax, axv):
             if a is not None:
@@ -240,7 +243,7 @@ def market_chart(mk, bars=45):
         title = f"加權指數 {idx[0]:%m/%d}–{idx[-1]:%m/%d}　第{mk['layer']}層・{mk['layer_name']}"
     fig.suptitle(title, fontsize=11, x=0.02, ha="left")
     if stab_mode:
-        for k, (txt, col) in enumerate([("■ 黃色區＝低點日起（最近 3 天內股價最低的那天）", "#b8860b"),
+        for k, (txt, col) in enumerate([("■ 黃色區＝低點日起 3 天（含低點日）", "#b8860b"),
                                         (f"┄ 水藍虛線＝近 {cfg.STAB_DAYS} 日最低點（上圖）", "#0086ad"),
                                         ("┄ 橘色虛線＝爆量下跌日的成交額（下圖）", "#e67300")][::-1]):
             fig.text(0.02, 0.008 + k * 0.026, txt, fontsize=8.5, color=col, ha="left", va="bottom")
