@@ -74,33 +74,6 @@ def norm_ratios(ratios=None):
     return tuple(x / s for x in r)
 
 
-def parse_ratios(text):
-    """'30/40/30' 或 '30 40 30' → (0.3, 0.4, 0.3)；格式不對回傳 None"""
-    parts = [p for p in str(text).replace("／", "/").replace(",", "/").replace(" ", "/").split("/") if p]
-    try:
-        nums = [float(p) for p in parts]
-    except ValueError:
-        return None
-    if len(nums) != 3 or any(n < 0 for n in nums) or sum(nums) <= 0:
-        return None
-    return norm_ratios(nums)
-
-
-def solve_max_entry_ratio(t1, t2, max_avg=None):
-    """反推：第 1 筆最高可買在前高 B 的幾倍，才能讓前兩筆平均成本 <= max_avg x B"""
-    max_avg = cfg.PB_MAX_AVG_RATIO if max_avg is None else max_avg
-    if t1 <= 0:
-        return 1.0
-    lo, hi = 0.3, 1.0
-    for _ in range(60):
-        mid = (lo + hi) / 2
-        if avg_cost([mid, 1.0], [t1, t2]) <= max_avg:
-            lo = mid
-        else:
-            hi = mid
-    return math.floor(lo * 10000) / 10000
-
-
 def _ratio(a, b):
     return a / b if b else float("nan")
 
@@ -443,53 +416,6 @@ def market_summary(df):
         "tag": short_tag(df, layer),
         "stab": stab, "stab_ok": stab_ok, "active": active, "risk": risk, "df": df,
     }
-
-
-def describe_market(mk):
-    """大盤狀態的文字說明（list of str，Markdown 格式）"""
-    if not mk:
-        return ["🌐 大盤資料取得失敗，無法判斷"]
-    ma = mk["ma"]
-    lines = [
-        f"🌐 加權 `{mk['close']:,.0f}`｜5日 `{ma[5]:,.0f}`／10日 `{ma[10]:,.0f}`／月線 `{ma[20]:,.0f}`／季線 `{ma[60]:,.0f}`",
-        f"📊 大盤層級：**第 {mk['layer']} 層・{mk['layer_name']}**",
-    ]
-    if mk.get("why"):
-        lines.append("　" + "、".join(mk["why"]))
-    if mk.get("tag"):
-        lines.append(f"{'🔥' if mk['tag'] == '過熱' else '😱'} {mk['tag']}：" + SHORT_TAG_NOTE[mk["tag"]].replace("\n", "，"))
-    if mk.get("dd") is not None and mk["dd"] <= -cfg.DROP_WARN:
-        lines.append(f"⚠️ 離近 60 日高點已跌 {abs(mk['dd']) * 100:.1f}%")
-    if mk["layer"] in (4, 5):
-        s = mk["stab"]
-        if s is None:
-            lines.append("🧱 止跌確認：資料不足")
-        elif s["vol_missing"]:
-            lines.append("🧱 止跌確認：❌ 大盤成交量資料取不到，無法確認")
-        else:
-            ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
-            ok = lambda b: "✅" if b else "❌"
-            state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
-            low_mark = "✅" if s["no_break"] else ("⏳" if s["held"] else "❌")
-            lines.append(
-                f"🧱 止跌確認：{state}（反彈、不破低兩項都要通過）\n"
-                f"　{ok(s['reb_ok'])} 反彈：離低點日最低 {s['prior_low']:,.0f} 最多反彈 {s['rebound_max'] * 100:+.1f}%"
-                + (f"（{s['reb_date']:%m/%d} 達標）" if s.get('reb_date') is not None else "")
-                + f"，今天 {s['rebound'] * 100:+.1f}%（需 ≥{cfg.STAB_REBOUND * 100:.0f}%）\n"
-                f"　{low_mark} 不破低：低點日（{s['signal_date']:%m/%d}）之後 {s['days_after']} 天沒破低"
-                f"（需 ≥{s['need_days']} 天），最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}\n"
-                f"　參考：量能約為爆量日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%\n"
-                f"　低點日下影線占 {s['shadow'] * 100:.0f}%"
-            )
-            if s["ok"]:
-                lines.append("📌 日線止跌走穩，先以 2～3 成資金佈局，不猜底、不貪心")
-    if mk["active"]:
-        names = cfg.names_join(mk["active"])
-        lines.append(f"✅ 目前啟用的策略：{names}" + ("\n⚠️ 第 3 層方向未明，只開最保守的策略，部位減半" if mk["risk"] else ""))
-        lines.append(f"💰 部位：{('過熱，維持正常部位，不加碼' if mk.get('tag') == '過熱' else cfg.LAYER_SIZE.get(mk['layer'], ''))}")
-    else:
-        lines.append("🔴 尚未止跌，不建議建立多頭部位")
-    return lines
 
 
 # =====================================================
