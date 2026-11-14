@@ -1950,19 +1950,6 @@ def _dir_name(code):
     return None
 
 
-def range_pos(last, high, low):
-    """成交價在今天高低區間的位置：0＝最低、100＝最高"""
-    if not (high and low) or high <= low:
-        return None
-    return max(0.0, min(100.0, (last - low) / (high - low) * 100))
-
-
-def range_bar(pos, n=10):
-    """低 ━━━●━━━━━━ 高（等寬字，● 是現在的位置）"""
-    k = min(n - 1, int(round(pos / 100 * (n - 1))))
-    return "低 " + "━" * k + "●" + "━" * (n - 1 - k) + " 高"
-
-
 def volume_profile(code, last):
     """富果分價量表 → (今天買的人幾 % 賺錢, POC)。POC＝今天成交量最多的價位。沒有金鑰或查不到回 None"""
     if not FUGLE_KEY or not _fugle_budget():
