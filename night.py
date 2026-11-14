@@ -87,15 +87,19 @@ def market_block(mk):
             state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
             out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 兩項都過才算止跌")
             low_ok = "✅" if s["no_break"] else "⏳" if s["held"] else "❌"
-            out.append(f"低點日：{s['signal_date']:%m/%d}\n（最近 3 天股價最低的那天）")
-            out.append("*① 反彈*\n今天收盤離低點日最低點\n反彈要 ≥ " f"{cfg.STAB_REBOUND * 100:.0f}%")
-            out.append(code_block([f"反彈 {s['rebound'] * 100:>+5.1f}%　要 ≥ {cfg.STAB_REBOUND * 100:.0f}%　{ok(s['reb_ok'])}"], lang="text"))
-            out.append(f"*② 不破低*\n低點日之後至少 {s['need_days']} 天\n最低點都高於低點日最低點")
+            out.append(f"低點日：{s['signal_date']:%m/%d}\n（爆量下跌日之後股價最低的那天）")
+            out.append("*① 反彈*\n低點日之後曾經有一天\n收盤離低點日最低點\n反彈 ≥ " f"{cfg.STAB_REBOUND * 100:.0f}%")
+            rb = [f"最多反彈 {s['rebound_max'] * 100:>+5.1f}%　{ok(s['reb_ok'])}"]
+            if s.get("reb_date") is not None:
+                rb.append(f"達標日 {s['reb_date']:%m/%d}")
+            rb.append(f"今天 {s['rebound'] * 100:>+5.1f}%　要 ≥ {cfg.STAB_REBOUND * 100:.0f}%")
+            out.append(code_block(rb, lang="text"))
+            out.append(f"*② 不破低*\n低點日之後至少 {s['need_days']} 天\n最低點都沒跌破低點日最低點")
             if da == 0:
                 blk = [f"不破低　待觀察（要 ≥ {s['need_days']} 天）　{low_ok}"]
             else:
                 blk = [f"天數　{da} 天　要 ≥ {s['need_days']} 天",
-                       f"最低 {s['recent_low']:,.0f}　要 > {s['prior_low']:,.0f}　{low_ok}"]
+                       f"最低 {s['recent_low']:,.0f}　要 ≥ {s['prior_low']:,.0f}　{low_ok}"]
             out.append(code_block(blk, lang="text"))
             out.append(f"參考\n量能 {ratio:.0f}%（低點日÷爆量日 {s['dump_date']:%m/%d}）\n下影線 {s['shadow'] * 100:.0f}%")
             if s["ok"]:
