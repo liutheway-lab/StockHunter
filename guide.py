@@ -3,7 +3,6 @@
 每行都刻意寫短，手機上才不會被切成兩段。
 """
 import config as cfg
-import strategies as st
 from notify import send_telegram
 
 
