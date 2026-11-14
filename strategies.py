@@ -105,7 +105,7 @@ def _liq(row):
 # =====================================================
 # 2. 大盤五層 + 止跌確認
 # =====================================================
-def layer_series(df):
+def layer_series(df, rebound=None):
     """加權指數每天的層級：1 強多頭 / 2 多頭 / 3 盤整轉折 / 4 空頭 / 5 強空頭 / 0 資料不足
     只用兩條線：月線（20 日平均價）和季線（60 日平均價），再看這兩條線是往上還是往下。
       1 強多頭：價在月線上、月線在季線上，兩條線都往上
@@ -115,7 +115,8 @@ def layer_series(df):
       5 強空頭：價在月線下、月線在季線下，兩條線都往下
     再看 5 日、10 日線（短線）：多頭（1、2 層）但價跌破兩條短線 → 降一層；
     空頭（4、5 層）但價站上兩條短線 → 升一層。這樣崩盤或反彈時，層級反應比較快
-    換層要連續幾天確認才算（LAYER_CONFIRM_DAYS）"""
+    換層要連續幾天確認才算（LAYER_CONFIRM_DAYS）
+    最後再套「空頭反彈」規則（rebound，見 _rebound_layer；設定 LAYER_REBOUND_ON）"""
     c = df["Close"]
     ma5, ma10 = c.rolling(5).mean(), c.rolling(10).mean()
     ma20, ma60 = c.rolling(20).mean(), c.rolling(60).mean()
@@ -131,7 +132,31 @@ def layer_series(df):
     bull, bear = layer.isin([1, 2]), layer.isin([4, 5])
     layer[bull & short_dn] += 1                                  # 多頭但價在 5、10 日線下：降一層（1→2、2→3）
     layer[bear & short_up] -= 1                                  # 空頭但價在 5、10 日線上：升一層（5→4、4→3）
-    return _confirm_layer(layer)
+    out = _confirm_layer(layer)
+    if cfg.LAYER_REBOUND_ON if rebound is None else rebound:
+        out = _rebound_layer(df, out, short_up, c > ma20)
+    return out
+
+
+def _rebound_layer(df, base, short_up, above20):
+    """空頭反彈（2026-11-14）：低點日當時是空頭（4、5 層），而且止跌確認通過、價在 5、10 日線上
+      A 價在月線下 → 第 3 層盤整
+      B 價站上月線 → 第 2 層多頭（不用等季線）
+    跌回 5、10 日線下（或止跌失效＝跌破低點）就回到原本的規則。當天就換，不等 LAYER_CONFIRM_DAYS"""
+    v = base.to_numpy().copy()
+    up, a20 = short_up.to_numpy(), above20.to_numpy()
+    pos = {d: k for k, d in enumerate(df.index)}
+    for i in np.where(up & (v >= 3))[0]:
+        if v[i] == 3 and not a20[i]:                             # 已經是盤整、又沒站上月線：不用算
+            continue
+        s = stabilization(df, int(i))
+        if not (s and s.get("ok")):
+            continue
+        d = pos.get(s.get("prior_low_date"))
+        if d is None or base.iloc[d] not in (4, 5):              # 只在「從空頭反彈上來」時
+            continue
+        v[i] = 2 if a20[i] else 3
+    return pd.Series(v, index=base.index)
 
 
 def layer_why(df):
@@ -196,7 +221,7 @@ def _confirm_layer(raw):
 def stabilization(df, i):
     """止跌確認（日線，2026-11-10 改版：價格為主、量能只顯示）。
     先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
-    再找「低點日」＝爆量下跌日之後（到今天）股價最低的那天（2026-11-14 改：原本只看最近 3 天，
+    再找「低點日」＝爆量下跌日當天起（到今天）股價最低的那天，可以就是爆量下跌日（2026-11-14 改：原本只看最近 3 天，
     低點一過 3 天就被丟掉、改抓回檔的小低點，已經過關的又被打回去）。兩項都過才算止跌走穩：
     ① 反彈：低點日之後，曾經有一天收盤離低點日最低點 ≥ STAB_REBOUND（5%）（達成過就算，回檔不取消）
     ② 不破低：低點日之後至少 STAB_NO_BREAK_DAYS（2）個交易日，最低點都不低於低點日的最低點
@@ -220,8 +245,8 @@ def stabilization(df, i):
     P = w0 + int(np.where(m, V[seg], -1.0).argmax())             # 爆量下跌日
     dv, dd = float(V[P]), idx[P]
 
-    # 低點日＝爆量下跌日之後（含今天）股價最低點那天；同樣低的取最後一天。量能、K 棒、不破低都看這一天
-    w = min(P + 1, i)
+    # 低點日＝爆量下跌日當天起（含今天）股價最低點那天，恐慌殺盤當天常常就是最低點；同樣低的取最後一天
+    w = min(P, i)
     seg_l = np.nan_to_num(L[w:i + 1], nan=1e18)
     d = w + int(len(seg_l) - 1 - seg_l[::-1].argmin())
     if np.isnan(V[d]) or np.isnan(L[d]):
@@ -402,6 +427,7 @@ def market_summary(df):
     df = _naive(df)
     i = len(df) - 1
     layer = int(layer_series(df).iloc[i])
+    base = int(layer_series(df, rebound=False).iloc[i]) if cfg.LAYER_REBOUND_ON else layer
     stab = stabilization(df, i)
     stab_ok = bool(stab and stab["ok"])
     if layer == 5 and stab_ok:                  # 止跌確認通過（反彈＋不破低）：強空頭降為空頭（只改顯示，策略不變）
@@ -411,8 +437,10 @@ def market_summary(df):
     return {
         "date": df.index[i], "close": float(c.iloc[i]),
         "ma": {n: float(c.rolling(n).mean().iloc[i]) for n in (5, 10, 20, 60)},
-        "layer": layer, "layer_name": cfg.LAYER_NAMES[layer],
-        "why": layer_why(df) if len(df) > 60 + cfg.SLOPE_DAYS else [], "dd": drawdown(df),
+        "layer": layer, "layer_name": cfg.LAYER_NAMES[layer], "base_layer": base,   # base＝套空頭反彈之前的層級
+        "why": (layer_why(df) if len(df) > 60 + cfg.SLOPE_DAYS else [])
+               + ([f"止跌確認通過、站上 5日 10日線", f"→ {'站上月線，升為多頭' if layer == 2 else '空頭升為盤整'}"]
+                  if layer < base else []), "dd": drawdown(df),
         "tag": short_tag(df, layer),
         "stab": stab, "stab_ok": stab_ok, "active": active, "risk": risk, "df": df,
     }
