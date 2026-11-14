@@ -1,458 +1,947 @@
-"""data.py — 抓股票清單與日線資料（掃描用）
-- get_directory()：全上市櫃股票清單（代號、中文名稱、產業別）
-- fetch_market()：加權指數日線
-- fetch_prices()：分批下載全部個股日線
-價格用「不還原股利」的收盤價（只還原分割），這樣前高、進場價才跟看盤軟體上看到的一樣。
+"""strategies.py — 大盤五層、止跌確認、四套個股策略、交易計畫
+只做計算、不連網，所以 app、Telegram、回測都可以共用同一份規則。
+所有數字都在 config.py。
 """
-import time
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import math
 
 import numpy as np
 import pandas as pd
-import requests
-import yfinance as yf
 
 import config as cfg
-from lookup import load_directory
-
-COLS = ["Open", "High", "Low", "Close", "Volume"]
 
 
-def get_directory():
-    """全市場清單。官方清單抓不到時，退回 config.FALLBACK 的少數幾檔（並在 attrs 標記）"""
-    try:
-        d = load_directory()
-        d.attrs["fallback"] = False
-        return d
-    except Exception as e:
-        print("股票清單抓取失敗，改用備用清單：", repr(e))
-        rows = [{"code": s.split(".")[0], "name": s.split(".")[0], "industry": "",
-                 "suffix": "." + s.split(".")[1], "market": ""} for s in cfg.FALLBACK]
-        d = pd.DataFrame(rows)
-        d.attrs["fallback"] = True
-        return d
+# =====================================================
+# 1. 小工具
+# =====================================================
+def _tick_size(p):
+    if p < 10:
+        return 0.01
+    if p < 50:
+        return 0.05
+    if p < 100:
+        return 0.10
+    if p < 500:
+        return 0.50
+    if p < 1000:
+        return 1.00
+    return 5.00
 
 
-def _clean(df):
-    """整理成標準欄位、去掉空值、時區拿掉"""
-    if df is None or len(df) == 0:
-        return None
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    if not all(c in df.columns for c in COLS):
-        return None
-    df = df[COLS].dropna(subset=["Close", "High", "Low"]).copy()
-    df["Volume"] = df["Volume"].fillna(0)
-    if getattr(df.index, "tz", None) is not None:
+def _fp(x):
+    """價位寫法：依台股跳動單位決定小數位數，並去掉多餘的 0（2300.00 → 2300、114.50 → 114.5）"""
+    t = _tick_size(x)
+    d = 0 if t >= 1 else (1 if t in (0.5, 0.1) else 2)
+    out = f"{x:,.{d}f}".replace(",", "")
+    return out.rstrip("0").rstrip(".") if "." in out else out
+
+
+def _gauge(pos, n=20):
+    """橫線＋圓點：圓點＝今天收盤在當天最低（左）到最高（右）的哪裡，圓點旁邊標出幾 %"""
+    k = min(n - 1, max(0, int(round(pos * (n - 1)))))
+    return "".join(f"●{pos * 100:.0f}%" if j == k else "─" for j in range(n))
+
+
+def tick(price, mode="round"):
+    """轉成台股合法跳動單位。mode: round / floor / ceil"""
+    if price is None or price != price or price <= 0:
+        return 0.01
+    t = _tick_size(price)
+    n = price / t
+    if mode == "floor":
+        n = math.floor(n + 1e-9)
+    elif mode == "ceil":
+        n = math.ceil(n - 1e-9)
+    else:
+        n = round(n)
+    return round(n * t, 2)
+
+
+def avg_cost(prices, weights):
+    """平均成本。COST_BY_MONEY=True：比例是資金比例（股數 = 資金 / 價格）；False：比例是股數比例"""
+    if sum(weights) <= 0:
+        return prices[0]
+    if cfg.COST_BY_MONEY:
+        return sum(weights) / sum(w / p for w, p in zip(weights, prices) if w > 0)
+    return sum(w * p for w, p in zip(weights, prices)) / sum(weights)
+
+
+def norm_ratios(ratios=None):
+    """回傳 (r1, r2, r3)，加總為 1。傳入 None 用 config 預設。"""
+    r = tuple(float(x) for x in (ratios or cfg.TRANCHES))
+    if len(r) != 3 or any(x < 0 for x in r) or sum(r) <= 0:
+        raise ValueError("三段比例必須是三個不小於 0 的數字")
+    s = sum(r)
+    return tuple(x / s for x in r)
+
+
+def _ratio(a, b):
+    return a / b if b else float("nan")
+
+
+def _naive(df):
+    if df is not None and getattr(df.index, "tz", None) is not None:
+        df = df.copy()
         df.index = df.index.tz_localize(None)
-    return df if len(df) else None
-
-
-def fetch_twse_daily(months=4):
-    """證交所官方 FMTQIK：每天的成交金額（元）和加權指數收盤。回傳 DataFrame（amount, close），索引是日期"""
-    now = datetime.now(ZoneInfo("Asia/Taipei"))
-    y, m = now.year, now.month
-    out = {}
-    for _ in range(months):
-        url = f"https://www.twse.com.tw/exchangeReport/FMTQIK?response=json&date={y}{m:02d}01"
-        for k in range(3):
-            try:
-                r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-                j = r.json()
-                if j.get("stat") == "OK" and j.get("data"):
-                    f = j["fields"]
-                    ca = f.index("成交金額")
-                    cc = next((n for n, x in enumerate(f) if "加權" in str(x)), None)
-                    for row in j["data"]:
-                        yy, mm, dd = (int(x) for x in row[0].strip().split("/"))
-                        out[pd.Timestamp(yy + 1911, mm, dd)] = {
-                            "amount": _numf(row[ca]), "close": _numf(row[cc]) if cc is not None else None}
-                break
-            except Exception as e:
-                print(f"證交所成交金額 {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
-                time.sleep(2)
-        time.sleep(0.5)
-        m -= 1
-        if m == 0:
-            y, m = y - 1, 12
-    if not out:
-        raise RuntimeError("證交所成交金額抓不到")
-    return pd.DataFrame.from_dict(out, orient="index").sort_index()
-
-
-def fetch_twse_turnover(months=4):
-    """證交所官方：加權市場每日成交金額（元）。回傳 Series（索引是日期）。
-    Yahoo 的加權指數成交量不可靠，所以止跌確認的量能改用這份。"""
-    return fetch_twse_daily(months)["amount"].dropna()
-
-
-_MIS_HEAD = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-             "Referer": "https://mis.twse.com.tw/stock/index.jsp", "Accept": "application/json, text/javascript, */*; q=0.01"}
-_MIS_SESS = {}
-_LIVE_LAST = {}          # {(代號, 後綴): (日期, 最近一次成交價)}：證交所有時一瞬間沒回成交價，就用這個
-
-
-def fetch_live_quote(code, suffix):
-    """即時成交價（證交所 MIS，跟券商看盤同一個來源）。回傳 {"last", "prev", "time"}；抓不到回傳 None，呼叫端改用日線收盤"""
-    ex = ("tse_" if suffix == ".TW" else "otc_") + f"{code}.tw"
-    try:
-        if "s" not in _MIS_SESS:
-            ss = requests.Session()
-            try:
-                ss.get("https://mis.twse.com.tw/stock/index.jsp", headers=_MIS_HEAD, timeout=4)
-            except Exception:
-                pass
-            _MIS_SESS["s"] = ss
-        r = _MIS_SESS["s"].get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
-                               params={"ex_ch": ex, "json": "1", "delay": "0", "_": int(time.time() * 1000)},
-                               headers=_MIS_HEAD, timeout=4)
-        arr = (r.json() or {}).get("msgArray") or []
-        if not arr:
-            return None
-        q = arr[0]
-
-        def num(k):
-            try:
-                return float(str(q.get(k, "")).split("_")[0])
-            except ValueError:
-                return None
-        day, prev = q.get("d", ""), num("y")                  # y＝昨收（漲跌的基準）
-        key = (code, suffix)
-        z = num("z")                                          # z＝最新成交價；這一瞬間沒有新成交時是「-」
-        if z:
-            _LIVE_LAST[key] = (day, z)
-        elif key in _LIVE_LAST and _LIVE_LAST[key][0] == day:
-            z = _LIVE_LAST[key][1]                            # 同一天記到的最近成交價（不拿開盤或昨收冒充）
-        else:
-            return None                                       # 今天還沒有成交價 → 讓頁面退回日線收盤
-        if not prev:
-            return None
-        return {"last": z, "prev": prev, "time": f"{day} {q.get('t', '')}"}
-    except Exception as e:
-        print(f"{code} 即時報價抓不到：{repr(e)[:80]}")
-        _MIS_SESS.clear()
-        return None
-
-
-def fetch_twse_stock_volume(code, months=4):
-    """證交所官方：上市個股每日成交股數（股）。回傳 Series（索引是日期）。
-    跟看盤軟體、券商用同一份數字；Yahoo 的台股量有時會跟它對不上。上櫃股票這裡抓不到（會丟例外）。"""
-    now = datetime.now(ZoneInfo("Asia/Taipei"))
-    y, m = now.year, now.month
-    out = {}
-    for _ in range(months):
-        url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={y}{m:02d}01&stockNo={code}"
-        for k in range(2):                                   # 兩次就放棄，不讓 App 一直轉
-            try:
-                j = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"}).json()
-                if j.get("stat") == "OK" and j.get("data"):
-                    ca = j["fields"].index("成交股數")
-                    for row in j["data"]:
-                        yy, mm, dd = (int(x) for x in row[0].strip().split("/"))
-                        v = _numf(row[ca])
-                        if v is not None:
-                            out[pd.Timestamp(yy + 1911, mm, dd)] = v
-                break
-            except Exception as e:
-                print(f"證交所個股成交量 {code} {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
-                time.sleep(2)
-        time.sleep(0.5)
-        m -= 1
-        if m == 0:
-            y, m = y - 1, 12
-    if not out:
-        raise RuntimeError(f"證交所個股成交量 {code} 抓不到")
-    return pd.Series(out).sort_index()
-
-
-def fetch_twse_market_volume(days, sleep=1.0, budget_sec=300):
-    """證交所官方：指定的每個交易日，全部上市股票的成交股數。
-    一天只要一次請求（MI_INDEX），所以 70 天大約 70 次。回傳 {日期: {代號: 股數}}，抓不到的日子不會出現在結果裡。
-    總時間最多 budget_sec 秒，超過就停，已抓到的照樣回傳（不讓整個夜間掃描被拖到逾時）。"""
-    out = {}
-    t0 = time.time()
-    for day in days:
-        if time.time() - t0 > budget_sec:
-            print(f"證交所全市場成交股數超過 {budget_sec} 秒，先停止，已抓 {len(out)} 天", flush=True)
-            break
-        day = pd.Timestamp(day).normalize()
-        url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={day:%Y%m%d}&type=ALLBUT0999"
-        for k in range(3):
-            try:
-                j = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"}).json()
-                tables = list(j.get("tables") or [])
-                for key in list(j):                          # 舊格式：fields1/data1 ...
-                    if key.startswith("fields") and key.replace("fields", "data") in j:
-                        tables.append({"fields": j[key], "data": j[key.replace("fields", "data")]})
-                got = {}
-                for t in tables:
-                    f = [str(x) for x in (t.get("fields") or [])]
-                    if "證券代號" not in f or "成交股數" not in f:
-                        continue
-                    si, vi = f.index("證券代號"), f.index("成交股數")
-                    for row in t.get("data") or []:
-                        v = _numf(row[vi])
-                        if v is not None:
-                            got[str(row[si]).strip()] = v
-                if got:
-                    out[day] = got
-                break
-            except Exception as e:
-                print(f"證交所全市場成交股數 {day:%Y-%m-%d} 第 {k + 1} 次失敗：{e!r}"[:200])
-                time.sleep(2)
-        time.sleep(sleep)
-    return out
-
-
-def apply_twse_volume(prices, days):
-    """把 Yahoo 的個股量，換成證交所官方的量（只換上市股票、只換抓得到的日子）。
-    證交所整批抓不到時，原樣回傳 Yahoo 的資料。回傳 (prices, 換了幾檔)"""
-    prices = dict(prices)                                    # 不改到呼叫端的原字典
-    try:
-        vols = fetch_twse_market_volume(days)
-    except Exception as e:
-        print("證交所成交股數整批抓取失敗，沿用 Yahoo：", repr(e)[:120])
-        return prices, 0
-    if not vols:
-        print("證交所成交股數沒有抓到任何一天，沿用 Yahoo")
-        return prices, 0
-    changed = 0
-    for sym, df in prices.items():
-        if not sym.endswith(".TW"):
-            continue
-        code = sym.split(".")[0]
-        m = pd.Series({d: vols[d][code] for d in vols if code in vols[d]}, dtype=float)
-        if m.empty:
-            continue
-        idx = pd.DatetimeIndex(df.index)
-        if idx.tz is not None:
-            idx = idx.tz_localize(None)
-        new = m.reindex(idx).to_numpy()
-        old = df["Volume"].to_numpy(dtype=float)
-        df = df.copy()
-        df["Volume"] = np.where(np.isnan(new), old, new)
-        prices[sym] = df
-        changed += 1
-    print(f"成交量改用證交所官方：{len(vols)} 天，換了 {changed} 檔上市股票")
-    return prices, changed
-
-
-def fetch_twse_ohlc(months=3):
-    """證交所官方：加權指數每日開高低收（跟看盤軟體同一份數字）。回傳 DataFrame（索引是日期）。
-    Yahoo 偶爾少最後一天，或某一天的高低點有落差，用這份補上、校正。"""
-    now = datetime.now(ZoneInfo("Asia/Taipei"))
-    y, m = now.year, now.month
-    rows = {}
-    for _ in range(months):
-        urls = [f"https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date={y}{m:02d}01&response=json",   # 新網址
-                f"https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date={y}{m:02d}01"]  # 舊網址
-        for k in range(4):
-            try:
-                r = requests.get(urls[k % 2], timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-                j = r.json()
-                if j.get("stat") == "OK" and j.get("data"):
-                    for row in j["data"]:
-                        yy, mm, dd = (int(x) for x in str(row[0]).strip().split("/"))
-                        o, h, l, c = (_numf(v) for v in row[1:5])
-                        if None not in (o, h, l, c):
-                            rows[pd.Timestamp(yy + 1911, mm, dd)] = {"Open": o, "High": h, "Low": l, "Close": c}
-                break
-            except Exception as e:
-                print(f"證交所加權指數 {y}/{m:02d} 第 {k + 1} 次失敗：{e!r}")
-                time.sleep(1)
-        time.sleep(0.5)
-        m -= 1
-        if m == 0:
-            y, m = y - 1, 12
-    if not rows:
-        raise RuntimeError("證交所加權指數抓不到")
-    return pd.DataFrame.from_dict(rows, orient="index").sort_index()
-
-
-def patch_with_twse(df):
-    """用證交所官方的開高低收，補上 Yahoo 缺的日子、校正有落差的日子。失敗就原樣回傳"""
-    try:
-        t = fetch_twse_ohlc()
-    except Exception as e:
-        print("證交所加權指數補資料失敗：", repr(e))
-        df = df.copy()
-        df.attrs["twse_note"] = f"證交所官方指數抓不到（{e}）"
-        return df
-    df = df.copy()
-    t = t[t.index >= df.index[0]]
-    n_new = int((~t.index.isin(df.index)).sum())
-    for d in t.index:
-        if d in df.index:
-            df.loc[d, ["Open", "High", "Low", "Close"]] = t.loc[d, ["Open", "High", "Low", "Close"]].to_numpy(float)
-        else:
-            df.loc[d, ["Open", "High", "Low", "Close", "Volume"]] = list(t.loc[d, ["Open", "High", "Low", "Close"]]) + [0.0]
-    df = df.sort_index()
-    df.attrs["patched_days"] = n_new
-    df.attrs["twse_note"] = f"證交所官方指數最新到 {t.index[-1]:%m/%d}，補上 {n_new} 天"
     return df
 
 
-def _numf(v):
+def add_indicators(df):
+    df = _naive(df).copy()
+    c, v = df["Close"], df["Volume"]
+    df["MA20"] = c.rolling(20).mean()                        # 月線
+    df["MA60"] = c.rolling(60).mean()                        # 季線
+    df["MAV5"] = v.rolling(5).mean()
+    df["MAV20"] = v.rolling(20).mean()
+    df["TURN20"] = (c * v).rolling(20).mean()
+    return df
+
+
+def _liq(row):
+    mav5, turn = float(row["MAV5"]), float(row["TURN20"])
+    ok = mav5 >= cfg.MIN_LOTS * 1000 and turn >= cfg.MIN_AVG_TURNOVER
+    return ("流動性", ok, f"5日均量 {mav5 / 1000:,.0f} 張、20日均額 {turn / 1e8:.2f} 億")
+
+
+# =====================================================
+# 2. 大盤五層 + 止跌確認
+# =====================================================
+def layer_series(df):
+    """加權指數每天的層級：1 強多頭 / 2 多頭 / 3 盤整轉折 / 4 空頭 / 5 強空頭 / 0 資料不足
+    只用兩條線：月線（20 日平均價）和季線（60 日平均價），再看這兩條線是往上還是往下。
+      1 強多頭：價在月線上、月線在季線上，兩條線都往上
+      2 多頭　：價在兩條線上，但線的方向還沒全部往上
+      3 盤整　：價夾在兩條線中間
+      4 空頭　：價在兩條線下，但線的方向還沒全部往下
+      5 強空頭：價在月線下、月線在季線下，兩條線都往下
+    再看 5 日、10 日線（短線）：多頭（1、2 層）但價跌破兩條短線 → 降一層；
+    空頭（4、5 層）但價站上兩條短線 → 升一層。這樣崩盤或反彈時，層級反應比較快
+    換層要連續幾天確認才算（LAYER_CONFIRM_DAYS）"""
+    c = df["Close"]
+    ma5, ma10 = c.rolling(5).mean(), c.rolling(10).mean()
+    ma20, ma60 = c.rolling(20).mean(), c.rolling(60).mean()
+    s20 = ma20 / ma20.shift(cfg.SLOPE_DAYS) - 1                  # 月線這幾天的變化
+    s60 = ma60 / ma60.shift(cfg.SLOPE_DAYS) - 1
+    layer = pd.Series(3, index=df.index)
+    layer[(c > ma20) & (c > ma60)] = 2
+    layer[(c < ma20) & (c < ma60)] = 4
+    layer[(c > ma20) & (ma20 > ma60) & (s20 > 0) & (s60 > 0)] = 1
+    layer[(c < ma20) & (ma20 < ma60) & (s20 < 0) & (s60 < 0)] = 5
+    layer[ma60.isna() | s60.isna()] = 0
+    short_dn, short_up = (c < ma5) & (c < ma10), (c > ma5) & (c > ma10)
+    bull, bear = layer.isin([1, 2]), layer.isin([4, 5])
+    layer[bull & short_dn] += 1                                  # 多頭但價在 5、10 日線下：降一層（1→2、2→3）
+    layer[bear & short_up] -= 1                                  # 空頭但價在 5、10 日線上：升一層（5→4、4→3）
+    return _confirm_layer(layer)
+
+
+def layer_why(df):
+    """用白話講「為什麼是這一層」（每行都短）"""
+    c = df["Close"]
+    ma20, ma60 = c.rolling(20).mean(), c.rolling(60).mean()
+    s20 = float(ma20.iloc[-1] / ma20.iloc[-1 - cfg.SLOPE_DAYS] - 1)
+    s60 = float(ma60.iloc[-1] / ma60.iloc[-1 - cfg.SLOPE_DAYS] - 1)
+    x = float(c.iloc[-1])
+    d = lambda v: "往上" if v > 0 else "往下"
+    m5, m10 = float(c.rolling(5).mean().iloc[-1]), float(c.rolling(10).mean().iloc[-1])
+    st_ = "上" if x > m5 and x > m10 else "下" if x < m5 and x < m10 else "中間"
+    return [f"價在月線{'上' if x > ma20.iloc[-1] else '下'}、季線{'上' if x > ma60.iloc[-1] else '下'}",
+            f"月線{d(s20)}",
+            f"季線{d(s60)}",
+            f"價在 5日、10日線{'之' + st_ if st_ != '中間' else '之間'}"]
+
+
+def short_tag(df, layer):
+    """第 1、5 層再看 5 日、10 日線：短線全部同方向時加標籤（只提醒，不改層級、不改策略）
+    第 1 層：價 > 5日 > 10日 > 月線，且 5日、10日都往上 → 過熱
+    第 5 層：價 < 5日 < 10日 < 月線，且 5日、10日都往下 → 恐慌"""
+    if layer not in (1, 5) or len(df) < 12:
+        return None
+    c = df["Close"]
+    m5, m10, m20 = (c.rolling(n).mean() for n in (5, 10, 20))
+    x, a, b, m = float(c.iloc[-1]), float(m5.iloc[-1]), float(m10.iloc[-1]), float(m20.iloc[-1])
+    u5, u10 = a > float(m5.iloc[-2]), b > float(m10.iloc[-2])
+    if layer == 1 and x > a > b > m and u5 and u10:
+        return "過熱"
+    if layer == 5 and x < a < b < m and not u5 and not u10:
+        return "恐慌"
+    return None
+
+
+SHORT_TAG_NOTE = {"過熱": "短線全部往上，別追高\n等拉回再找買點",
+                  "恐慌": "短線全部往下，正在急殺\n留意之後的止跌訊號"}
+
+
+def drawdown(df, days=60):
+    """離近 days 日最高收盤跌了幾 %（負數）"""
+    c = df["Close"]
+    return float(c.iloc[-1] / c.iloc[-days:].max() - 1)
+
+
+def _confirm_layer(raw):
+    """防來回跳動：新的層級要連續 LAYER_CONFIRM_DAYS 天都一樣，才正式換層（資料不足的 0 馬上生效）"""
+    need = max(1, int(cfg.LAYER_CONFIRM_DAYS))
+    v = raw.to_numpy()
+    out = v.copy()
+    cur = v[0] if len(v) else 0
+    for i in range(len(v)):
+        x = v[i]
+        if x == 0 or x == cur:
+            cur = x
+        elif i + 1 >= need and all(v[i - j] == x for j in range(need)):
+            cur = x
+        out[i] = cur
+    return pd.Series(out, index=raw.index)
+
+
+def stabilization(df, i):
+    """止跌確認（日線，2026-11-10 改版：價格為主、量能只顯示）。
+    先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
+    再找「低點日」＝爆量下跌日之後（到今天）股價最低的那天（2026-11-14 改：原本只看最近 3 天，
+    低點一過 3 天就被丟掉、改抓回檔的小低點，已經過關的又被打回去）。兩項都過才算止跌走穩：
+    ① 反彈：低點日之後，曾經有一天收盤離低點日最低點 ≥ STAB_REBOUND（5%）（達成過就算，回檔不取消）
+    ② 不破低：低點日之後至少 STAB_NO_BREAK_DAYS（2）個交易日，最低點都不低於低點日的最低點
+    之後只要跌破低點日最低點，那天就變成新的低點日，兩項重新計算。
+    量能（低點日成交額 ÷ 爆量日）、K 棒型態照樣算出來，但只顯示給你參考，不再是必要條件。
+    觀察中＝不破低天數還沒滿（而且到目前為止沒破低）。
+    字典欄位沿用舊名稱（prior_low＝低點日最低點、prior_low_date＝低點日、recent_*＝低點日之後）。"""
+    n, k, age = cfg.STAB_LOOKBACK, cfg.STAB_DAYS, cfg.STAB_MAX_AGE
+    if i < n + age + 1 or i >= len(df):
+        return None
+    O, H, L, C, V = (df[c].to_numpy(float) for c in ("Open", "High", "Low", "Close", "Volume"))
+    idx = df.index
+    down = np.r_[False, C[1:] < C[:-1]]
+    w0 = i - n - age
+    seg = slice(w0, i)                                           # 不含今天：爆量日一定在低點日之前
+    m = down[seg] & ~np.isnan(V[seg]) & (V[seg] > 0)
+    if not m.any():
+        return {"ok": False, "no_break": False, "vol_ok": None, "vol_missing": True, "prior_low": float(L[i]),
+                "recent_low": None, "dump_vol": None, "recent_vol": None, "prior_low_date": idx[i],
+                "recent_low_date": None, "recent_start": idx[i], "recent_end": idx[i], "dump_date": None}
+    P = w0 + int(np.where(m, V[seg], -1.0).argmax())             # 爆量下跌日
+    dv, dd = float(V[P]), idx[P]
+
+    # 低點日＝爆量下跌日之後（含今天）股價最低點那天；同樣低的取最後一天。量能、K 棒、不破低都看這一天
+    w = min(P + 1, i)
+    seg_l = np.nan_to_num(L[w:i + 1], nan=1e18)
+    d = w + int(len(seg_l) - 1 - seg_l[::-1].argmin())
+    if np.isnan(V[d]) or np.isnan(L[d]):
+        return None
+    rng = H[d] - L[d]
+    shadow = float((min(O[d], C[d]) - L[d]) / rng) if rng > 0 else 0.0
+    gain = float(C[d] / C[d - 1] - 1) if C[d - 1] > 0 else 0.0
+    shadow_ok = bool(shadow >= cfg.STAB_SHADOW)                      # 長下影線（開低走高）
+    body = float((C[d] - O[d]) / rng) if rng > 0 else 0.0              # 實體占整根 K 棒（收黑為負）
+    red_ok = bool(C[d] > O[d] and body >= cfg.STAB_RED_BODY)         # 或長紅
+    shape_ok = shadow_ok or red_ok
+    vol_ok = bool(V[d] >= dv)                                        # 只顯示，不卡關
+    need = cfg.STAB_NO_BREAK_DAYS
+    after = L[d + 1:i + 1]
+    days_after = len(after)
+    held = bool(days_after == 0 or after.min() >= L[d])              # 到目前為止沒破低點日最低點
+    no_break = bool(days_after >= need and held)                     # 不破低：天數夠、而且都沒破
+    reb = float(C[i] / L[d] - 1) if L[d] > 0 else 0.0                # 今天收盤離低點日最低點反彈多少
+    cl = C[d:i + 1] / L[d] - 1 if L[d] > 0 else np.zeros(i - d + 1)
+    reb_max = float(np.nanmax(cl)) if len(cl) else reb                 # 低點日之後最高的收盤反彈
+    hit = np.where(cl >= cfg.STAB_REBOUND)[0]
+    reb_date = idx[d + int(hit[0])] if len(hit) else None             # 第一次反彈達標的那天
+    reb_ok = bool(reb_date is not None)
+    full = reb_ok and no_break
+    pending = (not full) and held and days_after < need              # 天數還沒滿、也還沒破低：觀察中
+    rl = float(after.min()) if days_after else None
+    rld = idx[d + 1 + int(after.argmin())] if days_after else None
+    return {"ok": bool(full), "watching": bool(pending), "signal_date": idx[d],
+            "vol_ok": vol_ok, "shape_ok": shape_ok, "no_break": no_break, "vol_missing": False,
+            "rebound": reb, "rebound_max": reb_max, "reb_date": reb_date, "reb_ok": reb_ok, "held": held,
+            "shadow": shadow, "gain": gain, "body": body, "shadow_ok": shadow_ok, "red_ok": red_ok,
+            "days_after": days_after, "need_days": need,
+            "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
+            "recent_start": idx[d], "recent_end": idx[min(d + k - 1, i)],     # 圖上的黃色區：低點日起 3 天
+            "dump_vol": dv, "dump_date": dd, "recent_vol": float(V[d]), "vol_date": idx[d]}
+
+
+def vol_low(df, days=65):
+    """近 65 個交易日成交量最大的那天。最高點在現價之上＝短線壓力（壓，看最高點）；否則＝支撐參考（撐，看最低點）"""
+    d = df[df["Volume"] > 0].iloc[-days:]
+    if d.empty:
+        return None
+    day = d["Volume"].idxmax()
+    low, high, close = float(d.loc[day, "Low"]), float(d.loc[day, "High"]), float(df["Close"].iloc[-1])
+    pressure = high > close                      # 壓力看最高點，支撐看最低點
+    return {"date": day, "low": low, "high": high, "level": high if pressure else low,
+            "vol": float(d.loc[day, "Volume"]) / 1000.0, "side": "壓" if pressure else "撐"}
+
+
+def absorb_levels(prev_df):
+    """今天「之前」的日線算出恐慌承接要用的三個數字：近 19 日最高、近 19 日最低、近 65 日最大量日的最低點（支撐）。
+    收盤版（check_absorb）和盤中 13:00 版共用；盤中版的 absorb_base.json 也存這三個數字。資料不足回傳 None。"""
+    if len(prev_df) < 19:
+        return None
+    vl = vol_low(prev_df)
+    return {"hi19": float(prev_df["High"].iloc[-19:].max()), "lo19": float(prev_df["Low"].iloc[-19:].min()),
+            "sup": float(vl["low"]) if vl else None}
+
+
+def day_avg_poc(bars, day):
+    """恐慌承接的「發現日」成本區：用 5 分 K 算當天的均價（成交量加權，等於 成交金額÷成交量）與 POC（成交量最大的價位）。
+    bars：5 分 K（欄位 High／Low／Close／Volume，索引是時間）；day：發現日（Timestamp）。
+    每根 K 棒的價格取 (高＋低＋收)÷3，量歸到對應的台股升降單位；沒有資料回傳 (None, None)。"""
+    if bars is None or len(bars) == 0:
+        return None, None
+    d = bars[bars.index.strftime("%Y-%m-%d") == pd.Timestamp(day).strftime("%Y-%m-%d")]
+    if d.empty:
+        return None, None
+    v = d["Volume"].astype(float).fillna(0.0)
+    typ = ((d["High"].astype(float) + d["Low"].astype(float) + d["Close"].astype(float)) / 3.0)
+    tot = float(v.sum())
+    if tot <= 0:
+        return None, None
+    avg = float((typ * v).sum() / tot)
+    by_price = v.groupby(typ.map(lambda p: tick(p))).sum()
+    poc = float(by_price.idxmax())
+    return round(avg, 2), poc
+
+
+def absorb_extra(c, h, l, lv):
+    """恐慌承接的日線三層（收盤版、盤中版共用）。c＝收盤（盤中＝現價）；h／l＝今天最高／最低；lv＝absorb_levels（不含今天）。
+    1 距高點回落：近 20 日（含今天）最高點 → 收盤，跌幅在 ABSORB_DROP_MIN ～ ABSORB_DROP_MAX 之間
+      （跌不到 15% 是高檔震盪；跌超過 35% 先不列）
+    2 守住支撐：收盤 ≥ 近 65 日成交量最大那天的最低點
+    3 收回：收盤 ≥ 今日最低 × (1 + ABSORB_RECOVER)
+    回傳 (三項是否全過, 數字 dict)；lv 缺資料一律不過（寧可漏，不要錯判）。"""
+    if not lv or any(lv.get(k) is None for k in ("hi19", "lo19", "sup")):
+        return False, None
+    hi, lo = max(lv["hi19"], h), min(lv["lo19"], l)
+    if hi <= 0 or lo <= 0:
+        return False, None
+    ratio, drop = hi / lo, c / hi - 1
+    ok = (-cfg.ABSORB_DROP_MAX <= drop <= -cfg.ABSORB_DROP_MIN
+          and c >= lv["sup"] and c >= l * (1 + cfg.ABSORB_RECOVER))
+    return ok, {"ratio": ratio, "drop": drop, "sup": lv["sup"]}
+
+
+def check_absorb(df, i):
+    """恐慌承接（只做觀察名單）：今天殺低後被買回來，而且有量。
+    先殺再拉：當天最低價要跌破昨收，且下影線占當天高低差 ≥ 50%（長下影）；量 ≥ 20 日均量 2 倍，當天振幅 ≥ 10%。
+    日線三層（absorb_extra）：距 20 日高點跌 15%～35%、守住 65 日大量日的低點，收盤要收回最低 5% 以上。
+    長紅不算（直接漲停的股票也會符合，不是恐慌殺低）。
+    不符合回傳 None"""
+    r = df.iloc[i]
+    o, h, l, c = (float(r[k]) for k in ("Open", "High", "Low", "Close"))
+    mav20, vol = float(r["MAV20"]), float(r["Volume"])
+    rng = h - l
+    if rng <= 0 or not mav20 or mav20 != mav20 or vol <= 0:
+        return None
+    vm = vol / mav20
+    if vm < cfg.ABSORB_VOL_MULT:
+        return None
+    prev = float(df["Close"].iloc[i - 1]) if i >= 1 else c
+    if prev and rng / prev < cfg.ABSORB_MIN_RANGE:
+        return None
+    shadow, body = (min(o, c) - l) / rng, (c - o) / rng
+    if prev and l >= prev:                    # 沒有殺到昨收以下（漲停、跳空高開都是這種），不算恐慌
+        return None
+    if shadow < cfg.STAB_SHADOW:              # 只留「先殺再拉」的長下影；長紅會把直接漲停的股票也收進來，所以不收
+        return None
+    ok, ex = absorb_extra(c, h, l, absorb_levels(df.iloc[:i]))     # 日線三層：距高點跌 15%～35%、守住支撐、收回
+    if not ok:
+        return None
+    kinds = ["長下影"]
+    return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow,
+            "body": body, "chg": (c / prev - 1) if prev else 0.0, "turnover": float(r["TURN20"]),
+            "range": (rng / prev) if prev else 0.0, "ratio": ex["ratio"], "drop": ex["drop"], "sup": ex["sup"]}
+
+
+def check_absorb_live(o, h, l, c, prev, vol, mav20, limit_up=None, lv=None):
+    """恐慌承接「13:00 預判」：用盤中（13:00）的數字，拿現價當收盤，判斷跟 check_absorb 同一套型態。
+    o/h/l/c＝今天開盤／最高／最低／現價；prev＝昨收；vol＝累計成交量（股）；mav20＝20 日均量（股）；limit_up＝今天漲停價。
+    盤中累計量先換算成全日量：除以「這個時間點佔全日的比例」（cfg.VOL_SHARE_PRE，由 volume_profile.py 量測），
+    再跟 20 日均量比，門檻同收盤版（cfg.ABSORB_VOL_MULT）。
+    不符合回傳 None；漲停鎖死（買不到）也回傳 None。"""
     try:
-        return float(str(v).replace(",", "").strip())
+        o, h, l, c, prev, vol, mav20 = (float(x) for x in (o, h, l, c, prev, vol, mav20))
+    except (TypeError, ValueError):
+        return None
+    rng = h - l
+    if rng <= 0 or prev <= 0 or mav20 <= 0 or mav20 != mav20 or vol <= 0:
+        return None
+    if limit_up and c >= float(limit_up) - 1e-9:                      # 漲停鎖死，買不到
+        return None
+    share = cfg.VOL_SHARE_PRE if cfg.VOL_SHARE_PRE and cfg.VOL_SHARE_PRE > 0 else 1.0
+    vm = (vol / share) / mav20                                        # 換算成「全日量 ÷ 20 日均量」
+    if vm < cfg.ABSORB_VOL_MULT or (h - l) / h < cfg.ABSORB_KILL_MIN:     # 殺低：當天從高點殺下來至少 5%（不是跌停幅度）
+        return None
+    shadow, body = (min(o, c) - l) / rng, (c - o) / rng
+    if l >= prev:                             # 沒有殺到昨收以下（漲停、跳空高開都是這種），不算恐慌
+        return None
+    if shadow < cfg.STAB_SHADOW:              # 只留「先殺再拉」的長下影
+        return None
+    ok, ex = absorb_extra(c, h, l, lv)                # 日線三層；lv＝夜間掃描存的 absorb_base（沒有就不列）
+    if not ok:
+        return None
+    kinds = ["長下影"]
+    return {"kind": "＋".join(kinds), "close": c, "low": l, "high": h, "vol_mult": vm, "shadow": shadow, "body": body,
+            "chg": c / prev - 1, "range": rng / prev, "risk": (c - l) / c,
+            "ratio": ex["ratio"], "drop": ex["drop"], "sup": ex["sup"]}
+
+
+def active_strategies(layer, stab_ok):
+    """依大盤層級決定哪些策略啟用。回傳 (策略清單, 是否要標示風險)"""
+    if not cfg.USE_REGIME:
+        return ["pullback", "breakout", "dry", "flag"], False
+    if layer in (1, 2):
+        return ["pullback", "flag", "breakout"], False       # 低位起漲：底部起漲不限空頭，各種行情都可能出現
+    if layer == 3:
+        return list(cfg.LAYER3_ACTIVE), True                 # 方向未明：只開最保守的，部位減半
+    if layer in (4, 5):
+        return (["breakout", "dry"] if stab_ok else []), False
+    return [], False
+
+
+def market_summary(df):
+    """df：加權指數日線（要有 Open/High/Low/Close/Volume）"""
+    df = _naive(df)
+    i = len(df) - 1
+    layer = int(layer_series(df).iloc[i])
+    stab = stabilization(df, i)
+    stab_ok = bool(stab and stab["ok"])
+    if layer == 5 and stab_ok:                  # 止跌確認通過（反彈＋不破低）：強空頭降為空頭（只改顯示，策略不變）
+        layer = 4
+    active, risk = active_strategies(layer, stab_ok)
+    c = df["Close"]
+    return {
+        "date": df.index[i], "close": float(c.iloc[i]),
+        "ma": {n: float(c.rolling(n).mean().iloc[i]) for n in (5, 10, 20, 60)},
+        "layer": layer, "layer_name": cfg.LAYER_NAMES[layer],
+        "why": layer_why(df) if len(df) > 60 + cfg.SLOPE_DAYS else [], "dd": drawdown(df),
+        "tag": short_tag(df, layer),
+        "stab": stab, "stab_ok": stab_ok, "active": active, "risk": risk, "df": df,
+    }
+
+
+# =====================================================
+# 3. 四套個股策略
+# =====================================================
+def _result(name, checks, **kw):
+    return {"name": name, "ok": all(c[1] for c in checks), "checks": checks, **kw}
+
+
+ATTACK_DAY_CHECKS = ("攻擊日：收盤突破盤整高點", "收紅 K", "攻擊日漲幅", "收盤位置", "攻擊日量能", "流動性")
+
+
+def _attack(df, i, pk, S, name, base_checks, quality_checks, max_consol=None, **extra):
+    """強勢續攻（創高拉回、噴出後整理）共用的「攻擊日」判斷。
+    pk：前波高點那一天；S：策略自己的起漲價（噴出後整理用來判斷回檔，不再拿來算目標）。
+    目標價＝盤整最低點 ＋ 整段漲幅（前波高點 − 前高之前 30 日內的最低點），兩套共用同一種算法。
+    盤整區＝前波高點之後到昨天（4～10 天、離前高 ≤ 10%）；
+    今天收盤第一次站上盤整高點、收紅 K、漲 ≥ 5%、收盤位置 ≥ 67%、量能 ≥ 前高那天的 9 成 → 攻擊日。
+    回傳的 pre_ok＝「昨天為止的盤整條件都成立」，chase_px＝盤中追價點（漲 4% 且突破盤整高點）"""
+    o, h, l, c, v = (df[x].to_numpy(float) for x in ("Open", "High", "Low", "Close", "Volume"))
+    row = df.iloc[i]
+    H = float(h[pk])
+    n_cons = i - 1 - pk
+    if n_cons >= 1:
+        upper, lower = float(h[pk:i].max()), float(l[pk + 1:i].min())      # 盤整高點把前波高點也算進去
+    else:
+        upper = lower = float("nan")
+    E = float(c[i])
+    prev = float(c[i - 1])
+    gain = E / prev - 1 if prev > 0 else float("nan")
+    rng = h[i] - l[i]
+    pos = (E - l[i]) / rng if rng > 0 else 1.0
+    vol_pk = float(v[pk])
+    vr = _ratio(float(v[i]), vol_pk)
+    broke = n_cons >= 1 and E > upper
+    mc = max_consol or cfg.ATTACK_MAX_CONSOL
+    setup = [
+        (f"盤整 {cfg.ATTACK_MIN_CONSOL}～{mc} 天",
+         cfg.ATTACK_MIN_CONSOL <= n_cons <= mc,
+         f"前波高點 {df.index[pk]:%m/%d} 之後已盤整 {max(n_cons, 0)} 天"),
+        (f"盤整深度 ≤ {cfg.ATTACK_MAX_DEPTH * 100:.0f}%", bool(n_cons >= 1 and lower >= H * (1 - cfg.ATTACK_MAX_DEPTH)),
+         f"盤整最低 {_fp(lower)}，離前高 {(1 - lower / H) * 100:.1f}%" if n_cons >= 1 else "還沒有盤整區"),
+    ]
+    attack_checks = [
+        ("攻擊日：收盤突破盤整高點", bool(broke),
+         f"盤整區 {_fp(lower)}～{_fp(upper)}，收盤 {_fp(E)}" if n_cons >= 1 else "還沒有盤整區"),
+        ("收紅 K", bool(c[i] > o[i]), f"開盤 {_fp(o[i])}、收盤 {_fp(E)}"),
+        ("攻擊日漲幅", bool(gain >= cfg.ATTACK_MIN_GAIN), f"今日漲 {gain * 100:+.1f}%（需 ≥ {cfg.ATTACK_MIN_GAIN * 100:.0f}%）"),
+        ("收盤位置", bool(pos >= cfg.ATTACK_CLOSE_POS),
+         f"最低 {_gauge(pos)} 最高；要 {cfg.ATTACK_CLOSE_POS * 100:.0f}% 以上"),
+        ("攻擊日量能", bool(vol_pk > 0 and vr >= cfg.ATTACK_VOL_VS_PEAK),
+         f"今日量 = 前高那天的 {vr * 100:.0f}%（需 ≥ {cfg.ATTACK_VOL_VS_PEAK * 100:.0f}%）"),
+    ]
+    checks = list(base_checks) + setup + list(quality_checks) + attack_checks
+    pre_ok = all(ok for nm, ok, _ in checks if nm not in ATTACK_DAY_CHECKS)
+    if n_cons < 1:
+        return _result(name, checks, close=E, pre_ok=False, date=df.index[i], turnover=float(row["TURN20"]), **extra)
+    chase_px = tick(max(prev * (1 + cfg.CHASE_GAIN), upper), "ceil")          # 今天的盤中追價點
+    if broke:
+        entry = E
+    else:                                                    # 還不是攻擊日：明天的追價點（漲 4% 且突破盤整高點）
+        entry = tick(max(E * (1 + cfg.CHASE_GAIN), upper, float(h[i])), "ceil")
+    leg_lo = float(l[max(0, pk - cfg.PB_LEG_LOOKBACK):pk + 1].min())       # 整段漲幅的起點：前高之前 30 日內最低點
+    target = tick(lower + (H - leg_lo))
+    if target <= entry:
+        checks.append(("目標價高於進場價", False, f"目標 {_fp(target)}、進場 {_fp(entry)}"))
+    status = f"已突破 +{(E / H - 1) * 100:.1f}%" if E >= H else f"還差 {(1 - E / H) * 100:.1f}%"
+    r = _result(name, checks, close=E, entry=entry, key=H, peak_date=df.index[pk], leg_start=leg_lo,
+                cons_hi=upper, cons_lo=lower, attack=bool(broke), pre_ok=pre_ok, chase_px=chase_px, n_cons=n_cons,
+                target=target, stop_after2=tick(H * (1 - cfg.ATTACK_STOP2_PCT)), status=status,
+                date=df.index[i], turnover=float(row["TURN20"]),
+                q={"gain": gain, "pos": pos, "vr": vr, "n_cons": n_cons,
+                   "depth": (1 - lower / H) if n_cons >= 1 else None}, **extra)
+    r["stop1"], r["stop1_note"] = attack_stop(r, entry)
+    return r
+
+
+def attack_stop(r, entry):
+    """出場價＝盤整最低點；離買價超過 10% 時改用買價下 10%"""
+    lo = tick(r["cons_lo"], "floor")
+    cap = tick(entry * (1 - cfg.ATTACK_MAX_LOSS), "ceil")
+    if lo >= cap:
+        return lo, f"跌破盤整最低點 {lo}"
+    return cap, f"盤整最低點 {lo} 太遠，改用買價下 {cfg.ATTACK_MAX_LOSS * 100:.0f}%"
+
+
+def check_pullback(df, i, ratios=None, max_consol=None):
+    """強勢續攻之一：創高拉回。近 30 日創新高 → 盤整（量縮、離前高 ≤ 10%）→ 攻擊日進場。df 需先 add_indicators"""
+    if i < 69 or i >= len(df):
+        return None
+    row = df.iloc[i]
+    lo = i - cfg.PB_LOOKBACK
+    h = df["High"].to_numpy(float)
+    win = h[lo:i]                                          # 不含今天
+    pk = lo + int(win.argmax())
+    H = float(h[pk])
+    prior = h[:lo]
+    prior_high = float(prior.max()) if len(prior) else float("nan")
+    leg = df["Low"].to_numpy(float)[max(0, pk - cfg.PB_LEG_LOOKBACK):pk + 1]
+    S = float(leg.min())
+    v = df["Volume"].to_numpy(float)
+    cons_vol = float(v[pk + 1:i].mean()) if i - 1 - pk >= 1 else float("nan")
+    ema20, ema60 = float(row["MA20"]), float(row["MA60"])
+    base = [
+        _liq(row),
+        ("前高是近期新高", bool(pd.isna(prior_high) or H >= prior_high * 0.98),
+         f"前高 {_fp(H)}（{df.index[pk]:%m/%d}），更早的高點 {_fp(prior_high)}"),
+        ("趨勢向上", bool(ema20 > ema60), f"月線 {_fp(ema20)}、季線 {_fp(ema60)}"),
+    ]
+    quality = [
+        ("盤整量縮", bool(cons_vol == cons_vol and v[pk] > 0 and cons_vol <= cfg.PB_CONS_VOL_RATIO * v[pk]),
+         f"盤整均量 = 前高那天的 {_ratio(cons_vol, v[pk]) * 100:.0f}%（需 ≤ {cfg.PB_CONS_VOL_RATIO * 100:.0f}%）"
+         if cons_vol == cons_vol else "還沒有盤整區"),
+    ]
+    r = _attack(df, i, pk, S, "pullback", base, quality, max_consol=max_consol)
+    if r.get("q") is not None and cons_vol == cons_vol and v[pk] > 0:
+        r["q"]["cons_ratio"], r["q"]["cons_limit"] = cons_vol / v[pk], cfg.PB_CONS_VOL_RATIO
+    return r
+
+
+LOW_CHECK = "低檔："
+
+
+def bo_needs_zone(r):
+    """低位階：其他條件都過、只差「低檔」這一項 → 要再去抓十年月線高低（只有這些候選股才抓，省時間）"""
+    if r is None or r["ok"]:
+        return False
+    low = [c for c in r["checks"] if c[0].startswith(LOW_CHECK)]
+    return bool(low) and not low[0][1] and all(c[1] for c in r["checks"] if not c[0].startswith(LOW_CHECK))
+
+
+def check_breakout(df, i, zone=None):
+    """低位起漲（低檔爆量起漲，突破 30 日頸線）。
+    zone：十年月線高低 {"lo": 最低, "hi": 最高}。沒有（還沒抓）時「低檔」這項先不算過"""
+    if i < 69 or i >= len(df):
+        return None
+    row = df.iloc[i]
+    close, vol = float(row["Close"]), float(row["Volume"])
+    mav20 = float(row["MAV20"])
+    ema20, ema60 = float(row["MA20"]), float(row["MA60"])
+    ema20_prev = float(df["MA20"].iloc[i - 1])
+    neck = float(df["High"].iloc[i - cfg.BO_PLATFORM:i].max())
+    volx = _ratio(vol, mav20)
+    bd = cfg.BO_BOX_DAYS
+    box_hi = float(df["High"].iloc[i - bd:i].max())
+    box_lo = float(df["Low"].iloc[i - bd:i].min())
+    pos = None
+    if zone and zone["hi"] > zone["lo"]:
+        pos = (close - zone["lo"]) / (zone["hi"] - zone["lo"])
+    hi_d, lo_d, op_d = float(row["High"]), float(row["Low"]), float(row["Open"])
+    rng = hi_d - lo_d
+    up_ratio = (hi_d - max(op_d, close)) / rng if rng > 0 else 0.0      # 上影線佔整根 K 棒的比例
+    if pos is None:
+        low_txt = "十年資料還沒抓（只對候選股才抓）"
+    else:
+        line = zone["lo"] + cfg.BO_LOW_ZONE * (zone["hi"] - zone["lo"])
+        low_txt = f"十年高 {_fp(zone['hi'])}、低 {_fp(zone['lo'])}，低檔線 {_fp(line)}，收盤 {_fp(close)}（位在 {pos * 100:.0f}%）"
+
+    checks = [
+        _liq(row),
+        (f"盤整：近 {bd} 日低點 ≥ 高點 {cfg.BO_BOX_RATIO * 100:.0f}%", bool(box_lo >= cfg.BO_BOX_RATIO * box_hi),
+         f"近 {bd} 日高 {_fp(box_hi)}、低 {_fp(box_lo)}（低點是高點的 {box_lo / box_hi * 100:.0f}%）"),
+        (f"{LOW_CHECK}收盤在十年高低的下 {cfg.BO_LOW_ZONE * 100:.0f}%", bool(pos is not None and pos <= cfg.BO_LOW_ZONE), low_txt),
+        (f"突破 {cfg.BO_PLATFORM} 日頸線", close > neck, f"頸線 {_fp(neck)}、收盤 {_fp(close)}"),
+        (f"爆量 ≥ {cfg.BO_VOL_MULT:.1f} 倍", bool(volx >= cfg.BO_VOL_MULT), f"今日 {volx:.1f} 倍 20 日均量"),
+        ("站上季線且月線翻揚", bool(close >= ema60 and ema20 > ema20_prev),
+         f"月線 {_fp(ema20)}（昨 {_fp(ema20_prev)}）、季線 {_fp(ema60)}"),
+        (f"上影線 ≤ 整根 K 棒 {cfg.BO_MAX_UPPER_SHADOW * 100:.0f}%", bool(up_ratio <= cfg.BO_MAX_UPPER_SHADOW),
+         f"上影線佔整根 K 棒 {up_ratio * 100:.0f}%（賣壓{'小' if up_ratio <= cfg.BO_MAX_UPPER_SHADOW else '大'}）"),
+    ]
+    E = tick(close)
+    stop1 = tick(min(neck * 0.98, E * (1 - cfg.BO_STOP_PCT)))
+    return _result("breakout", checks, close=close, key=float(row["High"]), neckline=neck,
+                   stop1=stop1, target=tick(E * (1 + cfg.BO_TARGET_PCT)),
+                   stop1_note=f"頸線下 2%（{tick(neck * 0.98)}）與買價下 {cfg.BO_STOP_PCT * 100:.0f}%（{tick(E * (1 - cfg.BO_STOP_PCT))}）取較低",
+                   date=df.index[i], turnover=float(row["TURN20"]),
+                   q={"volx": volx, "pos": pos if pos is not None else cfg.BO_LOW_ZONE,
+                      "box": box_lo / box_hi if box_hi > 0 else 0.0,
+                      "over": close / neck - 1 if neck > 0 else 0.0})
+
+
+DRY_GROUP_PREFIX = "抗跌："
+
+
+def dry_needs_group(r):
+    """量縮抗跌：其他條件都過、只差「抗跌（族群）」一項 → 才去查個股概念（只查候選股）"""
+    if r is None or r["ok"]:
+        return False
+    grp = [c for c in r["checks"] if c[0].startswith(DRY_GROUP_PREFIX)]
+    return bool(grp) and not grp[0][1] and all(c[1] for c in r["checks"] if not c[0].startswith(DRY_GROUP_PREFIX))
+
+
+def check_dry(df, i, mkt=None, resilient=None):
+    """量縮抗跌（盤整＋量縮＋所屬族群在大盤不好時排前 5）。
+    resilient：True/False＝族群排名結果；None＝還沒查（這一項先不算過）"""
+    if i < 69 or i >= len(df):
+        return None
+    row = df.iloc[i]
+    close = float(row["Close"])
+    mav20 = float(row["MAV20"])
+    n, k = cfg.STAB_LOOKBACK, cfg.STAB_DAYS
+    lo, hi = i - k - n + 1, i - k + 1
+    L = float(df["Low"].iloc[lo:hi].min())
+    low3 = float(df["Low"].iloc[hi:i + 1].min())
+    vol3 = float(df["Volume"].iloc[hi:i + 1].mean())
+
+    B = cfg.DRY_BOX_DAYS
+    bx = df.iloc[i - B + 1:i + 1]
+    box_hi, box_lo = float(bx["High"].max()), float(bx["Low"].min())
+    box_pct = (box_hi - box_lo) / box_hi if box_hi > 0 else 1.0
+    vol_now = float(df["Volume"].iloc[i - B + 1:i + 1].mean())
+    base_lo, base_hi = i - B + 1 - cfg.DRY_VOL_BASE_DAYS, i - B + 1
+    vol_base = float(df["Volume"].iloc[base_lo:base_hi].mean()) if base_lo >= 0 else 0.0
+    vol_ratio_new = vol_now / vol_base if vol_base > 0 else float("nan")
+    if resilient is None:
+        grp_ok, grp_txt = False, "族群排名還沒查（只對候選股才查）"
+    elif resilient:
+        grp_ok, grp_txt = True, "所屬族群在大盤不好時排前 5 名"
+    else:
+        grp_ok, grp_txt = False, "所屬族群不在大盤不好時的前 5 名"
+
+    checks = [
+        _liq(row),
+        (f"盤整：近 {B} 日高低差 ≤ {cfg.DRY_BOX_PCT * 100:.0f}%", bool(box_pct <= cfg.DRY_BOX_PCT),
+         f"近 {B} 日高 {_fp(box_hi)}、低 {_fp(box_lo)}（差 {box_pct * 100:.1f}%）"),
+        (f"量縮：近 {B} 日均量 ≤ 前 {cfg.DRY_VOL_BASE_DAYS} 日的 {cfg.DRY_VOL_NEW * 100:.0f}%",
+         bool(vol_base > 0 and vol_now <= cfg.DRY_VOL_NEW * vol_base),
+         (f"近 {B} 日均量是前 {cfg.DRY_VOL_BASE_DAYS} 日的 {vol_ratio_new * 100:.0f}%" if vol_base > 0 else "歷史量資料不足")),
+        (f"{k}日不破前低", low3 > L, f"最近{k}日最低 {_fp(low3)}，前低 {_fp(L)}"),
+        (f"{DRY_GROUP_PREFIX}所屬族群前 5 名", grp_ok, grp_txt),
+    ]
+    q = {"vol_ratio": vol_ratio_new if vol_ratio_new == vol_ratio_new else 1.0,
+         "hold": low3 / L - 1 if L > 0 else 0.0}
+
+    E = tick(close)
+    w20 = df.iloc[i - cfg.DRY_KEY_LOOKBACK + 1:i + 1]
+    key = float(w20["High"].max())
+    low20 = float(w20["Low"].min())
+    stop1 = tick(float(df["Low"].iloc[i - cfg.DRY_STOP_DAYS + 1:i + 1].min()))        # 出場價＝近 5 日最低點
+    below = (key - close) / key if key > 0 else 1.0
+    checks.append(("出場價低於買價", bool(stop1 < E), f"出場 {stop1}、買價 {E}"))
+    target = tick(key)                                                                # 第一目標＝前高（突破價）
+    # 第二目標（參考）：依序找上方最近的壓力 → 65 日第 1 大量日最高點（要在前高之上）→ 近 60 日高點 → 買價＋2.5 倍風險
+    t2, t2_note = None, ""
+    vl = vol_low(df.iloc[:i + 1])
+    h60 = float(df["High"].iloc[max(0, i - cfg.DRY_T2_HIGH_DAYS + 1):i + 1].max())
+    if vl and vl["side"] == "壓" and vl["high"] > key * 1.001:
+        t2, t2_note = tick(vl["high"]), "65日第1大量日最高點"
+    elif h60 > key * 1.001:
+        t2, t2_note = tick(h60), f"近{cfg.DRY_T2_HIGH_DAYS}日高點"
+    elif E > stop1:
+        r2 = tick(E + cfg.DRY_T2_R * (E - stop1))
+        if r2 > target:
+            t2, t2_note = r2, f"買價＋{cfg.DRY_T2_R:g}倍風險"
+    return _result("dry", checks, close=close, key=key, prior_low=L, stop1=stop1, target=target,
+                   target2=t2, target2_note=t2_note,
+                   stop1_note=f"跌破近 {cfg.DRY_STOP_DAYS} 日最低點 {stop1}", date=df.index[i], turnover=float(row["TURN20"]), q=q)
+
+
+def check_flag(df, i, max_consol=None):
+    """強勢續攻之二：噴出後整理。以昨天(j)為基準判斷型態，今天(i)判斷是否接近/突破前波高點"""
+    if i < 69 or i >= len(df):
+        return None
+    j = i - 1
+    row = df.iloc[i]
+    close = df["Close"].to_numpy(float)
+    high = df["High"].to_numpy(float)
+    vol = df["Volume"].to_numpy(float)
+    mav20 = df["MAV20"].to_numpy(float)
+    ma20 = df["MA20"].to_numpy(float)
+    liq = _liq(row)
+
+    found = None
+    for bp in range(j - cfg.FLAG_MIN_CONSOL, i - cfg.FLAG_WINDOW - 1, -1):
+        if bp < 24:
+            break
+        g3 = close[bp] / close[bp - 3] - 1
+        g1 = close[bp] / close[bp - 1] - 1
+        if g3 >= cfg.FLAG_BURST_3D:
+            S, kind, g, vwin = close[bp - 3], "3日", g3, vol[bp - 2:bp + 1]
+        elif g1 >= cfg.FLAG_BURST_1D:
+            S, kind, g, vwin = close[bp - 1], "單日", g1, vol[bp:bp + 1]
+        else:
+            continue
+        base = mav20[bp - 3]
+        if not (base > 0 and vwin.max() >= cfg.FLAG_BURST_VOL * base):
+            continue
+        found = (bp, S, kind, g, float(vwin.max() / base))
+        break
+    if found is None:
+        return _result("flag", [liq, ("噴出", False,
+                       f"近 {cfg.FLAG_WINDOW} 日沒有符合的噴出（3日≥{cfg.FLAG_BURST_3D * 100:.0f}% 或單日≥{cfg.FLAG_BURST_1D * 100:.0f}%，"
+                       f"且量 ≥ {cfg.FLAG_BURST_VOL} 倍均量）")],
+                       date=df.index[i], turnover=float(row["TURN20"]))
+
+    bp, S, kind, g, vmult = found
+    seg = high[bp - 2:i]                                    # 噴出到昨天的最高點＝前波高點
+    pk = bp - 2 + int(seg.argmax())
+    H = float(high[pk])
+    G = H - S
+    mid = S + cfg.FLAG_MAX_PULLBACK * G
+    cons_close, cons_ma = close[pk + 1:i], ma20[pk + 1:i]
+    min_close = float(cons_close.min()) if len(cons_close) else float("nan")
+    burst_vol = float(vol[bp - 2:pk + 1].mean())
+    cons_vol = float(vol[pk + 1:i].mean()) if len(cons_close) else float("nan")
+    base = [liq, ("噴出", True, f"{df.index[bp]:%m/%d} {kind}漲幅 {g * 100:.1f}%，量 {vmult:.1f} 倍均量")]
+    quality = [
+        (f"回檔 ≤ 噴出漲幅的 {cfg.FLAG_MAX_PULLBACK * 100:.0f}%", bool(len(cons_close) and min_close >= mid),
+         f"噴出 {_fp(S)}→{_fp(H)}，要守住 {_fp(mid)}；盤整最低收盤 {_fp(min_close)}"),
+        ("守月線(MA20)", bool(len(cons_close) and (cons_close >= cons_ma).all()),
+         f"盤整期間收盤都在 MA20 之上" if len(cons_close) and (cons_close >= cons_ma).all() else "盤整期間有跌破 MA20"),
+        (f"盤整量縮（≤ 噴出期 {cfg.FLAG_VOL_RATIO * 100:.0f}%）",
+         bool(len(cons_close) and cons_vol <= cfg.FLAG_VOL_RATIO * burst_vol),
+         f"盤整均量 = 噴出期均量的 {_ratio(cons_vol, burst_vol) * 100:.0f}%"),
+    ]
+    r = _attack(df, i, pk, S, "flag", base, quality, max_consol=max_consol, burst_start=S, burst_gain=G)
+    if r.get("q") is not None:
+        if len(cons_close) and burst_vol > 0 and cons_vol == cons_vol:
+            r["q"]["cons_ratio"], r["q"]["cons_limit"] = cons_vol / burst_vol, cfg.FLAG_VOL_RATIO
+        if len(cons_close) and G > 0:
+            r["q"]["pullback"] = max(0.0, (H - min_close) / G)       # 盤整期間回檔了噴出漲幅的幾成（越小越好）
+    return r
+
+
+def watch_tomorrow(raw, name):
+    """明日追價名單：今天收盤後，盤整條件已經成立（盤整放寬到 15 天）的股票，算出明天的追價點。
+    做法：在最後面補一根「明天」的假 K 線（價格＝今天收盤），用同一套條件判斷『昨天為止』的盤整。
+    回傳策略結果（含 chase_px＝明天漲 4% 且突破盤整高點的價格），不符合回傳 None"""
+    d = _naive(raw)
+    if len(d) < 80:
+        return None
+    last = d.iloc[-1]
+    nxt = d.index[-1] + pd.tseries.offsets.BDay(1)
+    fake = pd.DataFrame({"Open": [last["Close"]], "High": [last["Close"]], "Low": [last["Close"]],
+                         "Close": [last["Close"]], "Volume": [last["Volume"]]}, index=[nxt])
+    df = add_indicators(pd.concat([d[["Open", "High", "Low", "Close", "Volume"]], fake]))
+    i = len(df) - 1
+    fn = check_pullback if name == "pullback" else check_flag
+    r = fn(df, i, max_consol=cfg.WATCH_MAX_CONSOL)
+    if not r or not r.get("pre_ok") or "chase_px" not in r:
+        return None
+    if not _liq(df.iloc[i - 1])[1]:
+        return None
+    if r["chase_px"] > float(last["Close"]) * (1 + cfg.CHASE_MAX_DIST) + 1e-9:     # 追價點太遠（要大漲才過盤整高點）
+        return None
+    r["turnover"] = float(df["TURN20"].iloc[i - 1])
+    r["date"] = d.index[-1]
+    return r
+
+
+# =====================================================
+# 4. 交易計畫
+# =====================================================
+def _breakeven(e, p2, stop2, t):
+    """第 2 筆在 stop2 被砍掉後，第 1 筆要漲到多少，整趟才打平"""
+    if t[0] <= 0:
+        return None
+    s1, s2 = (t[0] / e, t[1] / p2) if cfg.COST_BY_MONEY else (t[0], t[1])
+    return tick(e + max(0.0, p2 - stop2) * s2 / s1)
+
+
+def ladder_plan(E, K, stop1, target, ratios=None, key_label="突破價", stop1_note="", first_target=False,
+                target2=None, target2_note=""):
+    """其他三套策略的通用分批：第 1 筆 E、第 2 筆突破價 K、第 3 筆 K x 1.08"""
+    t = norm_ratios(ratios)
+    p1, k = tick(E), tick(K)
+    p2 = max(k, p1)
+    p3 = max(tick(K * cfg.EXT_RATIO), p2)
+    stop2 = tick(k * (1 - cfg.STOP_ADD_PCT))
+    notes = []
+    tg = tick(target)
+    if first_target:
+        notes.append(f"ℹ️ 第一目標＝前高 {tg}，到了先獲利了結；突破後要不要續抱請自行判斷")
+    elif p2 > p1 and tg <= p2:
+        notes.append(f"⚠️ 目標價 {tg} 不高於第 2 筆加碼價 {p2}，加碼前就可能先到目標")
+    elif tg <= p3:
+        notes.append(f"⚠️ 目標價 {tg} 不高於第 3 筆加碼價 {p3}，第 3 筆實務上可能不會買進")
+    st1 = tick(stop1)
+    rr = (tg - p1) / (p1 - st1) if p1 > st1 else None                  # 風報比＝賺的空間 ÷ 賠的空間
+    if rr is not None:
+        notes.append(f"⚠️ 風報比 {rr:.1f}，低於 {cfg.RR_MIN}，賺的空間偏小" if rr < cfg.RR_MIN else f"ℹ️ 風報比 {rr:.1f}")
+    if p1 >= k:
+        notes.append("ℹ️ 現價已在突破價之上，第 2 筆可與第 1 筆一併買進")
+    return {
+        "ratios": t, "e": p1, "b": p2, "b2": p3, "key": k, "key_label": key_label,
+        "avg2": tick(avg_cost([p1, p2], t[:2])), "avg3": tick(avg_cost([p1, p2, p3], t)),
+        "stop1": tick(stop1), "stop1_note": stop1_note,
+        "stop2": stop2, "breakeven": _breakeven(p1, p2, stop2, t),
+        "targets": ([("第一目標（前高）", tg), (f"第二目標（{target2_note}）", tick(target2))] if target2 else [("", tg)]),
+        "notes": notes, "rr": rr,
+        "tranches": [("① 進場", p1, t[0]), ("② 突破", p2, t[1]), ("③ 加碼", p3, t[2])],
+    }
+
+
+def attack_plan(r, entry=None, split=None):
+    """強勢續攻：攻擊日買 50%，站上前波高點（突破日）再買 50%。entry：實際買價（回測追價用）
+    split：自訂兩筆比例（攻擊日, 突破日），不給就用 config 預設；會自動換算成合計 1"""
+    t = tuple(float(x) for x in (split or cfg.ATTACK_SPLIT))
+    if len(t) != 2 or any(x < 0 for x in t) or sum(t) <= 0:
+        t = tuple(cfg.ATTACK_SPLIT)
+    t = (t[0] / sum(t), t[1] / sum(t))
+    e = tick(entry if entry is not None else r["entry"])
+    stop1, note = attack_stop(r, e) if entry is not None else (r["stop1"], r.get("stop1_note", ""))
+    k = tick(r["key"])
+    b = max(k, e)
+    notes = []
+    if e >= k:
+        notes.append("ℹ️ 攻擊日已經站上前波高點，兩筆同一天買進")
+    after2 = max(r["stop_after2"], stop1)
+    return {
+        "ratios": t, "e": e, "b": b, "b2": b, "key": k, "key_label": "前波高點",
+        "tranches": [("① 攻擊日", e, t[0]), ("② 突破日", b, t[1])],
+        "avg2": tick(avg_cost([e, b], t)), "avg3": tick(avg_cost([e, b], t)),
+        "stop1": stop1, "stop1_note": note, "stop_after2": after2, "stop2": after2,
+        "breakeven": None, "targets": [("", r["target"])], "notes": notes,
+    }
+
+
+def plan_for(name, r, ratios=None, split=None):
+    """依策略結果 r 產生交易計畫（split＝強勢續攻的兩筆比例）"""
+    if r is None:
+        return None
+    if name in ("pullback", "flag"):
+        return attack_plan(r, split=split)
+    labels = {"breakout": "突破當天最高價", "dry": "近20日高點"}
+    return ladder_plan(r["close"], r["key"], r["stop1"], r["target"], ratios,
+                       key_label=f"突破{labels[name]}", stop1_note=r.get("stop1_note", ""),
+                       first_target=(name == "dry"), target2=r.get("target2"), target2_note=r.get("target2_note", ""))
+
+
+# =====================================================
+# 4.5 排序：越符合規則的越前面
+# =====================================================
+def _m(x, lo, hi):
+    """x 從 lo（剛好過關）到 hi（非常漂亮）線性換成 0～1，超過的不再加分"""
+    if x is None or x != x or hi == lo:
+        return 0.0
+    return min(1.0, max(0.0, (x - lo) / (hi - lo)))
+
+
+def plan_rr(plan):
+    """風報比＝（第一目標 − 買價）÷（買價 − 出場價）。算不出來回傳 None"""
+    try:
+        e, s1, t = plan["e"], plan["stop1"], plan["targets"][0][1]
+        return (t - e) / (e - s1) if e > s1 else None
     except Exception:
         return None
 
 
-def fetch_mi_index_amounts(day):
-    """證交所『大盤統計資訊』（MI_INDEX）當天各類成交金額（元）。回傳 {項目名稱: 金額}。
-    用來跟 FMTQIK 的成交金額對照，找出跟看盤軟體數字一致的口徑。"""
-    url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={day:%Y%m%d}&type=MS"
-    j = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"}).json()
-    tables = list(j.get("tables") or [])
-    for k in list(j):                      # 舊格式：fields1/data1 ...
-        if k.startswith("fields") and k.replace("fields", "data") in j:
-            tables.append({"fields": j[k], "data": j[k.replace("fields", "data")]})
-    out = {}
-    for t in tables:
-        cols = [i for i, f in enumerate(t.get("fields") or []) if "成交金額" in str(f)]
-        if not cols:
-            continue
-        for row in t.get("data") or []:
-            v = _numf(row[cols[0]])
-            if v:
-                out[str(row[0]).strip()] = v
-    return out
+def rank_score(name, r, plan=None, watch=False):
+    """符合程度 0～100。入選的股票都已過關，這裡看『每個條件過得多漂亮』：
+    每一項從『剛好過關＝0』算到『很漂亮＝1』，平均後再加上風報比。
+    watch=True 是明日追價名單（今天還沒攻擊，攻擊日那幾項不算，改看追價點離現價多近）。"""
+    q = r.get("q") or {}
+    parts = []
+    if name in ("pullback", "flag"):
+        if not watch:
+            parts += [_m(q.get("gain"), cfg.ATTACK_MIN_GAIN, 0.10),                       # 漲幅 5% → 10%
+                      _m(q.get("pos"), cfg.ATTACK_CLOSE_POS, 1.0),                         # 收盤位置 67% → 100%
+                      _m(q.get("vr"), cfg.ATTACK_VOL_VS_PEAK, 1.8)]                        # 量 = 前高的 0.9 倍 → 1.8 倍
+        if q.get("cons_ratio") is not None:
+            parts.append(_m(q["cons_limit"] - q["cons_ratio"], 0.0, q["cons_limit"]))      # 盤整越縮量越好
+        if q.get("depth") is not None:
+            parts.append(_m(cfg.ATTACK_MAX_DEPTH - q["depth"], 0.0, cfg.ATTACK_MAX_DEPTH))  # 盤整越淺越好
+        if q.get("pullback") is not None:
+            parts.append(_m(cfg.FLAG_MAX_PULLBACK - q["pullback"], 0.0, cfg.FLAG_MAX_PULLBACK))
+        if watch and r.get("chase_px") and r.get("close"):
+            parts.append(_m(cfg.CHASE_MAX_DIST - (r["chase_px"] / r["close"] - 1), 0.0, cfg.CHASE_MAX_DIST))
+    elif name == "breakout":
+        parts += [_m(q.get("volx"), cfg.BO_VOL_MULT, 4.0),                                 # 爆量 2 倍 → 4 倍
+                  _m(cfg.BO_LOW_ZONE - q.get("pos", cfg.BO_LOW_ZONE), 0.0, cfg.BO_LOW_ZONE),   # 位置越低越好（十年高低的下 20% 之內）
+                  _m(q.get("box"), cfg.BO_BOX_RATIO, 1.0),                                 # 盤整越窄越好
+                  _m(q.get("over"), 0.0, 0.05)]                                            # 突破頸線的幅度
+    elif name == "dry":
+        parts += [_m(cfg.DRY_VOL_NEW - q.get("vol_ratio", cfg.DRY_VOL_NEW), 0.0, cfg.DRY_VOL_NEW),   # 越量縮越好
+                  _m(q.get("hold"), 0.0, 0.05)]                                            # 離前低越遠越好
+    base = sum(parts) / len(parts) if parts else 0.0
+    rr = plan_rr(plan) if plan else None
+    rr_part = _m(rr, 1.0, 3.0) if rr is not None else 0.0                                  # 風報比 1 → 3
+    return round((0.7 * base + 0.3 * rr_part) * 100, 1)
 
 
-def _fix_hl(raw):
-    """Yahoo 最後一天有時只有收盤、沒有開高低：用收盤補上，才不會整天被丟掉"""
-    if raw is None or len(raw) == 0:
-        return raw
-    raw = raw.copy()
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-    if "Close" in raw.columns:
-        for c in ("Open", "High", "Low"):
-            if c in raw.columns:
-                raw[c] = raw[c].fillna(raw["Close"])
-    return raw
+def rank_absorb(a):
+    """恐慌承接的排序分數：量能越大、振幅越大、影線越長（或紅 K 實體越大）越前面"""
+    shape = max(_m(a["shadow"], cfg.STAB_SHADOW, 1.0), _m(a["body"], cfg.STAB_RED_BODY, 1.0))   # 黑 K 的 body 是負的，自然得 0
+    parts = [_m(a["vol_mult"], cfg.ABSORB_VOL_MULT, 4.0), _m(a.get("range"), cfg.ABSORB_MIN_RANGE, 0.15), shape]
+    return round(sum(parts) / len(parts) * 100, 1)
 
 
-def _add_missing(df, extra, note):
-    """把 extra 裡 df 沒有的日子加進來（只加新的日子，不改舊的）"""
-    if extra is None or len(extra) == 0:
-        return df, 0
-    extra = extra[extra.index > df.index[-1]]
-    if len(extra) == 0:
-        return df, 0
-    df = pd.concat([df, extra[COLS]]).sort_index()
-    df = df[~df.index.duplicated(keep="first")]
-    return df, len(extra)
+# =====================================================
+# 5. 一次評估一檔股票
+# =====================================================
+def evaluate(df, mkt_df, ratios=None):
+    """df：個股日線；mkt_df：加權指數日線。回傳大盤狀態與四套策略結果"""
+    t = norm_ratios(ratios)
+    df = add_indicators(df)
+    i = len(df) - 1
+    if i < 69:
+        return {"error": f"資料只有 {len(df)} 個交易日，不足以分析（至少需要 70 天）"}
+    mk = market_summary(mkt_df) if mkt_df is not None and len(mkt_df) >= 70 else None
+    mdf = mk["df"] if mk else None
+    results = {
+        "pullback": check_pullback(df, i, t),
+        "breakout": check_breakout(df, i),
+        "dry": check_dry(df, i, mdf),
+        "flag": check_flag(df, i),
+    }
+    for name, r in results.items():
+        if r is not None:
+            r["active"] = bool(mk and name in mk["active"])
+    return {"market": mk, "results": results, "ratios": t, "date": df.index[i],
+            "close": float(df["Close"].iloc[i])}
 
 
-def _yahoo_recent():
-    """Yahoo 另一種抓法（跟個股一樣用 history），只抓最近一個月"""
-    h = yf.Ticker("^TWII").history(period="1mo", interval="1d", auto_adjust=False)
-    return _clean(_fix_hl(h))
-
-
-def _yahoo_intraday_days():
-    """Yahoo 盤中 5 分 K 合成日 K：日線還沒更新時，用它補最近幾天"""
-    h = yf.Ticker("^TWII").history(period="5d", interval="5m", auto_adjust=False)
-    h = _clean(_fix_hl(h))
-    if h is None:
-        return None
-    g = h.groupby(h.index.normalize())
-    out = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(), "Low": g["Low"].min(),
-                        "Close": g["Close"].last(), "Volume": 0.0})
-    return out
-
-
-def fetch_market(period="2y", retries=3):
-    """加權指數日線（^TWII）。價格來自 Yahoo；Volume 欄位換成證交所官方的「成交金額」。
-    Yahoo 日線偶爾少最近一天，依序用這些補：Yahoo 另一種抓法 → Yahoo 盤中 5 分 K → 證交所官方開高低收 → 證交所收盤。
-    成交金額抓不到時 Volume 全部留空，止跌確認會顯示『無法確認』，而不是用錯的數字。"""
-    last = None
-    for k in range(retries):
-        try:
-            raw = yf.download("^TWII", period=period, interval="1d", progress=False, auto_adjust=False)
-            df = _clean(_fix_hl(raw))
-            if df is not None and len(df) >= 70:
-                break
-            last = "資料不足"
-        except Exception as e:
-            last = repr(e)
-        time.sleep(3 * (k + 1))
-    else:
-        raise RuntimeError(f"加權指數抓取失敗：{last}")
-    notes = []                                                   # 補了什麼，顯示在 App 的提醒裡
-    for name, fn in (("Yahoo 日線（另一種抓法）", _yahoo_recent), ("Yahoo 盤中資料", _yahoo_intraday_days)):
-        try:
-            df, n = _add_missing(df, fn(), name)
-            if n:
-                notes.append(f"{name}補上 {n} 天")
-        except Exception as e:
-            print(f"{name} 補資料失敗：", repr(e))
-    df = patch_with_twse(df)                                     # 證交所官方開高低收：補缺的、校正有落差的
-    notes.append(df.attrs.get("twse_note", ""))
-    try:
-        tw = fetch_twse_daily()
-        if tw["close"].notna().any():                            # 還是缺的日子：至少用證交所收盤補上
-            c = tw["close"].dropna()
-            c = c[c.index > df.index[-1]]
-            if len(c):
-                extra = pd.DataFrame({"Open": c, "High": c, "Low": c, "Close": c, "Volume": 0.0})
-                df, n = _add_missing(df, extra, "")
-                if n:
-                    notes.append(f"證交所收盤補上 {n} 天（沒有開高低）")
-        df["Volume"] = tw["amount"].reindex(df.index)
-        df.attrs["vol_source"] = "twse"
-    except Exception as e:
-        print("大盤成交金額抓取失敗：", repr(e))
-        df["Volume"] = np.nan
-        df.attrs["vol_source"] = "none"
-    df.attrs["twse_note"] = "\n".join(x for x in notes if x)
-    return df
-
-
-def _extract(raw, t, single=False):
-    """從批次下載的結果取出單一股票（single=True：這一批只有一檔，部分 yfinance 版本不會分層）"""
-    if raw is None or len(raw) == 0:
-        return None
-    if not isinstance(raw.columns, pd.MultiIndex):
-        return _clean(raw.copy()) if single else None
-    lv0 = raw.columns.get_level_values(0)
-    lv1 = raw.columns.get_level_values(1)
-    if t in lv0:
-        sub = raw[t]
-    elif t in lv1:
-        sub = raw.xs(t, axis=1, level=1)
-    else:
-        return None
-    return _clean(sub.copy())
-
-
-def fetch_prices(tickers, period="9mo", batch=None, sleep=1.0, retries=2):
-    """分批下載。tickers：Yahoo 代號清單（如 2330.TW）。
-    回傳 (prices: {代號: DataFrame}, failed: 沒抓到的代號清單)"""
-    batch = batch or cfg.BATCH
-    prices, failed = {}, []
-    for s in range(0, len(tickers), batch):
-        chunk = tickers[s:s + batch]
-        raw = None
-        for k in range(retries + 1):
-            try:
-                raw = yf.download(chunk, period=period, interval="1d", group_by="ticker",
-                                  auto_adjust=False, progress=False, threads=True)
-                if raw is not None and len(raw):
-                    break
-            except Exception as e:
-                print(f"批次 {s // batch + 1} 第 {k + 1} 次失敗：{e!r}")
-            time.sleep(3 * (k + 1))
-        for t in chunk:
-            df = _extract(raw, t, single=len(chunk) == 1)
-            if df is None:
-                failed.append(t)
-            else:
-                prices[t] = df
-        done = min(s + batch, len(tickers))
-        print(f"下載進度 {done}/{len(tickers)}　成功 {len(prices)}　失敗 {len(failed)}", flush=True)
-        time.sleep(sleep)
-    return prices, failed
+def verdict(ev):
+    """一句話結論。回傳 (等級, 文字)；等級：go / watch / wait / stop"""
+    mk = ev["market"]
+    ok_names = [n for n, r in ev["results"].items() if r and r["ok"]]
+    go = [n for n in ok_names if ev["results"][n]["active"]]
+    if go:
+        names = cfg.names_join(go)
+        risk = "（大盤第 3 層，部位減半）" if mk and mk["risk"] else ""
+        return "go", f"✅ 符合【{names}】，且大盤目前適用{risk}"
+    if ok_names:
+        names = cfg.names_join(ok_names)
+        return "watch", f"⚠️ 型態符合【{names}】，但目前大盤層級不適用這套策略，先觀察"
+    if mk and not mk["active"]:
+        return "stop", "🔴 大盤尚未止跌，不建議建立多頭部位；這檔也沒有符合的策略"
+    return "wait", "⏳ 目前沒有符合的策略，可以先放進觀察名單，等條件成形"
