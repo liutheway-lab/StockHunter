@@ -189,7 +189,7 @@ def market_chart(mk, bars=45):
         low_marks.append((lo_v, f"前低 {lo_v:,.0f}（{idx[lo_i]:%m/%d}）", "#2e9e4f"))
     if pl is not None:
         ax.axhline(pl, color="#00a8d6", linestyle="--", linewidth=1)
-        low_marks.append((pl, f"近 {cfg.STAB_DAYS} 日最低點 {pl:,.0f}" + (f"（{pld:%m/%d}）" if pld is not None else ""), "#0086ad"))
+        low_marks.append((pl, f"低點日最低點 {pl:,.0f}" + (f"（{pld:%m/%d}）" if pld is not None else ""), "#0086ad"))
     if rl is not None and _pos(idx, rld) is not None:
         ax.axhline(rl, color="#8e6bd8", linestyle="--", linewidth=1)
         low_marks.append((rl, f"低點日後最低 {rl:,.0f}（{rld:%m/%d}）", "#8e6bd8"))
@@ -244,7 +244,7 @@ def market_chart(mk, bars=45):
     fig.suptitle(title, fontsize=11, x=0.02, ha="left")
     if stab_mode:
         for k, (txt, col) in enumerate([("■ 黃色區＝低點日起 3 天（含低點日）", "#b8860b"),
-                                        (f"┄ 水藍虛線＝近 {cfg.STAB_DAYS} 日最低點（上圖）", "#0086ad"),
+                                        ("┄ 水藍虛線＝低點日最低點（上圖）", "#0086ad"),
                                         ("┄ 橘色虛線＝爆量下跌日的成交額（下圖）", "#e67300")][::-1]):
             fig.text(0.02, 0.008 + k * 0.026, txt, fontsize=8.5, color=col, ha="left", va="bottom")
     _price_header(fig, full["Close"])
