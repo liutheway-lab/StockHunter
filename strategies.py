@@ -223,9 +223,11 @@ def _confirm_layer(raw):
 def stabilization(df, i):
     """止跌確認（日線，2026-11-10 改版：價格為主、量能只顯示）。
     先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
-    再找「低點日」＝最近 STAB_DAYS 天股價最低點那天（要在爆量日之後），兩項都過才算止跌走穩：
-    ① 反彈：今天收盤離低點日最低點 ≥ STAB_REBOUND（5%）
-    ② 不破低：低點日之後至少 STAB_NO_BREAK_DAYS（2）個交易日，最低點都高於低點日的最低點
+    再找「低點日」＝爆量下跌日之後（到今天）股價最低的那天（2026-11-14 改：原本只看最近 3 天，
+    低點一過 3 天就被丟掉、改抓回檔的小低點，已經過關的又被打回去）。兩項都過才算止跌走穩：
+    ① 反彈：低點日之後，曾經有一天收盤離低點日最低點 ≥ STAB_REBOUND（5%）（達成過就算，回檔不取消）
+    ② 不破低：低點日之後至少 STAB_NO_BREAK_DAYS（2）個交易日，最低點都不低於低點日的最低點
+    之後只要跌破低點日最低點，那天就變成新的低點日，兩項重新計算。
     量能（低點日成交額 ÷ 爆量日）、K 棒型態照樣算出來，但只顯示給你參考，不再是必要條件。
     觀察中＝不破低天數還沒滿（而且到目前為止沒破低）。
     字典欄位沿用舊名稱（prior_low＝低點日最低點、prior_low_date＝低點日、recent_*＝低點日之後）。"""
@@ -245,9 +247,10 @@ def stabilization(df, i):
     P = w0 + int(np.where(m, V[seg], -1.0).argmax())             # 爆量下跌日
     dv, dd = float(V[P]), idx[P]
 
-    # 低點日＝最近 STAB_DAYS 天（含今天）股價最低點那天；量能、K 棒、不破低都看這一天
-    w = max(i - k + 1, P + 1)
-    d = w + int(np.nan_to_num(L[w:i + 1], nan=1e18).argmin())
+    # 低點日＝爆量下跌日之後（含今天）股價最低點那天；同樣低的取最後一天。量能、K 棒、不破低都看這一天
+    w = min(P + 1, i)
+    seg_l = np.nan_to_num(L[w:i + 1], nan=1e18)
+    d = w + int(len(seg_l) - 1 - seg_l[::-1].argmin())
     if np.isnan(V[d]) or np.isnan(L[d]):
         return None
     rng = H[d] - L[d]
@@ -261,21 +264,25 @@ def stabilization(df, i):
     need = cfg.STAB_NO_BREAK_DAYS
     after = L[d + 1:i + 1]
     days_after = len(after)
-    held = bool(days_after == 0 or after.min() > L[d])               # 到目前為止沒破低點日最低點
+    held = bool(days_after == 0 or after.min() >= L[d])              # 到目前為止沒破低點日最低點
     no_break = bool(days_after >= need and held)                     # 不破低：天數夠、而且都沒破
     reb = float(C[i] / L[d] - 1) if L[d] > 0 else 0.0                # 今天收盤離低點日最低點反彈多少
-    reb_ok = bool(reb >= cfg.STAB_REBOUND)
+    cl = C[d:i + 1] / L[d] - 1 if L[d] > 0 else np.zeros(i - d + 1)
+    reb_max = float(np.nanmax(cl)) if len(cl) else reb                 # 低點日之後最高的收盤反彈
+    hit = np.where(cl >= cfg.STAB_REBOUND)[0]
+    reb_date = idx[d + int(hit[0])] if len(hit) else None             # 第一次反彈達標的那天
+    reb_ok = bool(reb_date is not None)
     full = reb_ok and no_break
     pending = (not full) and held and days_after < need              # 天數還沒滿、也還沒破低：觀察中
     rl = float(after.min()) if days_after else None
     rld = idx[d + 1 + int(after.argmin())] if days_after else None
     return {"ok": bool(full), "watching": bool(pending), "signal_date": idx[d],
             "vol_ok": vol_ok, "shape_ok": shape_ok, "no_break": no_break, "vol_missing": False,
-            "rebound": reb, "reb_ok": reb_ok, "held": held,
+            "rebound": reb, "rebound_max": reb_max, "reb_date": reb_date, "reb_ok": reb_ok, "held": held,
             "shadow": shadow, "gain": gain, "body": body, "shadow_ok": shadow_ok, "red_ok": red_ok,
             "days_after": days_after, "need_days": need,
             "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
-            "recent_start": idx[d], "recent_end": idx[i],
+            "recent_start": idx[d], "recent_end": idx[min(d + k - 1, i)],     # 圖上的黃色區：低點日起 3 天
             "dump_vol": dv, "dump_date": dd, "recent_vol": float(V[d]), "vol_date": idx[d]}
 
 
@@ -466,7 +473,9 @@ def describe_market(mk):
             low_mark = "✅" if s["no_break"] else ("⏳" if s["held"] else "❌")
             lines.append(
                 f"🧱 止跌確認：{state}（反彈、不破低兩項都要通過）\n"
-                f"　{ok(s['reb_ok'])} 反彈：離低點日最低 {s['prior_low']:,.0f} 反彈 {s['rebound'] * 100:+.1f}%（需 ≥{cfg.STAB_REBOUND * 100:.0f}%）\n"
+                f"　{ok(s['reb_ok'])} 反彈：離低點日最低 {s['prior_low']:,.0f} 最多反彈 {s['rebound_max'] * 100:+.1f}%"
+                + (f"（{s['reb_date']:%m/%d} 達標）" if s.get('reb_date') is not None else "")
+                + f"，今天 {s['rebound'] * 100:+.1f}%（需 ≥{cfg.STAB_REBOUND * 100:.0f}%）\n"
                 f"　{low_mark} 不破低：低點日（{s['signal_date']:%m/%d}）之後 {s['days_after']} 天沒破低"
                 f"（需 ≥{s['need_days']} 天），最低 {(s['recent_low'] if s['recent_low'] is not None else 0):,.0f}\n"
                 f"　參考：量能約為爆量日（{s['dump_date']:%m/%d}）的 {ratio:.0f}%\n"
