@@ -65,18 +65,3 @@ def resolve(query, directory, limit=8):
     return pd.concat([starts, contains]).head(limit).to_dict("records")
 
 
-def load_themes(url, timeout=15):
-    """讀取『自己維護』的題材表（例如 Google 試算表發佈成 CSV）。
-    欄位：code, themes；themes 用頓號、逗號或斜線分隔。回傳 {代號: [題材, ...]}"""
-    if not url:
-        return {}
-    df = pd.read_csv(url, dtype=str, storage_options={"User-Agent": "Mozilla/5.0"}) \
-        if url.startswith("http") else pd.read_csv(url, dtype=str)
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    out = {}
-    for _, row in df.iterrows():
-        code = str(row.get("code", "")).strip()
-        themes = str(row.get("themes", ""))
-        if code and themes and themes != "nan":
-            out[code] = [t.strip() for t in re.split(r"[、,，;；/]", themes) if t.strip()]
-    return out
