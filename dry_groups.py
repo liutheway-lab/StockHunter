@@ -11,7 +11,6 @@ import json
 import re
 import statistics
 import time
-import urllib.parse
 from datetime import date
 
 import pandas as pd
@@ -127,24 +126,3 @@ def notify_owner(text):
         print("沒有設定 TG_OWNER_ID，只印在日誌：", text)
 
 
-def daily_top_groups(close_wide: pd.DataFrame, mkt_close: pd.Series, members: dict):
-    """回測用：每個交易日，各族群（中位數）在「當天往前 20 日內大盤不好的日子」的累計跌幅，前 5 名。
-    close_wide：日期×代號 的收盤價表；members：{族群: [代號]}。回傳 {日期: [族群...]}（樣本不夠的日子沒有）"""
-    ret = close_wide.pct_change(fill_method=None)
-    ma20 = mkt_close.rolling(20).mean()
-    bad_flag = (mkt_close < ma20).astype(float)
-    out = {}
-    for d in mkt_close.index:
-        pos = mkt_close.index.get_loc(d)
-        win = mkt_close.index[max(0, pos - BAD_WINDOW + 1):pos + 1]
-        days = [x for x in win if bad_flag.get(x) == 1.0]
-        if len(days) < MIN_BAD_DAYS:
-            continue
-        cum = (1 + ret.reindex(days)).prod(min_count=1) - 1
-        scores = {}
-        for gname, codes in members.items():
-            vals = cum.reindex([c for c in codes if c in cum.index]).dropna()
-            if len(vals):
-                scores[gname] = float(vals.median())
-        out[d] = sorted(scores, key=scores.get, reverse=True)[:TOP_N]
-    return out
