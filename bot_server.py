@@ -44,9 +44,8 @@ TPE = dt.timezone(dt.timedelta(hours=8))
 # name：顯示用；file：workflow 檔名；at：開始檢查；until：超過就不補；since：這個時間之後建立的紀錄才算「這一次」
 JOBS = [
     {"name": "night", "file": "night.yml", "at": (15, 50), "until": (17, 30), "since": (15, 0)},   # 正式排程 15:30；15:50 還沒有任何執行紀錄才補跑
-    {"name": "morning", "file": "morning.yml", "at": (8, 35), "until": (9, 30), "since": (7, 30)},
+    {"name": "morning", "file": "morning.yml", "at": (8, 40), "until": (9, 30), "since": (7, 30)},   # 正式排程 GitHub 08:35；08:40 還沒有任何執行紀錄才補跑
     {"name": "intraday", "file": "intraday.yml", "at": (8, 56), "until": (13, 0), "since": (8, 0)},
-    {"name": "volume", "file": "volume_probe.yml", "at": (13, 25), "until": (15, 0), "since": (13, 0)},
 ]
 
 
@@ -93,7 +92,7 @@ def backup_step(now, state, job):
     return f"請 GitHub 補跑 {job['name']} 失敗 {r.status_code} {r.text[:120]}"
 
 
-SHOW = {"night": "夜間掃描", "morning": "早報", "intraday": "盤中監控", "volume": "大盤成交金額量測"}
+SHOW = {"night": "夜間掃描", "morning": "早報", "intraday": "盤中監控"}
 
 
 def _notify_owner(job, msg):
