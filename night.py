@@ -74,7 +74,7 @@ def market_block(mk):
     if mk.get("dd") is not None and mk["dd"] <= -cfg.DROP_WARN:
         out.append(f"⚠️ 離近 60 日高點\n已經跌了 {abs(mk['dd']) * 100:.1f}%")
 
-    if mk["layer"] in (4, 5):
+    if mk.get("base_layer", mk["layer"]) in (4, 5):          # 空頭，或從空頭反彈升上來：都顯示止跌確認
         s = mk["stab"]
         if s is None:
             out.append("🧱 止跌確認：資料不足")
@@ -87,7 +87,7 @@ def market_block(mk):
             state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
             out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 兩項都過才算止跌")
             low_ok = "✅" if s["no_break"] else "⏳" if s["held"] else "❌"
-            out.append(f"低點日：{s['signal_date']:%m/%d}\n（爆量下跌日之後股價最低的那天）")
+            out.append(f"低點日：{s['signal_date']:%m/%d}\n（爆量下跌日當天起股價最低的那天）")
             out.append("*① 反彈*\n低點日之後曾經有一天\n收盤離低點日最低點\n反彈 ≥ " f"{cfg.STAB_REBOUND * 100:.0f}%")
             rb = [f"最多反彈 {s['rebound_max'] * 100:>+5.1f}%　{ok(s['reb_ok'])}"]
             if s.get("reb_date") is not None:
