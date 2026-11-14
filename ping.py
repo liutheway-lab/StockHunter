@@ -4,7 +4,6 @@
 2. Yahoo 行情抓不抓得到（加權指數）
 3. 證交所官方股票清單抓不抓得到
 """
-import io
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
