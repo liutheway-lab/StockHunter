@@ -222,10 +222,12 @@ def stabilization(df, i):
     """止跌確認（日線，2026-11-10 改版：價格為主、量能只顯示）。
     先找「爆量下跌日」＝最近 STAB_LOOKBACK＋STAB_MAX_AGE 個交易日裡，成交額最大的下跌日。
     再找「低點日」＝爆量下跌日當天起（到今天）股價最低的那天，可以就是爆量下跌日（2026-11-14 改：原本只看最近 3 天，
-    低點一過 3 天就被丟掉、改抓回檔的小低點，已經過關的又被打回去）。兩項都過才算止跌走穩：
+    低點一過 3 天就被丟掉、改抓回檔的小低點，已經過關的又被打回去）。三項都過才算止跌走穩：
     ① 反彈：低點日之後，曾經有一天收盤離低點日最低點 ≥ STAB_REBOUND（5%）（達成過就算，回檔不取消）
     ② 不破低：低點日之後至少 STAB_NO_BREAK_DAYS（2）個交易日，最低點都不低於低點日的最低點
-    之後只要跌破低點日最低點，那天就變成新的低點日，兩項重新計算。
+    ③ 沒有急跌（2026-11-16 新增）：低點日之後，近 STAB_DROP_DAYS（3）個交易日內沒有任何一天收盤跌幅 ≥ STAB_DROP（3%）。
+    反彈又急跌（例如 11/16 大盤跌 6%）還說「止跌走穩」很奇怪，所以急跌後先回到「觀察中」，過 3 個交易日沒再急跌才恢復。
+    之後只要跌破低點日最低點，那天就變成新的低點日，三項重新計算。
     量能（低點日成交額 ÷ 爆量日）、K 棒型態照樣算出來，但只顯示給你參考，不再是必要條件。
     觀察中＝不破低天數還沒滿（而且到目前為止沒破低）。
     字典欄位沿用舊名稱（prior_low＝低點日最低點、prior_low_date＝低點日、recent_*＝低點日之後）。"""
@@ -270,15 +272,19 @@ def stabilization(df, i):
     hit = np.where(cl >= cfg.STAB_REBOUND)[0]
     reb_date = idx[d + int(hit[0])] if len(hit) else None             # 第一次反彈達標的那天
     reb_ok = bool(reb_date is not None)
-    full = reb_ok and no_break
-    pending = (not full) and held and days_after < need              # 天數還沒滿、也還沒破低：觀察中
+    chg_d = C[d + 1:i + 1] / C[d:i] - 1 if i > d else np.zeros(0)     # 低點日之後每天的收盤漲跌
+    last_n = chg_d[-cfg.STAB_DROP_DAYS:]
+    worst = float(np.nanmin(last_n)) if len(last_n) else 0.0          # 近 N 天最大單日跌幅（負數）
+    calm = bool(worst > -cfg.STAB_DROP)                               # ③ 近期沒有急跌
+    full = reb_ok and no_break and calm
+    pending = (not full) and held and (days_after < need or (reb_ok and no_break and not calm))   # 天數沒滿、或剛急跌：觀察中
     rl = float(after.min()) if days_after else None
     rld = idx[d + 1 + int(after.argmin())] if days_after else None
     return {"ok": bool(full), "watching": bool(pending), "signal_date": idx[d],
             "vol_ok": vol_ok, "shape_ok": shape_ok, "no_break": no_break, "vol_missing": False,
             "rebound": reb, "rebound_max": reb_max, "reb_date": reb_date, "reb_ok": reb_ok, "held": held,
             "shadow": shadow, "gain": gain, "body": body, "shadow_ok": shadow_ok, "red_ok": red_ok,
-            "days_after": days_after, "need_days": need,
+            "days_after": days_after, "need_days": need, "calm": calm, "worst_drop": worst,
             "prior_low": float(L[d]), "prior_low_date": idx[d], "recent_low": rl, "recent_low_date": rld,
             "recent_start": idx[d], "recent_end": idx[min(d + k - 1, i)],     # 圖上的黃色區：低點日起 3 天
             "dump_vol": dv, "dump_date": dd, "recent_vol": float(V[d]), "vol_date": idx[d]}
