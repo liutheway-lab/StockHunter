@@ -1,5 +1,13 @@
 {
  "day": "2026-11-16",
  "realized": 119200.0,
- "positions": []
+ "positions": [
+  {
+   "kind": "大台",
+   "side": "空",
+   "qty": 2,
+   "avg": 42051.0,
+   "stop": null
+  }
+ ]
 }
