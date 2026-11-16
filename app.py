@@ -658,7 +658,7 @@ if mk:
                 ratio = s_["recent_vol"] / s_["dump_vol"] * 100 if s_["dump_vol"] else 0
                 da, nd = s_["days_after"], s_["need_days"]
                 state = "✅ 通過" if s_["ok"] else ("⏳ 觀察中" if s_.get("watching") else "🔴 尚未止跌")
-                st.markdown(L(f"🧱 **止跌確認**　{state}", "反彈、不破低　兩項都要通過"))
+                st.markdown(L(f"🧱 **止跌確認**　{state}", "反彈、不破低、沒有急跌　三項都要通過"))
                 low_txt = ("低點日就是今天，還要再觀察" if da == 0 else
                            f"低點日（{s_['signal_date']:%m/%d}）最低 {s_['prior_low']:,.0f}，"
                            f"之後 {da} 天最低 {s_['recent_low']:,.0f}，至少要 {nd} 天不破低")
@@ -669,6 +669,9 @@ if mk:
                      + f"之後最多反彈 {s_['rebound_max'] * 100:+.1f}%，今天收盤 {s_['rebound'] * 100:+.1f}%，"
                      f"需曾經 {cfg.STAB_REBOUND * 100:.0f}% 以上"),
                     ("✅" if s_["no_break"] else ("⏳" if s_["held"] else "❌"), "不破低", low_txt),
+                    ("✅" if s_["calm"] else "⏳", "沒有急跌",
+                     f"近 {cfg.STAB_DROP_DAYS} 天最大單日跌幅 {s_['worst_drop'] * 100:+.1f}%，"
+                     f"要不超過 -{cfg.STAB_DROP * 100:.0f}%"),
                 ])
                 st.caption(f"參考：量能約為爆量日（{s_['dump_date']:%m/%d}）的 {ratio:.0f}%")
                 st.caption(f"低點日下影線占 {s_['shadow'] * 100:.0f}%")
