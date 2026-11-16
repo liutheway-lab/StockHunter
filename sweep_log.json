@@ -1234,6 +1234,21 @@
    "ratio": null,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-17",
+   "sess": "1",
+   "t": 1550,
+   "ts": "2026-11-16T15:55+08:00",
+   "name": "本盤高 41,188@15:05",
+   "tier": "大",
+   "dir": "short",
+   "level": 41188.0,
+   "ext": 41194.0,
+   "trend": "順勢",
+   "ratio": 0.5,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
