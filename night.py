@@ -85,7 +85,7 @@ def market_block(mk):
             ratio = s["recent_vol"] / s["dump_vol"] * 100 if s["dump_vol"] else 0
             da, nd = s["days_after"], s["need_days"]
             state = "✅ 通過" if s["ok"] else ("⏳ 觀察中" if s.get("watching") else "❌ 未通過")
-            out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② 兩項都過才算止跌")
+            out.append(f"🧱 *止跌確認*　{state}\n下面 ① ② ③ 三項都過才算止跌")
             low_ok = "✅" if s["no_break"] else "⏳" if s["held"] else "❌"
             out.append(f"低點日：{s['signal_date']:%m/%d}\n（爆量下跌日當天起股價最低的那天）")
             out.append("*① 反彈*\n低點日之後曾經有一天\n收盤離低點日最低點\n反彈 ≥ " f"{cfg.STAB_REBOUND * 100:.0f}%")
@@ -101,6 +101,8 @@ def market_block(mk):
                 blk = [f"天數　{da} 天　要 ≥ {s['need_days']} 天",
                        f"最低 {s['recent_low']:,.0f}　要 ≥ {s['prior_low']:,.0f}　{low_ok}"]
             out.append(code_block(blk, lang="text"))
+            out.append(f"*③ 沒有急跌*\n近 {cfg.STAB_DROP_DAYS} 天內\n沒有單日收盤跌幅 ≥ {cfg.STAB_DROP * 100:.0f}%")
+            out.append(code_block([f"最大單日跌幅 {s['worst_drop'] * 100:>+5.1f}%　{'✅' if s['calm'] else '⏳'}"], lang="text"))
             out.append(f"參考\n量能 {ratio:.0f}%（低點日÷爆量日 {s['dump_date']:%m/%d}）\n下影線 {s['shadow'] * 100:.0f}%")
             if s["ok"]:
                 out.append("📌 日線止跌走穩\n先以 2～3 成資金佈局\n不猜底、不貪心")
