@@ -2110,13 +2110,20 @@ def load_watch():
     return out
 
 
+def _fdate(a):
+    """發現日 → 『11/13』；舊的掃描檔沒有日期時回傳空字串"""
+    d = str(a.get("date") or "")
+    return f"{int(d[5:7])}/{int(d[8:10])}" if len(d) >= 10 else ""
+
+
 def load_absorb():
     """昨晚夜間掃描的恐慌承接名單（只供追蹤：盤中跌破發現日的最低點 ＝ 承接失敗）"""
     try:
         scan = json.loads(RESULT_FILE.read_text(encoding="utf-8"))
     except Exception:
         return []
-    return [dict(it) for it in (scan.get("absorb") or []) if it.get("low")]
+    dd = scan.get("data_date") or ""                  # 舊掃描檔沒有逐檔日期 → 用整份掃描的資料日
+    return [{"date": dd, **it} for it in (scan.get("absorb") or []) if it.get("low")]
 
 
 def _twse_fetch_retry(ex):
@@ -2325,7 +2332,7 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
             to_group(f"🧺 *恐慌承接失敗*　{a['code']} {a['name']}\n"
                      f"{why}\n"
                      f"成交價 {v['last']:g}（{chg:+.1f}%）\n"
-                     f"發現日收盤 {a['close']:g}｜量能 {a['vol_mult']:g} 倍\n"
+                     f"發現日 {_fdate(a)}｜收盤 {a['close']:g}｜量能 {a['vol_mult']:g} 倍\n"
                      f"📊 {tv(a['code'], a.get('suffix') or guess_suffix(a['code']))}")
             continue
         chg = (v["last"] / v["prev"] - 1) * 100 if v.get("prev") else 0
@@ -2343,9 +2350,9 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
                 back.append(f"{lname} {lv:g}")
         tail = f"成交價 {v['last']:g}（{chg:+.1f}%）\n📊 {tv(a['code'], a.get('suffix') or guess_suffix(a['code']))}"
         if broke:
-            to_group(f"🧺 *恐慌承接警示*　{a['code']} {a['name']}\n跌破發現日 {'、'.join(broke)}\n{tail}")
+            to_group(f"🧺 *恐慌承接警示*　{a['code']} {a['name']}\n發現日 {_fdate(a)}\n跌破發現日 {'、'.join(broke)}\n{tail}")
         if back:
-            to_group(f"🧺 *恐慌承接站回*　{a['code']} {a['name']}\n又站回發現日 {'、'.join(back)}\n{tail}")
+            to_group(f"🧺 *恐慌承接站回*　{a['code']} {a['name']}\n發現日 {_fdate(a)}\n又站回發現日 {'、'.join(back)}\n{tail}")
         # 承接成功（只提醒，一天一次）：殺低點＝發現日的最低價（昨天殺出來的低點，不是今天盤中的低點）
         # 條件：現價 ≥ 發現日最低 × 1.05，且站上發現日均價與 POC（今天不需要再殺一次）
         code, kill, day_key = a["code"], a["low"], (today, a["code"])
@@ -2353,7 +2360,7 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
                 and v["last"] >= kill * (1 + cfg.ABSORB_SUCCESS_RECOVER)
                 and v["last"] >= a["avg"] and v["last"] >= a["poc"]):
             ABSORB_OK[day_key] = kill
-            to_group(f"🧺 *恐慌承接成功*　{code} {a['name']}\n發現日最低 {kill:g}，現價已反彈 {(v['last'] / kill - 1) * 100:.1f}%\n"
+            to_group(f"🧺 *恐慌承接成功*　{code} {a['name']}\n發現日 {_fdate(a)}｜最低 {kill:g}\n現價已反彈 {(v['last'] / kill - 1) * 100:.1f}%\n"
                      f"站上發現日均價 {a['avg']:g}、POC {a['poc']:g}\n停損參考：跌破發現日最低 {kill:g}\n{tail}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
