@@ -1166,6 +1166,21 @@
    "ratio": 0.7,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-16",
+   "sess": "0",
+   "t": 1250,
+   "ts": "2026-11-16T12:55+08:00",
+   "name": "本盤低 41,569@12:10",
+   "tier": "大",
+   "dir": "long",
+   "level": 41569.0,
+   "ext": 41529.0,
+   "trend": "逆勢",
+   "ratio": 1.4,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
