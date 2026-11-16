@@ -1128,6 +1128,29 @@
    "rn": 0.0,
    "sf": true,
    "sn": true
+  },
+  {
+   "day": "2026-11-16",
+   "sess": "0",
+   "t": 1030,
+   "ts": "2026-11-16T10:35+08:00",
+   "name": "創新低追空 42,350@10:00",
+   "tier": "破",
+   "dir": "short",
+   "level": 42350.0,
+   "ext": 42720.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 42340.0,
+   "stop": 42720.0,
+   "stop2": 42633.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
