@@ -1493,6 +1493,29 @@
    "ratio": 0.7,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-17",
+   "sess": "1",
+   "t": 2345,
+   "ts": "2026-11-16T23:50+08:00",
+   "name": "低點墊高 40,685",
+   "tier": "轉折",
+   "dir": "long",
+   "level": 40685.0,
+   "ext": 40685.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 41134.0,
+   "stop": 40685.0,
+   "stop2": 40685.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
