@@ -1468,16 +1468,16 @@
    "ext": 40933.0,
    "trend": "逆勢",
    "ratio": null,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 41530.0,
    "stop": 40933.0,
    "stop2": 40933.0,
-   "bars": 3,
+   "bars": 4,
    "rf": 0.02847571189279732,
    "rn": 0.02847571189279732,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {
