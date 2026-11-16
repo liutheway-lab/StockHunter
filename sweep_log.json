@@ -1300,16 +1300,16 @@
    "ext": 41406.0,
    "trend": "順勢",
    "ratio": null,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 41200.0,
    "stop": 41406.0,
    "stop2": 41406.0,
-   "bars": 17,
+   "bars": 18,
    "rf": 0.4223300970873786,
    "rn": 0.4223300970873786,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   },
   {
    "day": "2026-11-17",
@@ -1328,9 +1328,9 @@
    "entry": 41202.0,
    "stop": 41113.0,
    "stop2": 41121.0,
-   "bars": 11,
-   "rf": 1.7640449438202248,
-   "rn": 1.9382716049382716,
+   "bars": 12,
+   "rf": 2.4269662921348316,
+   "rn": 2.6666666666666665,
    "sf": false,
    "sn": false
   },
@@ -1346,16 +1346,16 @@
    "ext": 41359.0,
    "trend": "順勢",
    "ratio": 2.2,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 41280.0,
    "stop": 41359.0,
    "stop2": 41356.0,
-   "bars": 0,
+   "bars": 1,
    "rf": 0.0,
    "rn": 0.0,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {
