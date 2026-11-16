@@ -217,7 +217,7 @@ def scan(prices, mk, ratios):
             if ab:
                 avg, poc = absorb_avg_poc(sym, df.index[i])          # 發現日的均價＋POC：盤中用來判斷警示與站回
                 absorb.append({"sym": sym, "r": ab, "turnover": ab["turnover"], "score": st.rank_absorb(ab),
-                               "avg": avg, "poc": poc})
+                               "avg": avg, "poc": poc, "date": f"{df.index[i]:%Y-%m-%d}"})
             for name, r in results.items():
                 if r is None:
                     continue
@@ -462,7 +462,7 @@ def save_results(mk, hits, names, directory, now, watch=None, absorb=None, pre=N
                               "low": round(r["low"], 2), "high": round(r["high"], 2), "kind": r["kind"],
                               "vol_mult": round(r["vol_mult"], 1), "chg": round(r["chg"] * 100, 2),
                               "turnover": round(h["turnover"]), "score": h["score"],
-                              "avg": h.get("avg"), "poc": h.get("poc"),
+                              "avg": h.get("avg"), "poc": h.get("poc"), "date": h.get("date") or out["data_date"],
                               "sup": round(h["r"]["sup"], 2) if h["r"].get("sup") is not None else None,   # 大量支撐（盤中跌破＝承接失敗）
                               **({"pre": True} if code in (pre or set()) else {})})
     with open(RESULT_FILE, "w", encoding="utf-8") as f:
