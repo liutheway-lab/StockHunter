@@ -1105,6 +1105,21 @@
    "ratio": 0.8,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-16",
+   "sess": "0",
+   "t": 1000,
+   "ts": "2026-11-16T10:05+08:00",
+   "name": "上個交易日低 42,371@22:26",
+   "tier": "大",
+   "dir": "long",
+   "level": 42371.0,
+   "ext": 42350.0,
+   "trend": "逆勢",
+   "ratio": 1.1,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
