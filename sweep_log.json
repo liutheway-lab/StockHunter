@@ -2125,8 +2125,16 @@
    "ext": 40319.0,
    "trend": "順勢",
    "ratio": 4.4,
-   "status": "wait",
-   "result": null
+   "status": "track",
+   "result": null,
+   "entry": 40110.0,
+   "stop": 40319.0,
+   "stop2": 40236.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
