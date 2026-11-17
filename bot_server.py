@@ -190,7 +190,8 @@ def main():
         try:
             import futures_sweep
             threading.Thread(target=futures_sweep.loop, daemon=True,
-                             args=(lambda lines: I.tg("sendMessage", chat_id=I.OWNER, text=futures_sweep.card(lines), parse_mode="HTML"),)).start()
+                             args=(lambda lines, kb=None: I.tg("sendMessage", chat_id=I.OWNER, text=futures_sweep.card(lines), parse_mode="HTML",
+                                                              **({"reply_markup": {"inline_keyboard": kb}} if kb else {})),)).start()
             print("期貨掃蕩提醒：已啟動", flush=True)
         except Exception as e:
             print("期貨掃蕩提醒啟動失敗：", repr(e), flush=True)
