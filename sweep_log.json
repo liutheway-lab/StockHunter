@@ -1775,6 +1775,29 @@
    "ratio": 3.5,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-17",
+   "sess": "0",
+   "t": 1300,
+   "ts": "2026-11-17T13:05+08:00",
+   "name": "高檔放量滯漲 41,828",
+   "tier": "滯漲",
+   "dir": "short",
+   "level": 41828.0,
+   "ext": 41828.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 39906.0,
+   "stop": 41828.0,
+   "stop2": 41828.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
