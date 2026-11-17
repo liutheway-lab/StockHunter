@@ -2135,6 +2135,29 @@
    "rn": 0.6825396825396826,
    "sf": false,
    "sn": true
+  },
+  {
+   "day": "2026-11-18",
+   "sess": "1",
+   "t": 2340,
+   "ts": "2026-11-17T23:45+08:00",
+   "name": "創新低追空 39,537",
+   "tier": "破",
+   "dir": "short",
+   "level": 39537.0,
+   "ext": 40262.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 39391.0,
+   "stop": 40262.0,
+   "stop2": 39859.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
