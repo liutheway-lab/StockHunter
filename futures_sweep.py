@@ -1156,7 +1156,8 @@ class Runner:
         self.seeded = False
         self._bf_at, self._bf_n = None, 0                       # 補抓上個交易日資料：上次嘗試時間、已嘗試幾次
         self.hello = False
-        self.errs = 0
+        self.errs, self.err_since, self.err_told = 0, None, False
+        self.blocked = 0                                        # 連續被期交所擋（403／429）的次數
         self.last_q = None
         self.last_at = None
 
@@ -1520,18 +1521,43 @@ class Runner:
         while True:
             try:
                 r = self.step()
-                self.errs = 0
+                if self.errs:
+                    if self.err_told:                                # 之前有發過「抓不到」→ 恢復時告訴你一聲
+                        try:
+                            mins = (time.time() - self.err_since) / 60
+                            self.send(["✅ 期貨報價已恢復", f"中斷約 {mins:.0f} 分鐘" if mins >= 1 else f"中斷約 {mins * 60:.0f} 秒", "中斷期間的 5分K 可能有缺"])
+                        except Exception:
+                            pass
+                    self.errs, self.err_since, self.err_told = 0, None, False
+                self.blocked = 0
             except Exception as e:
                 r = 0
                 self.errs += 1
+                if "403" in str(e) or "429" in str(e):                # 期交所擋掉（太頻繁 or 這個 IP）：不要再一直敲，先冷卻，越擋越久
+                    self.blocked += 1
+                else:
+                    self.blocked = 0
+                if self.err_since is None:
+                    self.err_since = time.time()
                 print("掃蕩監控錯誤：", repr(e)[:160], flush=True)
-                if self.errs == 20:                                  # 連續 20 次（約 2 分鐘）抓不到
+                # 連續抓不到「超過 FUT_ERR_ALERT_SEC 秒」才通知（以前用次數，輪詢改 2 秒後 20 次只要 40 秒就會響）
+                if not self.err_told and time.time() - self.err_since >= _cfg("FUT_ERR_ALERT_SEC", 180):
+                    self.err_told = True
                     try:
-                        self.send(["⚠️ 期貨報價連續抓不到", "掃蕩提醒可能失效"])
+                        why = type(e).__name__
+                        txt = str(e)
+                        for code in ("403", "429", "500", "502", "503", "504"):
+                            if code in txt:
+                                why = f"HTTP {code}"
+                                break
+                        self.send(["⚠️ 期貨報價連續抓不到", f"已 {int(time.time() - self.err_since)} 秒", f"原因 {why[:24]}", "掃蕩提醒可能失效"])
                     except Exception:
                         pass
             self._digest_check()
-            time.sleep(_cfg("FUT_SWEEP_POLL", 2) if r != -1 else 30)
+            if self.blocked:
+                time.sleep(min(_cfg("FUT_BLOCK_MAX_SEC", 300), _cfg("FUT_BLOCK_SEC", 30) * 2 ** (self.blocked - 1)))     # 被擋：30、60、120、240、300 秒…
+                continue
+            time.sleep(min(10, 2 * self.errs + _cfg("FUT_SWEEP_POLL", 5)) if self.errs else (_cfg("FUT_SWEEP_POLL", 5) if r != -1 else 30))   # 抓不到時越等越久，不要一直敲期交所
 
 
 RUNNER = None
