@@ -207,9 +207,9 @@ def evaluate(st, price, now):
         gap = (price - p["stop"]) if p["side"] == "多" else (p["stop"] - price)
         name = f"{p['side']} {p['kind']} {p['qty']}口"
         if gap <= 0:
-            out.append((f"stophit-{p['kind']}-{p['side']}", f"🛑 已碰到出場價\n{name}\n出場價 {p['stop']:,.0f}｜現價 {price:,.0f}", cfg.FUT_REPEAT_SEC))
+            out.append((f"stophit-{p['kind']}-{p['side']}", f"🛑 已碰到出場價1\n{name}\n出場價1 {p['stop']:,.0f}｜現價 {price:,.0f}", cfg.FUT_REPEAT_SEC))
         elif gap <= cfg.FUT_STOP_NEAR:
-            out.append((f"stopnear-{day}-{p['kind']}-{p['side']}", f"⚠️ 接近出場價\n{name}\n出場價 {p['stop']:,.0f}｜現價 {price:,.0f}\n只剩 {gap:.0f} 點", 900))
+            out.append((f"stopnear-{day}-{p['kind']}-{p['side']}", f"⚠️ 接近出場價1\n{name}\n出場價1 {p['stop']:,.0f}｜現價 {price:,.0f}\n只剩 {gap:.0f} 點", 900))
     hm = (now.hour, now.minute)
     for p in st["positions"]:
         e2 = p.get("exit2")
@@ -219,9 +219,9 @@ def evaluate(st, price, now):
         q2 = f"\n出 {e2['qty']} 口" if e2.get("qty") else ""
         nm2 = f"{p['side']} {p['kind']} {p['qty']}口"
         if g2 <= 0:
-            out.append((f"exit2hit-{p['kind']}-{p['side']}", f"🛑 已碰到第二出場價\n{nm2}\n出場價 {e2['px']:,.0f}｜現價 {price:,.0f}{q2}", cfg.FUT_REPEAT_SEC))
+            out.append((f"exit2hit-{p['kind']}-{p['side']}", f"🛑 已碰到出場價2\n{nm2}\n出場價 {e2['px']:,.0f}｜現價 {price:,.0f}{q2}", cfg.FUT_REPEAT_SEC))
         elif g2 <= cfg.FUT_STOP_NEAR:
-            out.append((f"exit2near-{day}-{p['kind']}-{p['side']}", f"⚠️ 接近第二出場價\n{nm2}\n出場價 {e2['px']:,.0f}｜現價 {price:,.0f}\n只剩 {g2:.0f} 點{q2}", 900))
+            out.append((f"exit2near-{day}-{p['kind']}-{p['side']}", f"⚠️ 接近出場價2\n{nm2}\n出場價 {e2['px']:,.0f}｜現價 {price:,.0f}\n只剩 {g2:.0f} 點{q2}", 900))
     if st["positions"]:
         if (13, 30) <= hm < (13, 45):
             out.append((f"close-day-{day}", "⏰ 日盤 13:45 收盤\n你還有期貨部位\n要留倉嗎？", None))
@@ -315,6 +315,14 @@ def _gh_load():
     r.raise_for_status()
     j = r.json()
     return json.loads(base64.b64decode(j["content"]).decode("utf-8")), j.get("sha")
+
+
+def _e2line(p):
+    """修正出場價1時，一併顯示出場價2（兩個各自獨立，改一個不會動到另一個）"""
+    e2 = p.get("exit2")
+    if not e2:
+        return []
+    return [f"　出場價2 {fmt(e2['px'])}（沒動）"] + ([f"　　到價出 {e2['qty']} 口"] if e2.get("qty") else [])
 
 
 def _clear_hint(p, key):
@@ -466,10 +474,10 @@ def status_lines(st, price=None, now=None):
             L.append(f"　損益 {money(p, price):+,.0f}")
         if p.get("stop") is not None:
             gap = (price - p["stop"]) if (price is not None and p["side"] == "多") else ((p["stop"] - price) if price is not None else None)
-            L.append(f"　出場價 {fmt(p['stop'])}" + (f"（差 {ptxt(gap)} 點）" if gap is not None else ""))
+            L.append(f"　出場價1 {fmt(p['stop'])}" + (f"（差 {ptxt(gap)} 點）" if gap is not None else ""))
             L += stop_note(p)
         else:
-            L.append("　出場價 未設")
+            L.append("　出場價1 未設")
         e2 = p.get("exit2")
         if e2:
             g2 = None if price is None else ((price - e2["px"]) if p["side"] == "多" else (e2["px"] - price))
@@ -705,24 +713,24 @@ def handle(cid, text, mid0, ctx):
                 ask("價格看起來不對\n請輸入台指期的點數\n例：44000", [])
             else:
                 f.update(price=v, step="stop")
-                ask("出場價多少？\n不想設就按「不設」", [["不設"]])
+                ask("出場價1多少？\n不想設就按「不設」", [["不設"]])
         elif step == "stop":
             if t == "不設":
                 stop = None
             else:
                 stop = _price(t)
                 if stop is None:
-                    ask("價格看起來不對\n請輸入出場價，或按「不設」", [["不設"]])
+                    ask("價格看起來不對\n請輸入出場價1，或按「不設」", [["不設"]])
                     return True
                 ref = current_price() or f["price"]               # 有現價就跟現價比（出場價可以設在成本價另一側鎖利，只要不會馬上被打到）
                 if (f["side"] == "多" and stop >= ref) or (f["side"] == "空" and stop <= ref):
-                    ask(f"做{f['side']}的出場價\n要在現價{'下' if f['side'] == '多' else '上'}方\n現價 {ref:,.0f}\n請重新輸入", [["不設"]])
+                    ask(f"做{f['side']}的出場價1\n要在現價{'下' if f['side'] == '多' else '上'}方\n現價 {ref:,.0f}\n請重新輸入", [["不設"]])
                     return True
             p = open_pos(st, f["kind"], f["side"], f["qty"], f["price"], stop)
             extra = []
             if exposure(st) > cfg.FUT_MAX_EQ + 1e-9:
                 extra = ["", f"⚠️ 部位 {exposure(st):g} 口，超過上限 {cfg.FUT_MAX_EQ:g}"]
-            done_save(["✅ 已記錄開倉", label(p), "　出場價 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + stop_note(p), extra)
+            done_save(["✅ 已記錄開倉", label(p), "　出場價1 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + stop_note(p), extra)
         return True
 
     if flow == "fix":
@@ -790,27 +798,31 @@ def handle(cid, text, mid0, ctx):
                 if flow == "close":
                     ask(f"平幾口？（目前 {p['qty']} 口）", [["全部"]])
                 else:
-                    ask("要設哪一個？\n出場價 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設") + "\n目標價 " + (fmt(p["target"]) if p.get("target") is not None else "未設") + "\n1R " + (f"{p['risk']:g} 點" if p.get("risk") else "未設"), [["出場價", "目標價"], ["第二出場價", "R 點數"], ["分批目標", "出場階梯"]])
+                    ask("要設哪一個？\n出場價1 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設") + "\n出場價2 " + (fmt(p["exit2"]["px"]) if p.get("exit2") else "未設") + "\n目標價 " + (fmt(p["target"]) if p.get("target") is not None else "未設") + "\n1R " + (f"{p['risk']:g} 點" if p.get("risk") else "未設"), [["出場價1", "出場價2"], ["目標價", "R 點數"], ["分批目標", "出場階梯"]])
             return True
         p = find_pos(st, *f["pick"])
         if p is None:
             finish(notice="這筆部位已經不在了")
             return True
         if flow == "stop" and step == "which":
-            if t not in ("出場價", "目標價", "R 點數", "分批目標", "出場階梯", "第二出場價"):
-                ask("請按下面的按鈕", [["出場價", "目標價"], ["第二出場價", "R 點數"], ["分批目標", "出場階梯"]])
+            if t == "出場價":
+                t = "出場價1"
+            if t == "第二出場價":
+                t = "出場價2"
+            if t not in ("出場價1", "目標價", "R 點數", "分批目標", "出場階梯", "出場價2"):
+                ask("請按下面的按鈕", [["出場價1", "出場價2"], ["目標價", "R 點數"], ["分批目標", "出場階梯"]])
                 return True
-            f.update(which={"出場價": "stop", "目標價": "target", "R 點數": "risk", "分批目標": "tps", "出場階梯": "ladder", "第二出場價": "exit2"}[t], step="stop")
+            f.update(which={"出場價1": "stop", "目標價": "target", "R 點數": "risk", "分批目標": "tps", "出場階梯": "ladder", "出場價2": "exit2"}[t], step="stop")
             px = current_price()
             tip = [f"現價 {px:,.0f}"] if px else []
             if f["which"] == "tps":
                 ask("分批目標\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", f"共 {p['qty']} 口", "格式：價格 口數，用逗號分隔", "例：44500 1, 44700 1", "最後一組可以只寫價格（剩下的全部）"] + (["要清掉就按「清除」"] if p.get("tps") else [])), [["清除"]] if p.get("tps") else [])
             elif f["which"] == "exit2":
-                ask("第二出場價\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", f"共 {p['qty']} 口", "格式：價格 口數", "例：44400 1", "口數可省略（不指定）", "跟出場價各自獨立提醒", "可設在成本任一側"] + (["要清掉就按「清除」"] if p.get("exit2") else [])), [["清除"]] if p.get("exit2") else [])
+                ask("出場價2\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", f"共 {p['qty']} 口", "格式：價格 口數", "例：44400 1", "口數可省略（不指定）", "跟出場價各自獨立提醒", "可設在成本任一側"] + (["要清掉就按「清除」"] if p.get("exit2") else [])), [["清除"]] if p.get("exit2") else [])
             elif f["which"] == "ladder":
                 ask("出場階梯\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "格式：到價 出場價改到，用逗號分隔", "例：44500 44350, 44700 44500", "到第一個價位，出場價移到 44350"] + (["要清掉就按「清除」"] if p.get("ladder") else [])), [["清除"]] if p.get("ladder") else [])
             elif f["which"] == "stop":
-                ask("新的出場價？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）"] + _clear_hint(p, "stop")), _clear_kb(p, "stop"))
+                ask("新的出場價1？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "可以設在成本價另一側", "（鎖定獲利）"] + _clear_hint(p, "stop")), _clear_kb(p, "stop"))
             elif f["which"] == "risk":
                 ask("1R 是幾點？\n" + "\n".join(tip + [f"成本 {fmt(p['avg'])}", "＝開倉時出場價離成本幾點", "會標出 2R、4R 價位", "例：68"]), [])
             else:
@@ -819,7 +831,7 @@ def handle(cid, text, mid0, ctx):
         if flow == "stop" and f.get("which") == "exit2":
             if t in ("清除", "不設") and p.get("exit2"):
                 p["exit2"] = None
-                done_save(["✅ 已清除第二出場價", label(p)])
+                done_save(["✅ 已清除出場價2", label(p)])
                 return True
             parts = t.split()
             if not (1 <= len(parts) <= 2) or not re.fullmatch(r"\d+(\.\d+)?", parts[0]) or (len(parts) == 2 and (not re.fullmatch(r"\d+", parts[1]) or not 0 < int(parts[1]) <= p["qty"])):
@@ -828,10 +840,10 @@ def handle(cid, text, mid0, ctx):
             px2 = float(parts[0])
             ref = current_price()
             if ref and ((ref <= px2) if p["side"] == "多" else (ref >= px2)):
-                ask(f"做{p['side']}的出場價\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {ref:,.0f}\n不然會馬上被打到\n請重新輸入", [["清除"]] if p.get("exit2") else [])
+                ask(f"做{p['side']}的出場價2\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {ref:,.0f}\n不然會馬上被打到\n請重新輸入", [["清除"]] if p.get("exit2") else [])
                 return True
             p["exit2"] = {"px": px2, "qty": int(parts[1]) if len(parts) == 2 else None}
-            done_save(["✅ 已設定第二出場價", label(p), "　出場價 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設"), f"　出場價2 {fmt(px2)}"] + ([f"　　到價出 {parts[1]} 口"] if len(parts) == 2 else []))
+            done_save(["✅ 已設定出場價2", label(p), "　出場價1 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設"), f"　出場價2 {fmt(px2)}"] + ([f"　　到價出 {parts[1]} 口"] if len(parts) == 2 else []))
             return True
         if flow == "stop" and f.get("which") in ("tps", "ladder"):
             key = f["which"]
@@ -883,15 +895,15 @@ def handle(cid, text, mid0, ctx):
             else:
                 v = _price(t)
                 if v is None:
-                    ask("價格看起來不對\n請輸入出場價" + ("，或按「清除」" if p.get("stop") is not None else ""), _clear_kb(p, "stop"))
+                    ask("價格看起來不對\n請輸入出場價1" + ("，或按「清除」" if p.get("stop") is not None else ""), _clear_kb(p, "stop"))
                     return True
                 px = current_price()
                 if px and ((p["side"] == "多" and v >= px) or (p["side"] == "空" and v <= px)):
-                    ask(f"做{p['side']}的出場價\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {px:,.0f}\n不然會馬上被打到\n請重新輸入", _clear_kb(p, "stop"))
+                    ask(f"做{p['side']}的出場價1\n要在現價{'下' if p['side'] == '多' else '上'}方\n現價 {px:,.0f}\n不然會馬上被打到\n請重新輸入", _clear_kb(p, "stop"))
                     return True
                 p["stop"] = v
                 auto_risk(p)
-            done_save(["✅ 已更新出場價", label(p), "　出場價 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + stop_note(p))
+            done_save(["✅ 已更新出場價1", label(p), "　出場價1 " + (fmt(p["stop"]) if p.get("stop") is not None else "未設")] + _e2line(p) + stop_note(p))
             return True
         if step == "qty":                                   # 平倉：幾口
             if t == "全部":
