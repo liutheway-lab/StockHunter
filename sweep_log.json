@@ -1997,6 +1997,29 @@
    "ratio": 1.6,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-18",
+   "sess": "1",
+   "t": 1720,
+   "ts": "2026-11-17T17:25+08:00",
+   "name": "低檔放量不跌 39,577",
+   "tier": "滯漲",
+   "dir": "long",
+   "level": 39577.0,
+   "ext": 39577.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 39659.0,
+   "stop": 39577.0,
+   "stop2": 39577.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
