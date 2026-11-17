@@ -58,8 +58,20 @@ def f0(x):
 
 
 def _hm(t):
-    """HHMM（整數）→ "HH:MM"；沒有時間回空字串"""
-    return "" if t is None else f"{int(t) // 100:02d}:{int(t) % 100:02d}"
+    """HHMM（5分K 的開始時間）→ "HH:MM"，顯示成這根 K 的結束時間（跟看盤軟體一致，例如 10:40 那根顯示 10:45）；沒有時間回空字串。
+    期交所逐筆檔補回來的時間，存的時候已經先無條件捨去到 5 分鐘（見 seed_levels），所以這裡也是同一個換算。"""
+    if t is None:
+        return ""
+    h, m = int(t) // 100, int(t) % 100 + 5
+    if m >= 60:
+        h, m = (h + 1) % 24, m - 60
+    return f"{h:02d}:{m:02d}"
+
+
+def _b5(t):
+    """逐筆時間（HHMMSS）→ 所在 5分K 的開始時間（HHMM），跟機器人自己組的 5分K 對齊"""
+    hh, mm = t // 10000, (t // 100) % 100
+    return hh * 100 + mm // 5 * 5
 
 
 def _at(price, t):
@@ -77,10 +89,12 @@ class BarBuilder:
         self.hi = None                    # 這個盤到目前的最高、最低（期交所給的）
         self.lo = None
         self.cum = None                   # 這個盤到目前的累計成交量（期交所給的）
+        self.prev_at = None               # 上一次抓到報價的時間（算抓價間隔）
 
     @staticmethod
     def _fin(b):
         c0, c1 = b.pop("cum0", None), b.pop("cum1", None)
+        b.pop("skey", None)
         b["v"] = (c1 - c0) if (c0 is not None and c1 is not None and c1 >= c0) else None
         return b
 
@@ -89,8 +103,19 @@ class BarBuilder:
         if sess is None or q.get("last") is None:
             return []
         p = q["last"]
+        # 用期交所給的「成交時間」決定這筆價格屬於哪一根 5 分K（2026-11-17 改）：
+        # 以前用「抓到報價的時間」，網路慢或機器人在傳訊息時，前一根最後幾秒的價格會被算進下一根，
+        # 波動大時開收盤、高低點就差很多。成交時間比現在早 2 分鐘以上＝還沒有新成交（例如開盤前的舊價），先不用
+        ts = q.get("ts")
+        if ts is not None and (now - ts) > timedelta(minutes=2):
+            return []
+        at = ts if (ts is not None and abs((ts - now).total_seconds()) <= 120) else now
+        gap = (now - self.prev_at).total_seconds() if self.prev_at is not None else 0.0
+        self.prev_at = now
         day = G.trade_day(now)
-        hhmm = now.hour * 100 + now.minute // 5 * 5
+        hhmm = at.hour * 100 + at.minute // 5 * 5
+        if self.cur is not None and self.cur["skey"] == (day, sess) and hhmm < self.cur["t"]:
+            hhmm = self.cur["t"]                               # 成交時間偶爾倒退一兩秒：留在目前這根
         key = (day, sess, hhmm)
         skey = (day, sess)
         out = []
@@ -103,11 +128,12 @@ class BarBuilder:
             first = self.cur is None
             if self.cur:
                 out.append(self._fin(self.cur))
-            partial = first and (now.minute % 5 != 0 or now.second > 20)
+            partial = first and (at.minute % 5 != 0 or at.second > 20)
             base = self.cum if self.cum is not None else (0 if (first and not partial and hhmm in (845, 1500)) else None)
-            self.cur = {"key": key, "day": day, "sess": sess, "t": hhmm, "o": p, "h": p, "l": p, "c": p,
-                        "partial": partial, "cum0": base, "cum1": None}
+            self.cur = {"key": key, "skey": skey, "day": day, "sess": sess, "t": hhmm, "o": p, "h": p, "l": p, "c": p,
+                        "partial": partial, "cum0": base, "cum1": None, "gap": 0.0}
         b = self.cur
+        b["gap"] = max(b.get("gap", 0.0), gap)                 # 這根K棒裡最長的抓價間隔（秒）
         b["h"], b["l"], b["c"] = max(b["h"], p), min(b["l"], p), p
         qh, ql = q.get("high"), q.get("low")
         if qh is not None and self.hi is not None and qh > self.hi:     # 兩次抓價之間創的新高，補進這根的高點
@@ -129,11 +155,12 @@ class BarBuilder:
         if self.skey is None:
             return None
         res = ([self._fin(self.cur)] if self.cur else [], self.skey[1], self.hi, self.lo)
-        self.cur, self.skey, self.hi, self.lo, self.cum = None, None, None, None, None
+        self.cur, self.skey, self.hi, self.lo, self.cum, self.prev_at = None, None, None, None, None, None
         return res
 
 
 # ───────────── 掃蕩判斷（純計算）─────────────
+GAP_WARN = 15                      # 一根 5 分K 裡抓價間隔超過幾秒，卡片就加註「價位可能有誤差」
 LOG_FILE = "/tmp/sweep_log.json"
 LOG_NAME = "sweep_log.json"
 
@@ -290,8 +317,8 @@ class Journal:
         rows = self.rows
         if not rows:
             return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
-        pat = [r for r in rows if r.get("tier") in ("滯漲", "轉折", "破")]
-        rows = [r for r in rows if r.get("tier") not in ("滯漲", "轉折", "破")]
+        pat = [r for r in rows if r.get("tier") in ("滯漲", "轉折", "破", "箱型")]
+        rows = [r for r in rows if r.get("tier") not in ("滯漲", "轉折", "破", "箱型")]
         if not rows and not pat:
             return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
         conf = [r for r in rows if r.get("entry") is not None]
@@ -335,7 +362,8 @@ class Journal:
         for tier in ("大", "小", "影線"):
             L += block("【影線】" if tier == "影線" else f"【{tier}價位】", [r for r in conf if r.get("tier") == tier]) + [""]
         for tier, title, dr in (("滯漲", "【放量滯漲／不跌】", None), ("轉折", "【結構轉換】", None),
-                                ("破", "【創新低追空】", "short"), ("破", "【創新高追多】", "long")):
+                                ("破", "【創新低追空】", "short"), ("破", "【創新高追多】", "long"),
+                                ("箱型", "【箱型上緣掃蕩（做空）】", "short"), ("箱型", "【箱型下緣掃蕩（做多）】", "long")):
             rs = [r for r in pat if r.get("tier") == tier and (dr is None or r.get("dir") == dr)]
             if rs:                                              # 有型態提醒才顯示這一塊
                 L += block(title, rs, ev=True)[:1] + [f"　提醒 {len(rs)} 次"] + block(title, rs, ev=True)[1:] + [""]
@@ -434,8 +462,8 @@ class Engine:
 
     @staticmethod
     def _tier_line(s):
-        if s["tier"] in ("滯漲", "轉折", "破"):
-            return {"滯漲": "級別 放量滯漲", "轉折": "級別 結構轉換", "破": "級別 破全日高低"}[s["tier"]]
+        if s["tier"] in ("滯漲", "轉折", "破", "箱型"):
+            return {"滯漲": "級別 放量滯漲", "轉折": "級別 結構轉換", "破": "級別 破全日高低", "箱型": "級別 箱型第二次出量"}[s["tier"]]
         return "級別 影線" if s["tier"] == "影線" else f"級別 {s['tier']}價位"
 
     @staticmethod
@@ -461,6 +489,8 @@ class Engine:
             return f"{'高點降低' if s['dir'] == 'short' else '低點墊高'} {f0(s['level'])}"
         if s["tier"] == "破":
             return f"{'創新低追空' if s['dir'] == 'short' else '創新高追多'} {lv}"
+        if s["tier"] == "箱型":
+            return f"箱型{'上' if s['dir'] == 'short' else '下'}緣 {f0(s['level'])}"
         if s["tier"] == "影線":
             return f"{'長上影線高點' if s['dir'] == 'short' else '長下影線低點'} {f0(s['level'])}"
         return f"{NAMES[s['name']]} {lv}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {lv}"
@@ -809,9 +839,94 @@ class Engine:
                 out.append(self._pat_card(s, bar, ["🔻 結構轉換（轉空）" if up else "🔺 結構轉換（轉多）", "級別 結構轉換",
                                                    f"{'高點降低' if up else '低點墊高'} {_at(a['level'], a['t'])}", f"→ {_at(b['level'], b['t'])}",
                                                    f"收盤{'跌破' if up else '站上'} {f0(neck)}", f"收盤 {f0(bar['c'])}"] ) + ["建議 1 口小試"])
+        # ④ 箱型上（下）緣第二次出量掃蕩：衝刺之後的盤整區間，上緣被放量刺破又收回（第二次）→ 留意做空；下緣反之
+        if _cfg("FUT_BOX_ON", True):
+            out += self._box_sweep(bar, skey, ready, last)
         # ③ 創新低追空／創新高追多：收盤跌破（站上）「全日（含夜盤）」的低（高）點。只記進掃蕩紀錄，不推播
         if _cfg("FUT_BREAK_ON", True) and self.journal:
             self._break_log(bar, skey, ready, last)
+        return out
+
+    def _find_box(self):
+        """用「最近完成的這根之前」的 5 分K 往回找箱型：從上一根往回延伸，直到高低差超過 FUT_BOX_MAX_W 為止（至少 FUT_BOX_MIN_BARS 根），
+        而且箱型前面 FUT_BOX_PRE 根內要有衝刺（高低差 ≥ FUT_BOX_RUSH，箱型寬度 ≤ 衝刺幅度 × FUT_BOX_RATIO）。
+        回傳 {"hi","lo","j"（箱型第一根的位置）,"bars","rush","down"（衝刺向下）} 或 None"""
+        h = self.hist[:-1]
+        if len(h) < _cfg("FUT_BOX_MIN_BARS", 10) + 6:
+            return None
+        maxw = _cfg("FUT_BOX_MAX_W", 650)
+        hi, lo, j = h[-1]["h"], h[-1]["l"], len(h) - 1
+        for k in range(len(h) - 2, -1, -1):
+            nh, nl = max(hi, h[k]["h"]), min(lo, h[k]["l"])
+            if nh - nl > maxw:
+                break
+            hi, lo, j = nh, nl, k
+        rs = sorted(x["h"] - x["l"] for x in h[j:])
+        med = rs[len(rs) // 2]
+        vv = sorted(x["v"] for x in h[j:] if x.get("v"))
+        vmed = vv[len(vv) // 2] if vv else None
+        while j < len(h) - 1 and ((h[j]["h"] - h[j]["l"]) > _cfg("FUT_BOX_BIGBAR", 2.2) * max(med, 1)
+                                  or (vmed and h[j].get("v") and h[j]["v"] > _cfg("FUT_BOX_BIGVOL", 2.5) * vmed)):
+            j += 1                                              # 開頭那幾根還在衝刺的大K棒／爆量棒不算箱型
+        seg = h[j:]
+        hi, lo = max(x["h"] for x in seg), min(x["l"] for x in seg)
+        if len(seg) < _cfg("FUT_BOX_MIN_BARS", 10):
+            return None
+        pre = h[max(0, j - _cfg("FUT_BOX_PRE", 18)):j]
+        if len(pre) < 4:
+            return None
+        ph, pl = max(pre, key=lambda b: b["h"]), min(pre, key=lambda b: b["l"])
+        rush = ph["h"] - pl["l"]
+        if rush < _cfg("FUT_BOX_RUSH", 250) or (hi - lo) > _cfg("FUT_BOX_RATIO", 0.7) * rush:
+            return None
+        return {"hi": hi, "lo": lo, "j": j, "bars": len(seg), "rush": rush, "down": (hi + lo) / 2 < (ph["h"] + pl["l"]) / 2}      # 箱型在衝刺幅度的下半＝向下衝刺，上半＝向上
+
+    def _box_sweep(self, bar, skey, ready, last):
+        """衝刺後的箱型盤整：箱內先有一次「碰到上（下）緣的放量」，之後這根又放量刺破上（下）緣、收盤收回箱內 → 提醒。同一個箱緣只提醒一次"""
+        out = []
+        if not bar.get("v"):
+            return out
+        box = self._find_box()
+        if not box:
+            return out
+        h = self.hist[:-1]
+        seg = h[box["j"]:]
+        vs = [b["v"] for b in seg if b.get("v")]
+        if len(vs) < 6:
+            return out
+        avg = sum(vs) / len(vs)
+        volx = _cfg("FUT_BOX_VOL", 1.3)
+        if bar["v"] < volx * avg:
+            return out
+        touch, gap, mn = _cfg("FUT_BOX_TOUCH", 15), _cfg("FUT_BOX_GAP", 3), _cfg("FUT_SWEEP_MIN", 3)
+        done = self.__dict__.setdefault("_box_done", set())
+        early = seg[:max(0, len(seg) - gap)]                      # 第一次出量要在這根之前至少 gap 根
+        for d in ("short", "long"):
+            up = d == "short"
+            edge = box["hi"] if up else box["lo"]
+            pierce = (bar["h"] - edge) if up else (edge - bar["l"])
+            if pierce < mn or ((bar["c"] > edge) if up else (bar["c"] < edge)):      # 要刺破至少 mn 點，而且收盤收回箱內
+                continue
+            firsts = [b for b in early if b.get("v") and b["v"] >= volx * avg and ((b["h"] >= edge - touch) if up else (b["l"] <= edge + touch))]
+            if not firsts:
+                continue
+            key = (skey, d, round(edge / 10))
+            if key in done or not ready(("box", d)):
+                continue
+            done.add(key)
+            last[("box", d)] = self.nbars
+            f = firsts[0]
+            rdown = box["down"]
+            same = (up and rdown) or ((not up) and not rdown)
+            s = {"dir": d, "name": f"box_{bar['t']}", "level": edge, "ext": bar["h"] if up else bar["l"], "ext_t": bar["t"], "pierce": pierce, "n": 0,
+                 "tier": "箱型", "t": bar["t"]}
+            out.append(self._pat_card(s, bar, [
+                "🔻 箱型上緣 第二次出量" if up else "🔺 箱型下緣 第二次出量", "留意做空" if up else "留意做多",
+                f"前面衝刺{'向下' if rdown else '向上'} {box['rush']:.0f} 點", f"　{'順' if same else '逆'}衝刺方向",
+                f"箱型 {f0(box['lo'])}～{f0(box['hi'])}", f"　共 {box['bars']} 根（{box['bars'] * 5} 分鐘）",
+                f"第1次出量 {_hm(f['t'])} {f0(f['h'] if up else f['l'])}",
+                f"這根{'刺破' if up else '跌破'} {pierce:.0f} 點", f"　量 {bar['v'] / avg:.1f} 倍箱內均量",
+                f"收盤收回 {f0(bar['c'])}"]))
         return out
 
     def _break_log(self, bar, skey, ready, last):
@@ -881,7 +996,21 @@ def quote_full(now=None, mt=None):
     if q is None:
         raise ValueError("查無報價")
     return {"last": G._num(q.get("CLastPrice")), "high": G._num(q.get("CHighPrice")), "low": G._num(q.get("CLowPrice")),
-            "vol": G._num(q.get("CTotalVolume"))}
+            "vol": G._num(q.get("CTotalVolume")), "ts": quote_time(q.get("CTime"), now)}
+
+
+def quote_time(ct, now):
+    """期交所給的最後成交時間（HHMMSS）→ datetime；跨午夜時往前一天。格式不對回 None"""
+    t = str(ct or "").strip()
+    if len(t) < 6 or not t[:6].isdigit():
+        return None
+    try:
+        ts = now.replace(hour=int(t[:2]), minute=int(t[2:4]), second=int(t[4:6]), microsecond=0)
+    except ValueError:
+        return None
+    if ts - now > timedelta(hours=12):                 # 例如現在 00:00:02、成交時間 23:59:58
+        ts -= timedelta(days=1)
+    return ts
 
 
 # ───────────── 關鍵價位：存檔與開機時補算 ─────────────
@@ -963,12 +1092,12 @@ def seed_levels(now, fetch=fetch_zip, files=3):
                     continue
                 v = seg.get(k)
                 if v is None:
-                    seg[k] = [px, px, t // 100, t // 100]
+                    seg[k] = [px, px, _b5(t), _b5(t)]
                 else:
                     if px > v[0]:
-                        v[0], v[2] = px, t // 100
+                        v[0], v[2] = px, _b5(t)
                     if px < v[1]:
-                        v[1], v[3] = px, t // 100
+                        v[1], v[3] = px, _b5(t)
     best = {}                                     # {(盤別, 起算日): (到期月, 高, 低)}，只收已經結束、資料齊的盤
     for (sk, day, exp), (hi, lo, hit, lot) in seg.items():
         end = datetime(day.year, day.month, day.day, 13, 45, tzinfo=TZ) if sk == "0" else datetime(day.year, day.month, day.day, 5, 0, tzinfo=TZ) + timedelta(days=1)
@@ -1025,6 +1154,7 @@ class Runner:
         if _cfg("FUT_LOG_ON", True):
             self.eng.journal = Journal()
         self.seeded = False
+        self._bf_at, self._bf_n = None, 0                       # 補抓上個交易日資料：上次嘗試時間、已嘗試幾次
         self.hello = False
         self.errs = 0
         self.last_q = None
@@ -1090,11 +1220,50 @@ class Runner:
             except Exception as e:
                 print("掃蕩關鍵價位補算失敗：", repr(e)[:120], flush=True)
 
+    @staticmethod
+    def _last_day_close(now):
+        """最近一個「日盤已經收完」的交易日（平日 13:45 之後算今天，否則往前找上一個平日）"""
+        d = now.date()
+        if (now.hour, now.minute) < (13, 45):
+            d -= timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        return d.isoformat()
+
+    def _backfill(self, now):
+        """機器人在日盤收盤（13:45）前後重啟（例如更新程式），那天日盤的高低收沒有記到，「上個交易日」就會停在前一天。
+        發現最近收完的日盤沒有紀錄，就從期交所逐筆檔補（檔案還沒出來就稍後再試：前 6 次每 10 分鐘，之後每小時）"""
+        day = self._last_day_close(now)
+        if (self.eng.days.get(day) or {}).get("d_hi") is not None:
+            self._bf_n = 0
+            return
+        wait = 600 if self._bf_n < 6 else 3600
+        if self._bf_at is not None and (now - self._bf_at).total_seconds() < wait:
+            return
+        self._bf_at, self._bf_n = now, self._bf_n + 1
+        try:
+            got = self.seed(now) or {}
+        except Exception as e:
+            print("補抓上個交易日失敗：", repr(e)[:120], flush=True)
+            return
+        filled = False
+        for dd, rec in (got.get("days") or {}).items():
+            cur = self.eng.days.setdefault(dd, {})
+            for k, v in rec.items():
+                if cur.get(k) is None:
+                    cur[k] = v
+                    filled = True
+        if filled:
+            self.eng.refresh(G.trade_day(now))
+            self._save(now)
+            print("已補上個交易日：", self.eng.prev, flush=True)
+
     def step(self, now=None):
         """回傳這一次送出的提醒數（測試用）；沒開盤時回 -1"""
         now = now or datetime.now(TZ)
         n = 0
         self.ensure_levels(now)
+        self._backfill(now)
         if G.session_of(now) is None:
             self._official_close(now)
             fl = self.bb.flush()
@@ -1133,6 +1302,8 @@ class Runner:
             n += 1
         for b in self.bb.feed(now, q):
             for lines in self.eng.on_bar(b):
+                if b.get("gap", 0) >= GAP_WARN:                 # 這根K棒抓價斷過：價位可能不準，直接寫在卡片上
+                    lines = list(lines) + [f"⚠️ 報價曾斷 {b['gap']:.0f} 秒", "價位可能有誤差"]
                 self.send(lines)
                 n += 1
         try:
@@ -1360,7 +1531,7 @@ class Runner:
                     except Exception:
                         pass
             self._digest_check()
-            time.sleep(_cfg("FUT_SWEEP_POLL", 5) if r != -1 else 30)
+            time.sleep(_cfg("FUT_SWEEP_POLL", 2) if r != -1 else 30)
 
 
 RUNNER = None
@@ -1380,8 +1551,24 @@ def status_lines():
     return [f"📍 台指期行情 {now:%H:%M}"] + (RUNNER.level_lines(now) or ["還沒有價位資料"])
 
 
+def async_sender(send):
+    """傳 Telegram 改在背景排隊送（照順序），抓報價不會因為在傳訊息而停下來"""
+    import queue
+    qu = queue.Queue()
+
+    def worker():
+        while True:
+            lines = qu.get()
+            try:
+                send(lines)
+            except Exception as e:
+                print("掃蕩提醒傳送失敗：", repr(e)[:100], flush=True)
+    threading.Thread(target=worker, daemon=True).start()
+    return qu.put
+
+
 def loop(send):
     """send(lines)：把一組短行做成字卡私訊管理者"""
     global RUNNER
-    RUNNER = Runner(send)
+    RUNNER = Runner(async_sender(send))
     RUNNER.run()
