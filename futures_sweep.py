@@ -21,6 +21,7 @@ import io
 import json
 import threading
 import os
+import re
 import time
 import unicodedata
 import zipfile
@@ -977,6 +978,26 @@ class Engine:
 
 
 # ───────────── 報價 ─────────────
+TRACK = {"sid": None}              # 使用者選擇追蹤的合約（例 "TXFL6"＝12 月）；None＝近月（到期自動換下一個月）
+
+
+def pick_track(ql, now):
+    """要追蹤的合約的報價：使用者有選就用那一個（還沒到期才算），沒選或找不到就用近月"""
+    near = G.pick_near(ql, now)
+    sid5 = TRACK.get("sid")
+    if not sid5:
+        return near
+    cands = []
+    for x in ql:
+        sid = str(x.get("SymbolID", ""))
+        if sid.startswith(sid5) and re.fullmatch(r"TXF[A-L]\d-[FM]", sid) and G._num(x.get("CLastPrice")):
+            ex = G.expiry_of(sid, now)
+            if ex is not None and (ex < now.date() or (ex == now.date() and (now.hour, now.minute) >= (13, 30))):
+                continue
+            cands.append(x)
+    return max(cands, key=lambda x: G._num(x.get("CTotalVolume")) or 0) if cands else near
+
+
 def quote_full(now=None, mt=None):
     """近月台指期：{last, high, low, vol}（高低、累計成交量都是這個盤到目前為止）；沒開盤回 None。mt 可指定盤別"""
     now = now or datetime.now(TZ)
@@ -992,11 +1013,18 @@ def quote_full(now=None, mt=None):
     j = r.json()
     if str(j.get("RtCode")) != "0":
         raise ValueError(f"期交所回應異常：{j.get('RtMsg')}")
-    q = G.pick_near((j.get("RtData") or {}).get("QuoteList") or [], now)
+    ql = (j.get("RtData") or {}).get("QuoteList") or []
+    q = pick_track(ql, now)
     if q is None:
         raise ValueError("查無報價")
+    others = {}                                          # 其他月份合約的最新價（代碼前 5 碼＝月份）：算價差、換月用
+    for x in sorted(ql, key=lambda x: G._num(x.get("CTotalVolume")) or 0):
+        sid = str(x.get("SymbolID", ""))
+        if sid[:5] != str(q.get("SymbolID"))[:5] and re.fullmatch(r"TXF[A-L]\d-[FM]", sid) and G._num(x.get("CLastPrice")):
+            others[sid[:5]] = G._num(x.get("CLastPrice"))
     return {"last": G._num(q.get("CLastPrice")), "high": G._num(q.get("CHighPrice")), "low": G._num(q.get("CLowPrice")),
-            "vol": G._num(q.get("CTotalVolume")), "ts": quote_time(q.get("CTime"), now)}
+            "vol": G._num(q.get("CTotalVolume")), "ts": quote_time(q.get("CTime"), now),
+            "sid": str(q.get("SymbolID", "")), "others": others}
 
 
 def quote_time(ct, now):
@@ -1027,7 +1055,7 @@ def load_levels(now=None):
         with open(LEVEL_FILE, encoding="utf-8") as f:
             j = json.load(f)
         if now - datetime.fromisoformat(j["asof"]) < timedelta(days=4):
-            return {k: v for k, v in j["levels"].items() if k in STORED or k in ("pivot", "days")}
+            return {k: v for k, v in j["levels"].items() if k in STORED or k in ("pivot", "days", "track", "track_day")}
     except Exception:
         pass
     return {}
@@ -1156,13 +1184,21 @@ class Runner:
         self.seeded = False
         self._bf_at, self._bf_n = None, 0                       # 補抓上個交易日資料：上次嘗試時間、已嘗試幾次
         self.hello = False
+        lv0 = load_levels()
+        if lv0.get("track") and lv0.get("track_day") == G.trade_day(datetime.now(TZ)):
+            TRACK["sid"] = lv0["track"]                          # 重啟後恢復使用者選的合約（只限同一個交易日）
         self.errs, self.err_since, self.err_told = 0, None, False
         self.blocked = 0                                        # 連續被期交所擋（403／429）的次數
+        self.near_sid = None                                    # 目前近月合約代碼（換月偵測用）
+        self.px, self.px_at = {}, None                          # 上一次各月份合約的最新價 {代碼前5碼: 價}（算換月價差用）
+        self._switch_req = None                                 # 使用者剛按了切換追蹤合約
+        self._exp_sent = set()                                  # 合約到期提醒已送過的 (日期, 種類)
         self.last_q = None
         self.last_at = None
 
     def _save(self, now):
-        save_levels({**self.eng.levels, "days": self.eng.days, **({"pivot": self.eng.pivot} if self.eng.pivot else {})}, now)
+        save_levels({**self.eng.levels, "days": self.eng.days, **({"pivot": self.eng.pivot} if self.eng.pivot else {}),
+                     **({"track": TRACK["sid"], "track_day": G.trade_day(now)} if TRACK.get("sid") else {})}, now)
 
     def level_lines(self, now=None):
         """目前所有價位，給「期貨→行情」和開機卡片用。照時間分組、組與組之間空一行"""
@@ -1284,6 +1320,11 @@ class Runner:
             return -1 if n == 0 else n
         q = self.quote(now)
         self.last_q, self.last_at = q, now
+        if _cfg("FUT_EXPIRY_ON", True):
+            try:
+                n += self._roll_check(now, q) + self._expiry_notes(now, q)
+            except Exception as e:
+                print("合約到期提醒失敗：", repr(e)[:120], flush=True)
         if not self.hello and q.get("last") is not None:        # 開機後第一次抓到報價：私訊你一張「運作中」卡片
             self.hello = True
             self.last_q = q
@@ -1312,6 +1353,124 @@ class Runner:
         except Exception as e:
             print("持倉提醒失敗：", repr(e)[:100], flush=True)
         return n
+
+    # ───────────── 合約到期（結算日）提醒與換月 ─────────────
+    @staticmethod
+    def _sid_name(sid):
+        """TXFK6-F → ('11 月', 'TXFK6')；看不懂回 (sid, sid)"""
+        try:
+            return f"{G.MONTH_CODE.index(sid[3]) + 1} 月", sid[:5]
+        except Exception:
+            return sid, sid
+
+    @staticmethod
+    def _sp_text(sp, a, b):
+        """價差一句話：『12月比11月 高 85 點』"""
+        return None if sp is None else f"{b}月比{a}月 {'高' if sp >= 0 else '低'} {abs(sp):.0f} 點"
+
+    def _sends(self, L, kb=None):
+        self.send(L, kb) if kb else self.send(L)
+
+    def _front(self, now):
+        """報價裡還沒到期的合約，依到期日排：[(到期日, 代碼前5碼)]，第一個＝前月（結算日當天就是要到期的那個）"""
+        out = []
+        for sid5 in self.px:
+            ex = G.expiry_of(sid5, now)
+            if ex is not None and (ex > now.date() or (ex == now.date() and (now.hour, now.minute) < (13, 30))):
+                out.append((ex, sid5))
+        return sorted(out)
+
+    def set_track(self, sid5):
+        """使用者按了「追蹤 N 月」（從別的執行緒呼叫）。回傳一句話給按鈕的小提示"""
+        if not re.fullmatch(r"TXF[A-L]\d", str(sid5)):
+            return "合約代碼不對"
+        if sid5 == self.near_sid:
+            return f"已經在追蹤 {self._sid_name(sid5)[0]}"
+        if sid5 not in self.px:
+            return "目前報價裡沒有這個合約"
+        fr = self._front(datetime.now(TZ))
+        TRACK["sid"] = None if (fr and fr[0][1] == sid5) else sid5      # 選前月＝回到「近月」，到期自動換下一個月
+        self._switch_req = True
+        return f"好，改追蹤 {self._sid_name(sid5)[0]}（下一次報價生效）"
+
+    def _roll_check(self, now, q):
+        """每次抓價：記下各月份最新價；追蹤的合約變了（結算日 13:30 自然換月，或你按了切換）→ 把舊價位換算成新合約、送一張卡片"""
+        sid5 = str(q.get("sid") or "")[:5]
+        if not sid5:
+            return 0
+        prev, prev_at = self.px, self.px_at
+        self.px, self.px_at = {sid5: q.get("last"), **(q.get("others") or {})}, now
+        old, self.near_sid = self.near_sid, sid5
+        user, self._switch_req = self._switch_req, None
+        if not old or old == sid5 or G.session_of(now) is None:
+            return 0
+        sp = None
+        if prev and prev_at and now - prev_at < timedelta(minutes=40) and prev.get(sid5) is not None and prev.get(old) is not None:
+            sp = prev[sid5] - prev[old]
+        o_nm, n_nm = self._sid_name(old), self._sid_name(sid5)
+        L = ["🔁 已切換追蹤合約", f"現在追蹤 {n_nm[0]}", f"代碼 {n_nm[1]}"] if user else \
+            ["🔄 近月合約換月", f"{o_nm[0]}合約已結算", f"現在交易 {n_nm[0]}", f"代碼 {n_nm[1]}"]
+        if sp is not None:
+            L.append(self._sp_text(sp, o_nm[0].split()[0], n_nm[0].split()[0]))
+            for g in self.eng.days.values():                      # 舊合約的高低收，全部換算成新合約價位
+                for k in ("n_hi", "n_lo", "d_hi", "d_lo", "d_c"):
+                    if g.get(k) is not None:
+                        g[k] += sp
+            for k in ("or_hi", "or_lo"):
+                if k in self.eng.levels:
+                    self.eng.levels[k] += sp
+            if self.eng.pivot:
+                self.eng.pivot += sp
+            self.eng.refresh(G.trade_day(now))
+            L += ["昨高低、收盤、多空分界", f"已 {'+' if sp >= 0 else '-'}{abs(sp):.0f} 換算成 {n_nm[0].replace(' ', '')} 價位"]
+        else:
+            L += ["價差沒抓到", "昨高低等價位沒有換算", "請自己對照看盤軟體"]
+        e = self.eng                                              # 本盤已累積的 5分K、波段都是舊合約價位，清掉重來
+        e.hist, e.swings, e.shi, e.slo, e.pending, e.exc = [], [], [], [], [], {}
+        self.bb.cur, self.bb.hi, self.bb.lo = None, q.get("high"), q.get("low")
+        self._save(now)
+        self._sends(L)
+        return 1
+
+    def _expiry_notes(self, now, q):
+        """結算日前一天、當天早上、結算前 30 分鐘各提醒一次（每種每天只一次）。當天的兩張卡片附按鈕，可以選盤中要追蹤哪個月的合約"""
+        sess = G.session_of(now)
+        fr = self._front(now)
+        if sess != "0" or len(fr) < 1:
+            return 0
+        ex, fsid = fr[0]
+        d, hm = (ex - now.date()).days, (now.hour, now.minute)
+        if d not in (0, 1) or hm < (8, 46) or hm >= (13, 30):
+            return 0
+        kind = "pre" if d == 1 else ("noon" if hm >= (13, 0) else "day")
+        key = (now.date().isoformat(), kind)
+        if key in self._exp_sent:
+            return 0
+        self._exp_sent.add(key)
+        f_nm = self._sid_name(fsid)
+        nsid = fr[1][1] if len(fr) > 1 else None
+        n_nm = self._sid_name(nsid) if nsid else None
+        nm_txt = n_nm[0] if n_nm else "下個月"
+        L = {"pre": ["📅 明天是結算日", f"{f_nm[0]}合約 明天 13:30 到期"],
+             "day": ["📅 今天是結算日", f"{f_nm[0]}合約 13:30 到期"],
+             "noon": ["⏰ 30 分鐘後結算", f"{f_nm[0]}合約 13:30 到期"]}[kind]
+        kb = None
+        if kind == "pre":
+            L += [f"明天 13:30 後 改交易 {nm_txt}", "有部位要先想好轉倉"]
+        else:
+            cur = self._sid_name(self.near_sid)[0] if self.near_sid else f_nm[0]
+            L += [f"目前追蹤 {cur}", f"13:30 前 {f_nm[0]}、{nm_txt}都能交易", "夜盤只有新月合約", "要改追蹤哪個月，按下面按鈕"]
+            if nsid:
+                kb = [[{"text": ("✅ " if self.near_sid == fsid else "") + f"追蹤 {f_nm[0]}", "callback_data": f"fut:{fsid}"},
+                       {"text": ("✅ " if self.near_sid == nsid else "") + f"追蹤 {n_nm[0]}", "callback_data": f"fut:{nsid}"}]]
+        if nsid and self.px.get(fsid) is not None and self.px.get(nsid) is not None:
+            L.append("目前價差 " + self._sp_text(self.px[nsid] - self.px[fsid], f_nm[0].split()[0], n_nm[0].split()[0]))
+        pos = self._positions()
+        if pos and kind != "pre":
+            qty = sum(int(p.get("qty") or 0) for p in pos)
+            L += [f"你有 {len(pos)} 筆部位" + (f"（共 {qty} 口）" if qty else ""), "13:30 結算前要平倉或轉倉"]
+        self._sends(L, kb)
+        return 1
 
     def _official_close(self, now):
         """日盤收盤後 13:45～13:55 每 30 秒問一次期交所官方收盤價；拿到就取代最後成交價，記成上個交易日的收盤"""
@@ -1584,13 +1743,13 @@ def async_sender(send):
 
     def worker():
         while True:
-            lines = qu.get()
+            lines, kb = qu.get()
             try:
-                send(lines)
+                send(lines, kb) if kb else send(lines)
             except Exception as e:
                 print("掃蕩提醒傳送失敗：", repr(e)[:100], flush=True)
     threading.Thread(target=worker, daemon=True).start()
-    return qu.put
+    return lambda lines, kb=None: qu.put((lines, kb))
 
 
 def loop(send):
