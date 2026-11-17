@@ -1913,6 +1913,29 @@
    "rn": 0.5142857142857142,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-18",
+   "sess": "1",
+   "t": 1555,
+   "ts": "2026-11-17T16:00+08:00",
+   "name": "高檔放量滯漲 40,265",
+   "tier": "滯漲",
+   "dir": "short",
+   "level": 40265.0,
+   "ext": 40265.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 40203.0,
+   "stop": 40265.0,
+   "stop2": 40265.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
