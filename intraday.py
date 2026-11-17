@@ -1638,10 +1638,22 @@ def handle_message(m, state, asked):
 
 def handle_callback(cq, state, asked):
     """按了提醒訊息下面的按鈕：「移除」跳到確認移除，「加碼」跳到「買了多少」"""
-    tg("answerCallbackQuery", callback_query_id=cq.get("id"))
     m = cq.get("message") or {}
     chat = m.get("chat") or {}
     data = cq.get("data") or ""
+    if data.startswith("fut:"):                        # 期貨掃蕩提醒的「追蹤 N 月」按鈕：只有管理者能按
+        if str((cq.get("from") or {}).get("id")) != str(OWNER):
+            txt = "只有管理者可以切換"
+        else:
+            try:
+                import futures_sweep as FS
+                txt = FS.RUNNER.set_track(data[4:]) if getattr(FS, "RUNNER", None) else "掃蕩提醒沒有在這裡執行"
+            except Exception as e:
+                print("切換追蹤合約失敗：", repr(e), flush=True)
+                txt = "切換失敗，請稍後再試"
+        tg("answerCallbackQuery", callback_query_id=cq.get("id"), text=txt)
+        return
+    tg("answerCallbackQuery", callback_query_id=cq.get("id"))
     if chat.get("type") != "private" or not data.startswith(("sell:", "buy:", "skip:")):
         return
     if data.startswith("skip:"):                       # 不加碼：把這則提醒刪掉就好
