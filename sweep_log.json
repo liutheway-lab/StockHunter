@@ -1569,6 +1569,21 @@
    "ratio": 0.3,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-17",
+   "sess": "0",
+   "t": 845,
+   "ts": "2026-11-17T08:50+08:00",
+   "name": "長上影線高點 41,145",
+   "tier": "影線",
+   "dir": "short",
+   "level": 41145.0,
+   "ext": 41145.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
