@@ -1844,6 +1844,29 @@
    "ratio": null,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-18",
+   "sess": "1",
+   "t": 1500,
+   "ts": "2026-11-17T15:05+08:00",
+   "name": "創新低追空 40,616@20:25",
+   "tier": "破",
+   "dir": "short",
+   "level": 40616.0,
+   "ext": 40139.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 40125.0,
+   "stop": 40139.0,
+   "stop2": 40139.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
