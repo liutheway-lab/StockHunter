@@ -485,7 +485,7 @@ class Engine:
     def _name_line(s):
         lv = _at(s["level"], s.get("lt"))
         if s["tier"] == "滯漲":
-            return f"{'高檔放量滯漲' if s['dir'] == 'short' else '低檔放量不跌'} {f0(s['level'])}"
+            return f"{'高檔放量滯漲' if s['dir'] == 'short' else '低檔放量不跌'} {_at(s['level'], s.get('t'))}"
         if s["tier"] == "轉折":
             return f"{'高點降低' if s['dir'] == 'short' else '低點墊高'} {f0(s['level'])}"
         if s["tier"] == "破":
@@ -493,7 +493,7 @@ class Engine:
         if s["tier"] == "箱型":
             return f"箱型{'上' if s['dir'] == 'short' else '下'}緣 {f0(s['level'])}"
         if s["tier"] == "影線":
-            return f"{'長上影線高點' if s['dir'] == 'short' else '長下影線低點'} {f0(s['level'])}"
+            return f"{'長上影線高點' if s['dir'] == 'short' else '長下影線低點'} {_at(s['level'], s.get('lt'))}"
         return f"{NAMES[s['name']]} {lv}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {lv}"
 
     def _trend_tag(self, s, up, bar):
@@ -517,7 +517,7 @@ class Engine:
     def _wick_text(self, s, bar, ratio=None):
         up = s["dir"] == "short"
         L = ["🔻 長上影線，留意做空" if up else "🔺 長下影線，留意做多", "級別 影線", f"影線 {s['pierce']:.0f} 點",
-             f"{'高' if up else '低'}點 {f0(s['level'])}", f"收盤 {f0(bar['c'])}"]
+             f"{'高' if up else '低'}點 {_at(s['level'], s.get('lt'))}", f"收盤 {_at(bar['c'], bar['t'])}"]
         if ratio is not None:
             L.append(f"這根成交量 {ratio:.1f} 倍均量")
         L += [self._trend_tag(s, up, bar), f"停損參考 {_at(s['ext'], s.get('ext_t'))} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
@@ -532,10 +532,10 @@ class Engine:
         L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", self._tier_line(s), *self._name_lines(s)]
         if s["tier"] == "小":
             L.append(f"{s['t'] // 100:02d}:{s['t'] % 100:02d} 形成")
-        L += [f"刺破 {s['pierce']:.0f} 點 {sign} {f0(s['ext'])}"]
+        L += [f"刺破 {s['pierce']:.0f} 點 {sign} {_at(s['ext'], s.get('ext_t'))}"]
         if s.get("held"):
             L.append(f"先在價位{'上' if up else '下'}方 {s['held']} 根")
-        L.append(f"5分K 收回 {f0(bar['c'])}")
+        L.append(f"5分K 收回 {_at(bar['c'], bar['t'])}")
         if ratio is not None:
             L.append(f"這根成交量 {ratio:.1f} 倍均量")
         L += [tag, f"停損參考 {_at(s['ext'], s.get('ext_t'))} {'上' if up else '下'}", f"接著看 {_cfg('FUT_SWEEP_BARS', 2)} 根 5分K"]
@@ -607,7 +607,7 @@ class Engine:
             back = (bar["c"] >= s["level"]) if up else (bar["c"] <= s["level"])
             who = f"（{'做空' if up else '做多'}）"
             if broke or back:
-                why = ("又創高 " if up else "又創低 ") + f0(bar["h"] if up else bar["l"]) if broke else \
+                why = ("又創高 " if up else "又創低 ") + _at(bar["h"] if up else bar["l"], bar["t"]) if broke else \
                       ("收盤又站上 " if up else "收盤又跌破 ") + f0(s["level"])
                 out.append([f"❌ 掃蕩失敗{who}", self._tier_line(s), *self._name_lines(s), why, "這個訊號不用看了"])
                 if self.journal:
@@ -795,8 +795,8 @@ class Engine:
                 lv = bar["h"] if up else bar["l"]
                 s = {"dir": d, "name": f"stall_{bar['t']}", "level": lv, "ext": lv, "pierce": 0, "n": 0, "tier": "滯漲", "t": bar["t"]}
                 out.append(self._pat_card(s, bar, ["🔻 高檔放量滯漲" if up else "🔺 低檔放量不跌", "留意轉空（觀察）" if up else "留意轉多（觀察）",
-                                                   f"這根量 {ratio:.1f} 倍均量", f"{'高' if up else '低'}點 {f0(lv)}",
-                                                   f"收盤 {f0(bar['c'])}（收在{'下' if up else '上'}半）"]))
+                                                   f"這根量 {ratio:.1f} 倍均量", f"{'高' if up else '低'}點 {_at(lv, bar['t'])}",
+                                                   f"收盤 {_at(bar['c'], bar['t'])}（收在{'下' if up else '上'}半）"]))
         # ② 結構轉換：最近兩個轉折高（低）一個比一個低（高），收盤跌破（站上）它們之間的頸線
         if _cfg("FUT_STRUCT_ON", True):
             step, near, age = _cfg("FUT_STRUCT_LH", 15), _cfg("FUT_STRUCT_NEAR", 50), _cfg("FUT_STRUCT_AGE", 24)
@@ -839,7 +839,7 @@ class Engine:
                 s = {"dir": d, "name": f"struct_{bar['t']}", "level": b["level"], "ext": b["level"], "pierce": 0, "n": 0, "tier": "轉折", "t": bar["t"]}
                 out.append(self._pat_card(s, bar, ["🔻 結構轉換（轉空）" if up else "🔺 結構轉換（轉多）", "級別 結構轉換",
                                                    f"{'高點降低' if up else '低點墊高'} {_at(a['level'], a['t'])}", f"→ {_at(b['level'], b['t'])}",
-                                                   f"收盤{'跌破' if up else '站上'} {f0(neck)}", f"收盤 {f0(bar['c'])}"] ) + ["建議 1 口小試"])
+                                                   f"收盤{'跌破' if up else '站上'} {f0(neck)}", f"收盤 {_at(bar['c'], bar['t'])}"] ) + ["建議 1 口小試"])
         # ④ 箱型上（下）緣第二次出量掃蕩：衝刺之後的盤整區間，上緣被放量刺破又收回（第二次）→ 留意做空；下緣反之
         if _cfg("FUT_BOX_ON", True):
             out += self._box_sweep(bar, skey, ready, last)
@@ -1018,13 +1018,20 @@ def quote_full(now=None, mt=None):
     if q is None:
         raise ValueError("查無報價")
     others = {}                                          # 其他月份合約的最新價（代碼前 5 碼＝月份）：算價差、換月用
+    hl, refs = {}, {}                                    # 每個月份合約這個盤到目前的高低、期交所的參考價（＝昨日結算價）
     for x in sorted(ql, key=lambda x: G._num(x.get("CTotalVolume")) or 0):
         sid = str(x.get("SymbolID", ""))
+        if re.fullmatch(r"TXF[A-L]\d-[FM]", sid):
+            h_, l_, r_ = G._num(x.get("CHighPrice")), G._num(x.get("CLowPrice")), G._num(x.get("CRefPrice"))
+            if h_ and l_:
+                hl[sid[:5]] = (h_, l_)
+            if r_:
+                refs[sid[:5]] = r_
         if sid[:5] != str(q.get("SymbolID"))[:5] and re.fullmatch(r"TXF[A-L]\d-[FM]", sid) and G._num(x.get("CLastPrice")):
             others[sid[:5]] = G._num(x.get("CLastPrice"))
     return {"last": G._num(q.get("CLastPrice")), "high": G._num(q.get("CHighPrice")), "low": G._num(q.get("CLowPrice")),
             "vol": G._num(q.get("CTotalVolume")), "ts": quote_time(q.get("CTime"), now),
-            "sid": str(q.get("SymbolID", "")), "others": others}
+            "sid": str(q.get("SymbolID", "")), "others": others, "hl": hl, "refs": refs}
 
 
 def quote_time(ct, now):
@@ -1055,7 +1062,7 @@ def load_levels(now=None):
         with open(LEVEL_FILE, encoding="utf-8") as f:
             j = json.load(f)
         if now - datetime.fromisoformat(j["asof"]) < timedelta(days=4):
-            return {k: v for k, v in j["levels"].items() if k in STORED or k in ("pivot", "days", "track", "track_day")}
+            return {k: v for k, v in j["levels"].items() if k in STORED or k in ("pivot", "days", "track", "track_day", "nx")}
     except Exception:
         pass
     return {}
@@ -1086,6 +1093,7 @@ def seed_levels(now, fetch=fetch_zip, files=3):
     一行一行讀、不把整個檔案放進記憶體（Render 只有 512MB）"""
     seg = {}                                      # {(盤別, 起算日, 到期月): [高, 低]}
     lastt, lastp = {}, {}
+    vw = {}                                       # {(日, 到期月): [價×量 合計, 量 合計]}：收盤前 1 分鐘（13:44～13:45）＝每日結算價（看盤軟體的「收」）
     tail = {}                                     # {(起算日, 到期月): 夜盤跨午夜之後最晚的成交時間}，要到 04:30 以後才算夜盤資料齊了
     got, d = 0, now.date()
     for _ in range(8):
@@ -1110,7 +1118,16 @@ def seed_levels(now, fetch=fetch_zip, files=3):
                 if 84500 <= t <= 134500:
                     k = ("0", day, row[2].strip())
                     if t >= lastt.get(k, 0):
-                        lastt[k], lastp[k] = t, px          # 日盤最後一筆成交價＝收盤價
+                        lastt[k], lastp[k] = t, px          # 日盤最後一筆成交價（沒有結算價時才用）
+                    if t >= 134400:
+                        try:
+                            q_ = float(row[5].strip())
+                        except ValueError:
+                            q_ = 0
+                        if q_ > 0:
+                            a_ = vw.setdefault((day, row[2].strip()), [0.0, 0.0])
+                            a_[0] += px * q_
+                            a_[1] += q_
                 elif t >= 150000:
                     k = ("1", day, row[2].strip())
                 elif t < 50000:
@@ -1126,26 +1143,40 @@ def seed_levels(now, fetch=fetch_zip, files=3):
                         v[0], v[2] = px, _b5(t)
                     if px < v[1]:
                         v[1], v[3] = px, _b5(t)
-    best = {}                                     # {(盤別, 起算日): (到期月, 高, 低)}，只收已經結束、資料齊的盤
+    per = {}                                      # {到期月: {(盤別, 起算日): (高, 低, 高時間, 低時間)}}，只收已經結束、資料齊的盤
     for (sk, day, exp), (hi, lo, hit, lot) in seg.items():
         end = datetime(day.year, day.month, day.day, 13, 45, tzinfo=TZ) if sk == "0" else datetime(day.year, day.month, day.day, 5, 0, tzinfo=TZ) + timedelta(days=1)
         if end > now:
             continue
         if sk == "1" and tail.get((day, exp), 0) < 43000:           # 夜盤後半段的檔案還沒出來：不是完整的夜盤，不用
             continue
-        if (sk, day) not in best or exp < best[(sk, day)][0]:      # 同一天有兩個到期月：用最近月
-            best[(sk, day)] = (exp, hi, lo, hit, lot)
-    days = {}
-    for (sk, day), (exp, hi, lo, hit, lot) in best.items():
-        if sk == "0":                                              # 日盤 → 當天
-            rec = days.setdefault(day.isoformat(), {})
-            rec["d_hi"], rec["d_lo"], rec["d_hi_t"], rec["d_lo_t"] = hi, lo, hit, lot
-            if ("0", day, exp) in lastp:
-                rec["d_c"] = lastp[("0", day, exp)]                # 日盤最後一筆成交價＝收盤價
-        else:                                                      # 夜盤 → 隔天的交易日
-            rec = days.setdefault(G.trade_day(datetime(day.year, day.month, day.day, 15, 0, tzinfo=TZ)), {})
-            rec["n_hi"], rec["n_lo"], rec["n_hi_t"], rec["n_lo_t"] = hi, lo, hit, lot
-    return {"days": days} if days else {}
+        per.setdefault(exp, {})[(sk, day)] = (hi, lo, hit, lot)
+
+    def build(exp):
+        out = {}
+        for (sk, day), (hi, lo, hit, lot) in per.get(exp, {}).items():
+            if sk == "0":                                          # 日盤 → 當天
+                rec = out.setdefault(day.isoformat(), {})
+                rec["d_hi"], rec["d_lo"], rec["d_hi_t"], rec["d_lo_t"] = hi, lo, hit, lot
+                v = vw.get((day, exp))
+                if v and v[1] > 0:
+                    rec["d_c"] = float(round(v[0] / v[1]))         # 每日結算價（收盤前 1 分鐘成交量加權平均）
+                elif ("0", day, exp) in lastp:
+                    rec["d_c"] = lastp[("0", day, exp)]
+            else:                                                  # 夜盤 → 隔天的交易日
+                rec = out.setdefault(G.trade_day(datetime(day.year, day.month, day.day, 15, 0, tzinfo=TZ)), {})
+                rec["n_hi"], rec["n_lo"], rec["n_hi_t"], rec["n_lo_t"] = hi, lo, hit, lot
+        return out
+
+    by_exp = {e: build(e) for e in per}
+    days = {}                                                      # 預設：每個盤用「最近月」（同一天有兩個到期月時）
+    for e in sorted(by_exp, reverse=True):                         # 先放遠月、再用近月蓋掉，近月優先
+        for dd, rec in by_exp[e].items():
+            days.setdefault(dd, {}).update(rec)
+    out = {"days": days} if days else {}
+    if by_exp:
+        out["by_exp"] = by_exp
+    return out
 
 
 # ───────────── 背景執行 ─────────────
@@ -1190,6 +1221,8 @@ class Runner:
         self.errs, self.err_since, self.err_told = 0, None, False
         self.blocked = 0                                        # 連續被期交所擋（403／429）的次數
         self.near_sid = None                                    # 目前近月合約代碼（換月偵測用）
+        self.nx = (load_levels().get("nx") or {})               # 今天夜盤各月份合約的高低 {"day":交易日, 月份代碼:[高,低]}：換月時直接用新合約自己的夜盤高低
+        self.by_exp = None                                      # 期交所檔案算出的各到期月歷史高低收（換月時用，第一次要用才抓）
         self.px, self.px_at = {}, None                          # 上一次各月份合約的最新價 {代碼前5碼: 價}（算換月價差用）
         self._switch_req = None                                 # 使用者剛按了切換追蹤合約
         self._exp_sent = set()                                  # 合約到期提醒已送過的 (日期, 種類)
@@ -1198,7 +1231,8 @@ class Runner:
 
     def _save(self, now):
         save_levels({**self.eng.levels, "days": self.eng.days, **({"pivot": self.eng.pivot} if self.eng.pivot else {}),
-                     **({"track": TRACK["sid"], "track_day": G.trade_day(now)} if TRACK.get("sid") else {})}, now)
+                     **({"track": TRACK["sid"], "track_day": G.trade_day(now)} if TRACK.get("sid") else {}),
+                     **({"nx": self.nx} if self.nx else {})}, now)
 
     def level_lines(self, now=None):
         """目前所有價位，給「期貨→行情」和開機卡片用。照時間分組、組與組之間空一行"""
@@ -1393,11 +1427,86 @@ class Runner:
         self._switch_req = True
         return f"好，改追蹤 {self._sid_name(sid5)[0]}（下一次報價生效）"
 
+    @staticmethod
+    def _exp6(sid5, now):
+        """TXFL6 → '202612'（跟期交所逐筆檔的到期月份欄一致）；看不懂回 None"""
+        d = G.expiry_of(str(sid5) + "-F", now)
+        return d.strftime("%Y%m") if d else None
+
+    def _record_night(self, now, q):
+        """夜盤期間，隨時記下每個月份合約的夜盤高低（期交所給的是這個盤到目前的高低）：之後換成另一個月份時直接用它自己的"""
+        if G.session_of(now) != "1":
+            return
+        day = G.trade_day(now)
+        if self.nx.get("day") != day:
+            self.nx = {"day": day}
+        for k, (h, l) in (q.get("hl") or {}).items():
+            self.nx[k] = [h, l]
+
+    def _ref_fix(self, now, q, sid5):
+        """日盤開盤後：期交所的參考價＝上個交易日的結算價（看盤軟體的昨收）。跟記下的昨收不同就改成它（每天一次）"""
+        day = G.trade_day(now)
+        if G.session_of(now) != "0" or getattr(self, "_ref_day", None) == day:
+            return
+        r, last = (q.get("refs") or {}).get(sid5), q.get("last")
+        if not r or not last or abs(r - last) / last > 0.12:
+            return
+        self._ref_day = day
+        pv = self.eng.prev
+        g = self.eng.days.get(pv["day"]) if pv else None
+        if not g or g.get("d_c") is None or abs(g["d_c"] - r) > 300 or round(g["d_c"]) == round(r):
+            return
+        print("昨收校正：", g["d_c"], "→ 期交所參考價", r, flush=True)
+        g["d_c"] = float(r)
+        self.eng.refresh(day)
+        self._save(now)
+
+    def _by_exp_data(self, now):
+        if self.by_exp is None:
+            try:
+                self.by_exp = (self.seed(now) or {}).get("by_exp") or {}
+            except Exception as e:
+                print("抓各合約歷史高低收失敗：", repr(e)[:100], flush=True)
+                self.by_exp = {}
+        return self.by_exp
+
+    def _rebase(self, now, sid5, sp):
+        """追蹤的合約換了：昨高低收（和今日夜盤高低）改成新合約自己的實際值；找不到的才用價差 sp 換算。回傳 (用到實際值, 用到換算值)"""
+        bx = self._by_exp_data(now).get(self._exp6(sid5, now)) or {}
+        today = G.trade_day(now)
+        real = est = False
+        for dd, g in self.eng.days.items():
+            r = bx.get(dd) or {}
+            for k in ("n_hi", "n_lo", "d_hi", "d_lo", "d_c"):
+                if g.get(k) is None:
+                    continue
+                if dd == today and k in ("n_hi", "n_lo") and sid5 in self.nx and self.nx.get("day") == today:
+                    g[k] = self.nx[sid5][0 if k == "n_hi" else 1]        # 今天夜盤：用新合約自己記下的夜盤高低
+                    real = True
+                elif r.get(k) is not None:
+                    g[k] = r[k]
+                    if k + "_t" in r:
+                        g[k + "_t"] = r[k + "_t"]
+                    real = True
+                elif sp is not None:
+                    g[k] += sp
+                    est = True
+        if sp is not None:
+            for k in ("or_hi", "or_lo"):
+                if k in self.eng.levels:
+                    self.eng.levels[k] += sp
+        self.eng.refresh(today)
+        if sp is not None and self.eng.pivot and not real:
+            pass
+        return real, est
+
     def _roll_check(self, now, q):
         """每次抓價：記下各月份最新價；追蹤的合約變了（結算日 13:30 自然換月，或你按了切換）→ 把舊價位換算成新合約、送一張卡片"""
         sid5 = str(q.get("sid") or "")[:5]
         if not sid5:
             return 0
+        self._record_night(now, q)
+        self._ref_fix(now, q, sid5)
         prev, prev_at = self.px, self.px_at
         self.px, self.px_at = {sid5: q.get("last"), **(q.get("others") or {})}, now
         old, self.near_sid = self.near_sid, sid5
@@ -1412,17 +1521,13 @@ class Runner:
             ["🔄 近月合約換月", f"{o_nm[0]}合約已結算", f"現在交易 {n_nm[0]}", f"代碼 {n_nm[1]}"]
         if sp is not None:
             L.append(self._sp_text(sp, o_nm[0].split()[0], n_nm[0].split()[0]))
-            for g in self.eng.days.values():                      # 舊合約的高低收，全部換算成新合約價位
-                for k in ("n_hi", "n_lo", "d_hi", "d_lo", "d_c"):
-                    if g.get(k) is not None:
-                        g[k] += sp
-            for k in ("or_hi", "or_lo"):
-                if k in self.eng.levels:
-                    self.eng.levels[k] += sp
-            if self.eng.pivot:
-                self.eng.pivot += sp
-            self.eng.refresh(G.trade_day(now))
-            L += ["昨高低、收盤、多空分界", f"已 {'+' if sp >= 0 else '-'}{abs(sp):.0f} 換算成 {n_nm[0].replace(' ', '')} 價位"]
+        real, est = self._rebase(now, sid5, sp)
+        if real and not est:
+            L += ["昨高低收、今日夜盤", f"已改用 {n_nm[0].replace(' ', '')} 自己的價位"]
+        elif real and est:
+            L += [f"昨高低收用 {n_nm[0].replace(' ', '')} 自己的價位", "今日夜盤高低是換算的", "可能有一點誤差"]
+        elif sp is not None:
+            L += ["昨高低、收盤、多空分界", f"已 {'+' if sp >= 0 else '-'}{abs(sp):.0f} 換算成 {n_nm[0].replace(' ', '')} 價位", "可能有誤差，請對照看盤軟體"]
         else:
             L += ["價差沒抓到", "昨高低等價位沒有換算", "請自己對照看盤軟體"]
         e = self.eng                                              # 本盤已累積的 5分K、波段都是舊合約價位，清掉重來
@@ -1461,8 +1566,8 @@ class Runner:
             cur = self._sid_name(self.near_sid)[0] if self.near_sid else f_nm[0]
             L += [f"目前追蹤 {cur}", f"13:30 前 {f_nm[0]}、{nm_txt}都能交易", "夜盤只有新月合約", "要改追蹤哪個月，按下面按鈕"]
             if nsid:
-                kb = [[{"text": ("✅ " if self.near_sid == fsid else "") + f"追蹤 {f_nm[0]}", "callback_data": f"fut:{fsid}"},
-                       {"text": ("✅ " if self.near_sid == nsid else "") + f"追蹤 {n_nm[0]}", "callback_data": f"fut:{nsid}"}]]
+                kb = [[{"text": f"追蹤 {f_nm[0]}", "callback_data": f"fut:{fsid}"},                  # 按鈕不打勾：目前追蹤哪個月，卡片上有寫
+                       {"text": f"追蹤 {n_nm[0]}", "callback_data": f"fut:{nsid}"}]]
         if nsid and self.px.get(fsid) is not None and self.px.get(nsid) is not None:
             L.append("目前價差 " + self._sp_text(self.px[nsid] - self.px[fsid], f_nm[0].split()[0], n_nm[0].split()[0]))
         pos = self._positions()
