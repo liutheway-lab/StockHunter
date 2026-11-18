@@ -2201,16 +2201,16 @@
    "ext": 40952.0,
    "trend": "順勢",
    "ratio": null,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 40952.0,
    "stop": 40952.0,
    "stop2": 40952.0,
-   "bars": 0,
+   "bars": 1,
    "rf": 0.0,
    "rn": 0.0,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {
