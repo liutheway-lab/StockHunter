@@ -2211,6 +2211,21 @@
    "rn": 0.0,
    "sf": true,
    "sn": true
+  },
+  {
+   "day": "2026-11-18",
+   "sess": "0",
+   "t": 905,
+   "ts": "2026-11-18T09:10+08:00",
+   "name": "長上影線高點 40,734",
+   "tier": "影線",
+   "dir": "short",
+   "level": 40734.0,
+   "ext": 40734.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
