@@ -2333,6 +2333,29 @@
    "rn": 1.1079545454545454,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-19",
+   "sess": "1",
+   "t": 1725,
+   "ts": "2026-11-18T17:30+08:00",
+   "name": "創新高追多 40,620@16:05",
+   "tier": "破",
+   "dir": "long",
+   "level": 40620.0,
+   "ext": 40333.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 40636.0,
+   "stop": 40333.0,
+   "stop2": 40431.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
