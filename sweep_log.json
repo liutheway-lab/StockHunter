@@ -2798,6 +2798,29 @@
    "rn": 0.7816593886462883,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-20",
+   "sess": "1",
+   "t": 1805,
+   "ts": "2026-11-19T18:10+08:00",
+   "name": "低點墊高 39,183",
+   "tier": "轉折",
+   "dir": "long",
+   "level": 39183.0,
+   "ext": 39183.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 39358.0,
+   "stop": 39183.0,
+   "stop2": 39183.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
