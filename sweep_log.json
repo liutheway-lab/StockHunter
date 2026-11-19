@@ -2997,6 +2997,29 @@
    "rn": 0.8051948051948052,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-20",
+   "sess": "1",
+   "t": 2310,
+   "ts": "2026-11-19T23:15+08:00",
+   "name": "高點降低 39,742",
+   "tier": "轉折",
+   "dir": "short",
+   "level": 39742.0,
+   "ext": 39742.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 39348.0,
+   "stop": 39742.0,
+   "stop2": 39742.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
