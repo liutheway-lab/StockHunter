@@ -2608,6 +2608,21 @@
    "ratio": null,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-19",
+   "sess": "0",
+   "t": 940,
+   "ts": "2026-11-19T09:45+08:00",
+   "name": "今日全天低 39,411@00:00",
+   "tier": "大",
+   "dir": "long",
+   "level": 39411.0,
+   "ext": 39159.0,
+   "trend": "逆勢",
+   "ratio": 1.0,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
