@@ -2877,7 +2877,7 @@
    "entry": 39451.0,
    "stop": 39578.0,
    "stop2": 39548.0,
-   "bars": 11,
+   "bars": 12,
    "rf": 1.0,
    "rn": 1.309278350515464,
    "sf": false,
@@ -2900,11 +2900,11 @@
    "entry": 39412.0,
    "stop": 39324.0,
    "stop2": 39385.0,
-   "bars": 4,
+   "bars": 5,
    "rf": 0.5795454545454546,
    "rn": 1.8888888888888888,
    "sf": false,
-   "sn": false
+   "sn": true
   },
   {
    "day": "2026-11-20",
@@ -2918,8 +2918,16 @@
    "ext": 39463.0,
    "trend": "逆勢",
    "ratio": 1.0,
-   "status": "wait",
-   "result": null
+   "status": "track",
+   "result": null,
+   "entry": 39406.0,
+   "stop": 39463.0,
+   "stop2": 39430.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
