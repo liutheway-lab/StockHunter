@@ -314,61 +314,158 @@ class Journal:
         self._save()
         return title, ["（自動統整）"] + self.lines()[1:]
 
+    # ── 統計報告 ──
+    @staticmethod
+    def _stat(done, sk, rk, fk):
+        """停損放 sk（每筆自己的停損距離＝1R）時，目標 1～4R 各自的成績。
+        先走到目標＝贏 +k；先碰停損＝輸 −1；2 小時內都沒到＝0（還沒結算，不算輸）。回傳 [(勝率, 期望R, 平均點數)]"""
+        n = len(done)
+        out = []
+        for k in (1, 2, 3, 4):
+            w = ls = 0
+            pts = 0.0
+            for r in done:
+                d = max(abs(r.get(sk, r["stop"]) - r["entry"]), 1)
+                if r.get(rk, 0) >= k:
+                    w += 1
+                    pts += k * d
+                elif r.get(fk):
+                    ls += 1
+                    pts -= d
+            out.append((w / n, (k * w - ls) / n, pts / n))
+        return out
+
+    @staticmethod
+    def _e(x):
+        return f"{x:+.1f}" if abs(x) >= 0.995 else f"{x:+.2f}".replace("0.", ".")
+
+    @staticmethod
+    def _dot(e):
+        return "🟢" if e >= 0.1 else ("🟡" if e > -0.1 else "🔴")
+
     def lines(self):
         rows = self.rows
-        if not rows:
-            return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
         pat = [r for r in rows if r.get("tier") in ("滯漲", "轉折", "破", "箱型")]
         rows = [r for r in rows if r.get("tier") not in ("滯漲", "轉折", "破", "箱型")]
         if not rows and not pat:
-            return ["📊 掃蕩紀錄", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
+            return ["📊 掃蕩戰績", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
         conf = [r for r in rows if r.get("entry") is not None]
         fail = [r for r in rows if r.get("result") == "失敗"]
         nb = _cfg("FUT_LOG_BARS", 24)
-        L = ["📊 掃蕩紀錄", f"提醒 {len(rows)} 次", f"　確認 {len(conf)}｜失敗 {len(fail)}", "",
-             f"確認後 {nb * 5 // 60} 小時內", "價格在碰到停損之前", "先走到停損距離（R）", "的幾倍，佔幾 %", "最划算＝期望值最高的", "目標倍數（單位 R）", "",
-             "遠＝停損放掃蕩極點", "近＝停損放確認那幾根", "　　最低（高）點", ""]
+        min_n = _cfg("FUT_LOG_MIN_N", 10)
+        BAR = "─" * 16
+        STOPS = (("遠", "stop", "rf", "sf"), ("近", "stop2", "rn", "sn"))
 
-        def block(title, rs, ev=False):
-            done = [r for r in rs if r.get("status") == "done" and "rf" in r]
-            out = [title]
-            if not done:
-                return out + ["　還沒有資料"]
-            n = len(done)
-            out.append(f"　{n} 筆")
-            for nm, sk, rk in (("遠", "stop", "rf"), ("近", "stop2", "rn")):
+        def done_of(rs):
+            return [r for r in rs if r.get("status") == "done" and "rf" in r]
+
+        def best(done, nm_only=None):
+            """這組裡期望值最高的 (期望, 停損名, k, 勝率, 點數, 平均停損點數)"""
+            cand = []
+            for nm, sk, rk, fk in STOPS:
                 if nm == "近" and all(r.get("stop2", r["stop"]) == r["stop"] for r in done):
-                    continue                                   # 型態的停損只有一個，不用重複
-                ds = [abs(r.get(sk, r["stop"]) - r["entry"]) for r in done]
-                ps = [sum(1 for r in done if r.get(rk, 0) >= k) / n for k in (1, 2, 3, 4)]
-                out.append(f"　{nm} 停損距離 {sum(ds) / len(ds):.0f} 點")
-                out.append(" " + " ".join(f"{k}R{p:.0%}".replace("%", "") for k, p in zip((1, 2, 3, 4), ps)))
-                if ev:                                         # 期望值（單位 R）：先走到 k 倍的機率 p，賺 k、賠 1
-                    best = max(range(4), key=lambda i: ps[i] * (i + 1) - (1 - ps[i]))
-                    e = ps[best] * (best + 1) - (1 - ps[best])
-                    out.append(f"　　最划算 {best + 1}R（{e:+.2f}）")
+                    continue
+                st = self._stat(done, sk, rk, fk)
+                ds = sum(max(abs(r.get(sk, r["stop"]) - r["entry"]), 1) for r in done) / len(done)
+                for k in range(4):
+                    cand.append((st[k][1], nm, k + 1, st[k][0], st[k][2], ds))
+            return max(cand, key=lambda c: c[0]) if cand else None
+
+        def row(label, vals):
+            return label + "".join(v.rjust(5) for v in vals)
+
+        d_all = done_of(conf)
+        L = ["📊 掃蕩戰績", f"提醒 {len(rows)} 次", f"　確認 {len(conf)}　失敗 {len(fail)}", f"　已追蹤完 {len(d_all)} 筆", BAR]
+        # ① 結論
+        b = best(d_all) if d_all else None
+        if b:
+            e, nm, k, p, pts, ds = b
+            L += ["🏆 目前最佳設定", f"　{nm}停損　目標 {k}R", f"　勝率 {p:.0%}　期望 {self._e(e)}R", f"　約 {pts:+.0f} 點／筆" if abs(pts) >= 1 else "　約 0 點／筆"]
+            if e <= 0:
+                L += ["⚠️ 沒有賺錢的設定", "　先別照著做"]
+            if len(d_all) < 30:
+                L += [f"⚠️ 只有 {len(d_all)} 筆", "　先當參考"]
+            L.append(BAR)
+        # ② 全部：兩種停損各一張表
+        if d_all:
+            L.append(f"【全部】{len(d_all)} 筆")
+            for nm, sk, rk, fk in STOPS:
+                if nm == "近" and all(r.get("stop2", r["stop"]) == r["stop"] for r in d_all):
+                    continue
+                st = self._stat(d_all, sk, rk, fk)
+                ds = sum(max(abs(r.get(sk, r["stop"]) - r["entry"]), 1) for r in d_all) / len(d_all)
+                L += [f"{nm}停損 平均 {ds:.0f} 點",
+                      row("目標", ["1R", "2R", "3R", "4R"]),
+                      row("勝率", [f"{x[0]:.0%}" for x in st]),
+                      row("期望", [self._e(x[1]) for x in st]),
+                      row("點數", [f"{x[2]:+.0f}" for x in st]), ""]
+            L.append(BAR)
+        # ③ 分組：每組只列最佳的一行（遠、近各一）；樣本太少的合併
+        small = []
+
+        def group(title, rs):
+            d = done_of(rs)
+            if len(d) < min_n:
+                if rs:
+                    small.append(f"{title} {len(d)} 筆")
+                return []
+            out = []
+            bs = []
+            for nm, sk, rk, fk in STOPS:
+                if nm == "近" and all(r.get("stop2", r["stop"]) == r["stop"] for r in d):
+                    continue
+                st = self._stat(d, sk, rk, fk)
+                i = max(range(4), key=lambda j: st[j][1])
+                bs.append((nm, i + 1, st[i][0], st[i][1]))
+            top = max(x[3] for x in bs)
+            out.append(f"{self._dot(top)}{title} {len(d)} 筆")
+            for nm, k, p, e in bs:
+                out.append(f"　{nm} {k}R 勝{p:.0%} {self._e(e)}")
             return out
-        L += block("【全部】", conf, ev=True) + [""]
-        for tr in ("順勢", "逆勢"):
-            L += block(f"【{tr}】", [r for r in conf if r.get("trend") == tr]) + [""]
-        L += block("【其他（盤整／未定）】", [r for r in conf if r.get("trend") not in ("順勢", "逆勢")]) + [""]
+
         def zone(r):
             try:
                 ts = datetime.fromisoformat(r["ts"]) if r.get("ts") else None
             except Exception:
                 ts = None
             return us_zone(ts, r.get("t"), r.get("sess"))
-        for z in ("日盤", "美股開盤前後", "夜盤其他"):
-            L += block({"日盤": "【日盤】", "美股開盤前後": "【夜盤・美股開盤前後】", "夜盤其他": "【夜盤・其他】"}[z], [r for r in conf if zone(r) == z]) + [""]
-        for tier in ("大", "小", "影線"):
-            L += block("【影線】" if tier == "影線" else f"【{tier}價位】", [r for r in conf if r.get("tier") == tier]) + [""]
-        for tier, title, dr in (("滯漲", "【放量滯漲／不跌】", None), ("轉折", "【結構轉換】", None),
-                                ("破", "【創新低追空】", "short"), ("破", "【創新高追多】", "long"),
-                                ("箱型", "【箱型上緣掃蕩（做空）】", "short"), ("箱型", "【箱型下緣掃蕩（做多）】", "long")):
+        sec = [("順逆勢", [(f"{t}", [r for r in conf if r.get("trend") == t]) for t in ("順勢", "逆勢")] +
+                [("盤整／未定", [r for r in conf if r.get("trend") not in ("順勢", "逆勢")])]),
+               ("時段", [("日盤", [r for r in conf if zone(r) == "日盤"]), ("夜盤 美股開盤前後", [r for r in conf if zone(r) == "美股開盤前後"]),
+                       ("夜盤 其他", [r for r in conf if zone(r) == "夜盤其他"])]),
+               ("價位", [("大價位", [r for r in conf if r.get("tier") == "大"]), ("小價位", [r for r in conf if r.get("tier") == "小"]),
+                       ("影線", [r for r in conf if r.get("tier") == "影線"])])]
+        L.append("分組成績（每組最佳目標）")
+        for name, gs in sec:
+            L += ["", f"▎{name}"]
+            for title, rs in gs:
+                L += group(title, rs)
+        if small:
+            L += ["", f"樣本不足 {min_n} 筆（不列）"] + [f"　{x}" for x in small]
+        # ④ 型態單：只提醒的訊號
+        pl = []
+        for tier, title, dr in (("滯漲", "放量滯漲／不跌", None), ("轉折", "結構轉換", None),
+                                ("破", "創新低追空", "short"), ("破", "創新高追多", "long"),
+                                ("箱型", "箱型上緣（做空）", "short"), ("箱型", "箱型下緣（做多）", "long")):
             rs = [r for r in pat if r.get("tier") == tier and (dr is None or r.get("dir") == dr)]
-            if rs:                                              # 有型態提醒才顯示這一塊
-                L += block(title, rs, ev=True)[:1] + [f"　提醒 {len(rs)} 次"] + block(title, rs, ev=True)[1:] + [""]
-        L.append("樣本少時別太相信")
+            if not rs:
+                continue
+            d = done_of(rs)
+            if not d:
+                pl += [f"⚪{title}", f"　提醒 {len(rs)} 次　還沒結果"]
+                continue
+            e, nm, k, p, pts, ds = best(d)
+            pl += [f"{self._dot(e)}{title}", f"　提醒 {len(rs)} 次　追蹤 {len(d)} 筆", f"　停損 {ds:.0f} 點", f"　最佳 {k}R 勝{p:.0%} {self._e(e)}"]
+        if pl:
+            L += ["", BAR, "型態單（只提醒、不一定進場）"] + pl
+        L += ["", BAR, "怎麼看",
+              "R＝每筆自己的停損距離", "　停損 100 點，1R＝100 點",
+              f"追蹤 {nb * 5 // 60} 小時，看先到哪裡",
+              "勝率＝先到目標的比例", "期望＝每冒 1R 風險", "　平均賺（賠）幾 R",
+              "　2 小時沒到目標也沒", "　碰停損的，算 0",
+              "點數＝每筆平均賺賠點數",
+              "🟢 期望 ≥ +.10", "🟡 −.10 ～ +.10（持平）", "🔴 期望 ≤ −.10",
+              "樣本少時別太相信"]
         return L
 
 
