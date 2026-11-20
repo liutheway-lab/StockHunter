@@ -3170,16 +3170,16 @@
    "ext": 35974.0,
    "trend": "逆勢",
    "ratio": 0.8,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 36427.0,
    "stop": 35974.0,
    "stop2": 36022.0,
-   "bars": 13,
+   "bars": 14,
    "rf": 0.4392935982339956,
    "rn": 0.49135802469135803,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {
