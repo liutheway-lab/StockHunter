@@ -3157,6 +3157,21 @@
    "ratio": 0.6,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-20",
+   "sess": "0",
+   "t": 1105,
+   "ts": "2026-11-20T11:10+08:00",
+   "name": "盤中波段低 35,985@10:50",
+   "tier": "小",
+   "dir": "long",
+   "level": 35985.0,
+   "ext": 35974.0,
+   "trend": "逆勢",
+   "ratio": 0.8,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
