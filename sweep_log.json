@@ -3111,6 +3111,21 @@
    "ratio": 0.9,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-20",
+   "sess": "0",
+   "t": 915,
+   "ts": "2026-11-20T09:20+08:00",
+   "name": "本盤低 36,913@08:50",
+   "tier": "大",
+   "dir": "long",
+   "level": 36913.0,
+   "ext": 36872.0,
+   "trend": "逆勢",
+   "ratio": 0.9,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
