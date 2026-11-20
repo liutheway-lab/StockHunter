@@ -3155,8 +3155,8 @@
    "ext": 36246.0,
    "trend": "逆勢",
    "ratio": 0.6,
-   "status": "wait",
-   "result": null
+   "status": "done",
+   "result": "失敗"
   }
  ],
  "meta": {
