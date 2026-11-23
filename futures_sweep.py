@@ -345,8 +345,8 @@ class Journal:
 
     def lines(self):
         rows = self.rows
-        pat = [r for r in rows if r.get("tier") in ("滯漲", "轉折", "破", "箱型")]
-        rows = [r for r in rows if r.get("tier") not in ("滯漲", "轉折", "破", "箱型")]
+        pat = [r for r in rows if r.get("tier") in ("滯漲", "轉折", "破", "箱型", "二攻")]
+        rows = [r for r in rows if r.get("tier") not in ("滯漲", "轉折", "破", "箱型", "二攻")]
         if not rows and not pat:
             return ["📊 掃蕩戰績", "還沒有資料", "之後每次掃蕩提醒", "都會自動記錄"]
         conf = [r for r in rows if r.get("entry") is not None]
@@ -446,7 +446,8 @@ class Journal:
         pl = []
         for tier, title, dr in (("滯漲", "放量滯漲／不跌", None), ("轉折", "結構轉換", None),
                                 ("破", "創新低追空", "short"), ("破", "創新高追多", "long"),
-                                ("箱型", "箱型上緣（做空）", "short"), ("箱型", "箱型下緣（做多）", "long")):
+                                ("箱型", "箱型上緣（做空）", "short"), ("箱型", "箱型下緣（做多）", "long"),
+                                ("二攻", "二次上攻量縮（做空）", "short"), ("二攻", "二次下殺量縮（做多）", "long")):
             rs = [r for r in pat if r.get("tier") == tier and (dr is None or r.get("dir") == dr)]
             if not rs:
                 continue
@@ -457,9 +458,9 @@ class Journal:
             e, nm, k, p, pts, ds = best(d)
             pl += [f"{self._dot(e)}{title}", f"　提醒 {len(rs)} 次　追蹤 {len(d)} 筆", f"　停損 {ds:.0f} 點", f"　最佳 {k}R 勝{p:.0%} {self._e(e)}"]
         if pl:
-            L += ["", BAR, "型態單（只提醒、不一定進場）"] + pl
+            L += ["", BAR, "型態單（只提醒）"] + pl
         L += ["", BAR, "怎麼看",
-              "R＝每筆自己的停損距離", "　停損 100 點，1R＝100 點",
+              "R＝每筆自己的停損距離", "　停損 100 點", "　那一筆的 1R＝100 點",
               f"追蹤 {nb * 5 // 60} 小時，看先到哪裡",
               "勝率＝先到目標的比例", "期望＝每冒 1R 風險", "　平均賺（賠）幾 R",
               "　2 小時沒到目標也沒", "　碰停損的，算 0",
@@ -493,6 +494,7 @@ class Engine:
         self.swings = []                  # 盤中波段高低（小價位）
         self.vols = []                    # 這個盤每根 5 分K 的成交量
         self.exc = {}                     # 價位被「收盤站上（跌破）」之後的停留狀態：{價位: {ext 最極端的點, n 停留幾根}}
+        self.p2 = []                      # 已經提醒的「二次上攻量縮」：還在盯有沒有碰到停損
         self.shi, self.slo = [], []       # 這個盤所有的轉折高、轉折低（結構轉換用，不會被掃掉就刪）
         self.seed_key = None              # 機器人重啟時，用期交所給的「本盤到目前的高低」補上重啟前的本盤高低
         self.seed_hi = None
@@ -560,8 +562,8 @@ class Engine:
 
     @staticmethod
     def _tier_line(s):
-        if s["tier"] in ("滯漲", "轉折", "破", "箱型"):
-            return {"滯漲": "級別 放量滯漲", "轉折": "級別 結構轉換", "破": "級別 破全日高低", "箱型": "級別 箱型第二次出量"}[s["tier"]]
+        if s["tier"] in ("滯漲", "轉折", "破", "箱型", "二攻"):
+            return {"滯漲": "級別 放量滯漲", "轉折": "級別 結構轉換", "破": "級別 破全日高低", "箱型": "級別 箱型第二次出量", "二攻": "級別 二次上攻量縮"}[s["tier"]]
         return "級別 影線" if s["tier"] == "影線" else f"級別 {s['tier']}價位"
 
     @staticmethod
@@ -589,6 +591,8 @@ class Engine:
             return f"{'創新低追空' if s['dir'] == 'short' else '創新高追多'} {lv}"
         if s["tier"] == "箱型":
             return f"箱型{'上' if s['dir'] == 'short' else '下'}緣 {f0(s['level'])}"
+        if s["tier"] == "二攻":
+            return f"二次{'上攻' if s['dir'] == 'short' else '下殺'}量縮 {_at(s['level'], s.get('lt'))}"
         if s["tier"] == "影線":
             return f"{'長上影線高點' if s['dir'] == 'short' else '長下影線低點'} {_at(s['level'], s.get('lt'))}"
         return f"{NAMES[s['name']]} {lv}" if s["tier"] == "大" else f"盤中波段{'高' if s['dir'] == 'short' else '低'} {lv}"
@@ -629,7 +633,7 @@ class Engine:
         L = ["🔻 掃上方，留意做空" if up else "🔺 掃下方，留意做多", self._tier_line(s), *self._name_lines(s)]
         if s["tier"] == "小":
             L.append(f"{s['t'] // 100:02d}:{s['t'] % 100:02d} 形成")
-        L += [f"刺破 {s['pierce']:.0f} 點 {sign} {_at(s['ext'], s.get('ext_t'))}"]
+        L += [f"刺破 {s['pierce']:.0f} 點", f"{sign}點 {_at(s['ext'], s.get('ext_t'))}"]
         if s.get("held"):
             L.append(f"先在價位{'上' if up else '下'}方 {s['held']} 根")
         L.append(f"5分K 收回 {_at(bar['c'], bar['t'])}")
@@ -650,12 +654,20 @@ class Engine:
         b, left, right = h[i], h[i - n:i], h[i + 1:i + 1 + n]
         if b["h"] > max(x["h"] for x in left) and b["h"] >= max(x["h"] for x in right):
             self.swings.append({"dir": "short", "level": b["h"], "idx": i, "t": b["t"], "name": f"sw_hi_{b['t']}"})
-            self.shi.append({"idx": i, "level": b["h"], "t": b["t"]})
             self.events.append(("high", b["h"], b["t"]))
         if b["l"] < min(x["l"] for x in left) and b["l"] <= min(x["l"] for x in right):
             self.swings.append({"dir": "long", "level": b["l"], "idx": i, "t": b["t"], "name": f"sw_lo_{b['t']}"})
-            self.slo.append({"idx": i, "level": b["l"], "t": b["t"]})
             self.events.append(("low", b["l"], b["t"]))
+        # 結構轉換用的「大轉折」：左右各 FUT_STRUCT_N 根（預設 4 根＝20 分鐘）都比它低（高），而且從它到兩側最低（高）點至少 FUT_STRUCT_SWING 點，小波動不算
+        n2, sz = _cfg("FUT_STRUCT_N", 4), _cfg("FUT_STRUCT_SWING", 60)
+        i2 = len(h) - 1 - n2
+        if i2 >= n2:
+            b, win = h[i2], h[i2 - n2:i2 + n2 + 1]
+            left, right = h[i2 - n2:i2], h[i2 + 1:i2 + 1 + n2]
+            if b["h"] > max(x["h"] for x in left) and b["h"] >= max(x["h"] for x in right) and b["h"] - min(x["l"] for x in win) >= sz:
+                self.shi.append({"idx": i2, "level": b["h"], "t": b["t"]})
+            if b["l"] < min(x["l"] for x in left) and b["l"] <= min(x["l"] for x in right) and max(x["h"] for x in win) - b["l"] >= sz:
+                self.slo.append({"idx": i2, "level": b["l"], "t": b["t"]})
 
     def on_bar(self, bar):
         """一根完成的 5 分K → 回傳要提醒的文字清單（每則是 list of 行）"""
@@ -670,7 +682,7 @@ class Engine:
             self.skey, self.sess_open, self.pending, self.or_bars, self.nbars = skey, None, [], [], 0
             self.watch_live, self.trail = [], []
             self.hist, self.swings, self.vols, self.exc = [], [], [], {}
-            self.shi, self.slo = [], []
+            self.shi, self.slo, self.p2 = [], [], []
             if self.seed_key != skey:
                 self.seed_hi = self.seed_lo = None
             if bar["sess"] == "0":
@@ -810,7 +822,7 @@ class Engine:
                 self.pending.append(s)
                 fired.add(s["dir"])
                 out.append(self._sweep_text(s, bar, ratio))
-        if _cfg("FUT_SWEEP_SWING_ON", True):
+        if _cfg("FUT_SMALL_ON", False):                    # 小價位（盤中 5 分波段高低）掃蕩：太多、沒有量能把關，預設關；有量能把關的版本是「二次上攻量縮」
             idx, age, dist = len(self.hist) - 1, _cfg("FUT_SWEEP_SWING_AGE", 36), _cfg("FUT_SWEEP_SWING_DIST", 150)
             alive, cands = [], {"short": [], "long": []}
             for w in self.swings:
@@ -846,11 +858,13 @@ class Engine:
                 if d in fresh or any(p["tier"] == "影線" and p["dir"] == d for p in self.pending):
                     continue
                 lvl = bar["l"] if d == "long" else bar["h"]
-                w = {"dir": d, "name": f"wick_{bar['t']}", "level": lvl, "ext": lvl, "pierce": wick, "n": 0, "tier": "影線", "t": bar["t"], "lt": bar["t"]}
+                w = {"dir": d, "name": f"wick_{bar['t']}", "level": lvl, "ext": lvl, "pierce": wick, "n": 0, "tier": "影線", "t": bar["t"], "lt": bar["t"], "ext_t": bar["t"]}
                 self.pending.append(w)
                 out.append(self._wick_text(w, bar, ratio))
         if _cfg("FUT_PAT_ON", True) and not last_bar:
             out += self._patterns(bar, skey, ratio)
+        if _cfg("FUT_2P_ON", True):
+            out += self._second_push(bar, skey, last_bar)
         if bar.get("v"):
             self.vols.append(bar["v"])
         return out
@@ -893,10 +907,10 @@ class Engine:
                 s = {"dir": d, "name": f"stall_{bar['t']}", "level": lv, "ext": lv, "pierce": 0, "n": 0, "tier": "滯漲", "t": bar["t"]}
                 out.append(self._pat_card(s, bar, ["🔻 高檔放量滯漲" if up else "🔺 低檔放量不跌", "留意轉空（觀察）" if up else "留意轉多（觀察）",
                                                    f"這根量 {ratio:.1f} 倍均量", f"{'高' if up else '低'}點 {_at(lv, bar['t'])}",
-                                                   f"收盤 {_at(bar['c'], bar['t'])}（收在{'下' if up else '上'}半）"]))
+                                                   f"收盤 {_at(bar['c'], bar['t'])}", f"收在{'下' if up else '上'}半"]))
         # ② 結構轉換：最近兩個轉折高（低）一個比一個低（高），收盤跌破（站上）它們之間的頸線
         if _cfg("FUT_STRUCT_ON", True):
-            step, near, age = _cfg("FUT_STRUCT_LH", 15), _cfg("FUT_STRUCT_NEAR", 50), _cfg("FUT_STRUCT_AGE", 24)
+            tol, near, age = _cfg("FUT_STRUCT_TOL", 30), _cfg("FUT_STRUCT_NEAR", 80), _cfg("FUT_STRUCT_AGE", 24)
             done = self.__dict__.setdefault("_struct_done", set())
             cur = len(self.hist) - 1
             for d, pts_ in (("short", self.shi), ("long", self.slo)):
@@ -907,16 +921,16 @@ class Engine:
                 key = (skey, d, a["idx"], b["idx"])
                 if key in done or cur <= b["idx"] or cur - b["idx"] > age:
                     continue
-                if up and not (b["level"] <= a["level"] - step and a["level"] >= hi - near):
+                if up and not (b["level"] <= a["level"] + tol and a["level"] >= hi - near):         # 第二個高可以比前高多一點（故意掃一下高點），多超過 tol 點就是真突破
                     continue
-                if (not up) and not (b["level"] >= a["level"] + step and a["level"] <= lo + near):
+                if (not up) and not (b["level"] >= a["level"] - tol and a["level"] <= lo + near):
                     continue
                 seg = self.hist[a["idx"]:b["idx"] + 1]
                 neck = min(x["l"] for x in seg) if up else max(x["h"] for x in seg)
                 if not ((bar["c"] < neck) if up else (bar["c"] > neck)):
                     # 還沒跌破（站上）頸線：高點降低已經成立，先提醒「留意」，不用等頸線
                     wkey = ("watch",) + key
-                    if _cfg("FUT_STRUCT_WATCH", True) and wkey not in done and ready(("watch", d)):
+                    if _cfg("FUT_WATCH_LH", False) and wkey not in done and ready(("watch", d)):
                         done.add(wkey)
                         last[("watch", d)] = self.nbars
                         self.watch_live.append({"up": up, "a": a["level"], "at": a["t"], "age": 0})
@@ -932,17 +946,126 @@ class Engine:
                 done.add(key)
                 if not ready(("struct", d)):
                     continue
+                swept = (b["level"] - a["level"]) if up else (a["level"] - b["level"])      # >0＝第二個轉折比前面多掃了幾點
                 last[("struct", d)] = self.nbars
                 s = {"dir": d, "name": f"struct_{bar['t']}", "level": b["level"], "ext": b["level"], "pierce": 0, "n": 0, "tier": "轉折", "t": bar["t"]}
+                head = (f"{'高點降低' if up else '低點墊高'} {_at(a['level'], a['t'])}" if swept <= 0 else f"{'掃高' if up else '掃低'} {_at(a['level'], a['t'])}")
+                extra = [] if swept <= 0 else [f"只{'高' if up else '低'} {swept:.0f} 點 沒續{'漲' if up else '跌'}"]
                 out.append(self._pat_card(s, bar, ["🔻 結構轉換（轉空）" if up else "🔺 結構轉換（轉多）", "級別 結構轉換",
-                                                   f"{'高點降低' if up else '低點墊高'} {_at(a['level'], a['t'])}", f"→ {_at(b['level'], b['t'])}",
+                                                   head, f"→ {_at(b['level'], b['t'])}", *extra,
                                                    f"收盤{'跌破' if up else '站上'} {f0(neck)}", f"收盤 {_at(bar['c'], bar['t'])}"] ) + ["建議 1 口小試"])
+        # ②b 跨過多空分界（昨天高低收平均）：收盤站到分界另一側 FUT_PIVOT_BUF 點以上，才算大方向換邊。比結構轉換慢，但是比較可靠
+        if _cfg("FUT_PIVOT_ON", True) and self.pivot:
+            buf = _cfg("FUT_PIVOT_BUF", 20)
+            if getattr(self, "_pv_ref", None) != self.pivot:         # 換了新的一天（分界變了）：重新記是在哪一側，不提醒
+                self._pv_ref, self._pv_side = self.pivot, None
+            new = 1 if bar["c"] > self.pivot + buf else (-1 if bar["c"] < self.pivot - buf else None)
+            if new is not None:
+                side, self._pv_side = self._pv_side, new
+                if side is not None and new != side and ready(("pivot", "x")):
+                    last[("pivot", "x")] = self.nbars
+                    dn = new < 0
+                    out.append([f"🔻 跨到分界下方（偏空）" if dn else "🔺 跨到分界上方（偏多）", "級別 大方向",
+                                f"分界 {f0(self.pivot)}", "（昨天高低收平均）",
+                                f"收盤 {_at(bar['c'], bar['t'])}", f"從偏{'多' if dn else '空'}變偏{'空' if dn else '多'}",
+                                "結構可能轉換", "比結構轉換慢一點", "但比較可靠",
+                                f"{'站回' if dn else '跌回'} {f0(self.pivot)}", f"{'上' if dn else '下'}就失效"])
         # ④ 箱型上（下）緣第二次出量掃蕩：衝刺之後的盤整區間，上緣被放量刺破又收回（第二次）→ 留意做空；下緣反之
         if _cfg("FUT_BOX_ON", True):
             out += self._box_sweep(bar, skey, ready, last)
         # ③ 創新低追空／創新高追多：收盤跌破（站上）「全日（含夜盤）」的低（高）點。只記進掃蕩紀錄，不推播
         if _cfg("FUT_BREAK_ON", True) and self.journal:
             self._break_log(bar, skey, ready, last)
+        return out
+
+    def _second_push(self, bar, skey, last_bar):
+        """二次上攻量縮（做空；下殺量縮＝做多的鏡像）：
+        ① 前面有一個高點，形成時帶量（衝高出量一次，前後 3 根的平均量 ≥ 平常 FUT_2P_VOLX 倍），之後回落至少 FUT_2P_PULL 點；
+        ② 這次第二次上攻，高點進到「前高下 FUT_2P_NEAR 點」到「前高上 FUT_2P_BREAK 點」之間（還沒真的突破）；
+        ③ 這一段上攻的平均量不大於前面那次（× FUT_2P_RATIO）＝沒有追價力道。
+        提醒的時機是『快衝回前高』（預設前高下 50 點內就看得到），停損參考＝前高上 FUT_2P_STOP 點。每個前高只提醒一次"""
+        out = []
+        h = self.hist
+        stop_pts = _cfg("FUT_2P_STOP", 25)
+        keep = []
+        for w in self.p2:                                       # 已提醒的：碰到停損參考就說一聲
+            w["age"] += 1
+            up = w["dir"] == "short"
+            if (bar["h"] > w["stop"]) if up else (bar["l"] < w["stop"]):
+                out.append([f"❌ 二次{'上攻' if up else '下殺'}失敗（{'做空' if up else '做多'}）", f"又{'創高' if up else '創低'} {_at(bar['h'] if up else bar['l'], bar['t'])}",
+                            f"碰到停損參考 {f0(w['stop'])}", "這個訊號不用看了"])
+            elif w["age"] < 12:
+                keep.append(w)
+        self.p2 = keep
+        n, vx, pull = _cfg("FUT_2P_N", 3), _cfg("FUT_2P_VOLX", 1.5), _cfg("FUT_2P_PULL", 60)
+        near, brk, ratio_max = _cfg("FUT_2P_NEAR", 50), _cfg("FUT_2P_BREAK", 30), _cfg("FUT_2P_RATIO", 1.0)
+        cur, age = len(h) - 1, _cfg("FUT_2P_AGE", 48)
+        if last_bar or cur < n + 8:
+            return out
+        for d in ("short", "long"):
+            up = d == "short"
+            best = None
+            for i in range(max(2, cur - age), cur - n - 1):
+                b = h[i]
+                px = b["h"] if up else b["l"]
+                left, right = h[max(0, i - n):i], h[i + 1:i + 1 + n]
+                if not left or len(right) < n:
+                    continue
+                if up and not (px > max(x["h"] for x in left) and px >= max(x["h"] for x in right)):
+                    continue
+                if (not up) and not (px < min(x["l"] for x in left) and px <= min(x["l"] for x in right)):
+                    continue
+                key = (bar["day"], bar["sess"], "2p", d, b["t"])
+                if key in self.done:
+                    continue
+                after = h[i + 1:cur]                                   # 前高之後、到上一根為止
+                if not after:
+                    continue
+                if (max(x["h"] for x in after) > px + brk) if up else (min(x["l"] for x in after) < px - brk):
+                    self.done.add(key)                                 # 已經真的突破（過前高超過 brk 點）：這個前高不用了
+                    continue
+                win = h[max(0, i - 2):i + 1]                           # 前高形成那一段（含前 2 根）的量
+                base = [x["v"] for x in h[max(0, i - 22):max(0, i - 2)] if x.get("v")]
+                if len(base) < 6 or not all(x.get("v") for x in win):
+                    continue
+                v1 = sum(x["v"] for x in win) / len(win)
+                if v1 < vx * (sum(base) / len(base)):
+                    continue                                          # 前高那次沒有出量
+                lo_i = min(range(i + 1, cur), key=lambda k: (h[k]["l"], k)) if up else max(range(i + 1, cur), key=lambda k: (h[k]["h"], -k))
+                depth = (px - h[lo_i]["l"]) if up else (h[lo_i]["h"] - px)
+                if depth < pull:
+                    continue                                          # 沒有明顯回落
+                leg = h[lo_i + 1:cur + 1]                              # 回落低點之後的這一段上攻（含這根）
+                if len(leg) < _cfg("FUT_2P_LEG", 2) or not all(x.get("v") for x in leg):
+                    continue
+                v2 = sum(x["v"] for x in leg) / len(leg)
+                if v2 > ratio_max * v1:
+                    continue                                          # 這次的量比前面大：不是量縮
+                reach = (bar["h"] >= px - near) if up else (bar["l"] <= px + near)
+                if not reach:
+                    continue
+                if (bar["h"] > px + brk) if up else (bar["l"] < px - brk):
+                    self.done.add(key)
+                    continue
+                cand = (px, i, key, v1, v2, base, depth)
+                if best is None or (up and px > best[0]) or ((not up) and px < best[0]):
+                    best = cand
+            if best is None:
+                continue
+            px, i, key, v1, v2, base, depth = best
+            self.done.add(key)
+            stop = px + stop_pts if up else px - stop_pts
+            gap = (px - bar["c"]) if up else (bar["c"] - px)           # 收盤離前高還差幾點（負的＝已經過前高）
+            s = {"dir": d, "name": f"2p_{h[i]['t']}", "level": px, "lt": h[i]["t"], "t": bar["t"], "ext": stop, "ext_t": None,
+                 "pierce": 0, "n": 0, "tier": "二攻"}
+            lines = ["🔻 二次上攻量縮" if up else "🔺 二次下殺量縮", "留意做空" if up else "留意做多", "級別 二次上攻" if up else "級別 二次下殺",
+                     f"前{'高' if up else '低'} {_at(px, h[i]['t'])}", f"　出量 {v1 / (sum(base) / len(base)):.1f} 倍均量",
+                     f"這次{'上攻' if up else '下殺'}量 {v2 / v1:.1f} 倍前次",
+                     f"收盤 {_at(bar['c'], bar['t'])}",
+                     (f"離前{'高' if up else '低'} {gap:.0f} 點" if gap >= 0 else f"已過前{'高' if up else '低'} {-gap:.0f} 點"),
+                     f"參考區 前{'高下' if up else '低上'} 30～{near} 點"]
+            out.append(self._pat_card(s, bar, lines))
+            self.p2.append({"dir": d, "stop": stop, "age": 0})
         return out
 
     def _find_box(self):
