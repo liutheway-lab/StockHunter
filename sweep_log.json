@@ -2568,8 +2568,8 @@
    "ext": 39411.0,
    "trend": "逆勢",
    "ratio": 13.0,
-   "status": "wait",
-   "result": null
+   "status": "done",
+   "result": "中斷"
   },
   {
    "day": "2026-11-19",
@@ -3436,6 +3436,21 @@
    "ext": 36615.0,
    "trend": "逆勢",
    "ratio": 0.8,
+   "status": "done",
+   "result": "中斷"
+  },
+  {
+   "day": "2026-11-23",
+   "sess": "0",
+   "t": 1255,
+   "ts": "2026-11-23T13:00+08:00",
+   "name": "長上影線高點 36,850@13:00",
+   "tier": "影線",
+   "dir": "short",
+   "level": 36850.0,
+   "ext": 36850.0,
+   "trend": "順勢",
+   "ratio": null,
    "status": "wait",
    "result": null
   }
