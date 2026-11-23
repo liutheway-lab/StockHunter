@@ -358,7 +358,7 @@ def run():
                 rows.append((label, sym, None, str(e), None))
 
         gdate = max(dates) if dates else None
-        notes = []
+        notes, stale = [], {}                           # stale：{代號: "休市"／"無新資料"}，這些項目只寫狀態，不顯示價格和漲跌（舊數字很容易被當成今天的行情）
         if gdate:                                       # 有項目停在比較早的日期：現貨指數當作休市，期貨當作沒有新資料
             for label, sym, curr, prev, d in rows:
                 lag = timedelta(days=1 if sym.endswith("=F") else 0)      # 期貨日線的日期是交易所（美國）時間，差一天算正常
@@ -366,7 +366,8 @@ def run():
                     continue
                 pcts.pop(sym, None)                     # 舊資料不拿來算今天的結論
                 why = "無新資料" if sym.endswith("=F") else "休市"
-                notes.append(f"※ {label}{why}（停在 {d:%m/%d}）")
+                stale[sym] = why
+                notes.append(f"※ {label}{why}，不列入分數（最近資料 {d:%m/%d}）")
         for label, sym, curr, prev, d in rows:
             if sym in SUSPECT and curr is not None:
                 pcts.pop(sym, None)                     # 前收可能缺資料，數字不可信，不拿來算今天的結論
@@ -384,6 +385,8 @@ def run():
         for label, sym, curr, prev, d in rows:
             if curr is None:
                 lines.append(f"⚠️ {pad(label)} 抓不到")
+            elif sym in stale:
+                lines.append(f"⏸ {pad(label)} 今天{stale[sym]}")
             else:
                 lines.append(fmt_row(label, sym, curr, prev, " ⚠️" if sym in SUSPECT else ""))
         blocks.append(head + "\n" + code(lines) + ("\n" + "\n".join(notes) if notes else ""))
