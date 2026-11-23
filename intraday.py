@@ -2365,15 +2365,20 @@ def check_once(watch, books, sent, today, last=None, now=None, absorb=None):
             to_group(f"🧺 *恐慌承接警示*　{a['code']} {a['name']}\n發現日 {_fdate(a)}\n跌破發現日 {'、'.join(broke)}\n{tail}")
         if back:
             to_group(f"🧺 *恐慌承接站回*　{a['code']} {a['name']}\n發現日 {_fdate(a)}\n又站回發現日 {'、'.join(back)}\n{tail}")
-        # 承接成功（只提醒，一天一次）：殺低點＝發現日的最低價（昨天殺出來的低點，不是今天盤中的低點）
-        # 條件：現價 ≥ 發現日最低 × 1.05，且站上發現日均價與 POC（今天不需要再殺一次）
+        # 承接成功（只提醒，一天一次）＝「回測不破」：今天價格拉回到發現日的成本區（均價、POC）附近，沒有跌破，而且又彈起來、站回成本區上方。
+        # 開盤就直接噴在成本區上面、沒有回測的，不發（那時候才通知已經太晚）。
         code, kill, day_key = a["code"], a["low"], (today, a["code"])
-        if (day_key not in ABSORB_OK and kill and a.get("avg") and a.get("poc")
-                and v["last"] >= kill * (1 + cfg.ABSORB_SUCCESS_RECOVER)
-                and v["last"] >= a["avg"] and v["last"] >= a["poc"]):
-            ABSORB_OK[day_key] = kill
-            to_group(f"🧺 *恐慌承接成功*　{code} {a['name']}\n發現日 {_fdate(a)}｜最低 {kill:g}\n現價已反彈 {(v['last'] / kill - 1) * 100:.1f}%\n"
-                     f"站上發現日均價 {a['avg']:g}、POC {a['poc']:g}\n停損參考：跌破發現日最低 {kill:g}\n{tail}")
+        if day_key not in ABSORB_OK and kill and a.get("avg") and a.get("poc"):
+            z_hi, z_lo = max(a["avg"], a["poc"]), min(a["avg"], a["poc"])
+            t_low = v.get("low") or v["last"]                                  # 今天到目前的最低價＝回測的低點
+            tested = t_low <= z_hi * (1 + getattr(cfg, "ABSORB_RETEST_NEAR", 0.03))             # 今天有拉回到成本區附近
+            held = t_low >= z_lo * (1 - getattr(cfg, "ABSORB_RETEST_HOLD", 0.01))               # 沒有明顯跌破成本區
+            bounced = v["last"] >= z_hi and v["last"] >= t_low * (1 + getattr(cfg, "ABSORB_RETEST_BOUNCE", 0.01))
+            if tested and held and bounced and v["last"] >= kill * (1 + cfg.ABSORB_SUCCESS_RECOVER):
+                ABSORB_OK[day_key] = kill
+                to_group(f"🧺 *恐慌承接成功（回測不破）*　{code} {a['name']}\n發現日 {_fdate(a)}｜最低 {kill:g}\n"
+                         f"今天回測低點 {t_low:g}（成本區 {z_lo:g}～{z_hi:g}）\n守住發現日均價 {a['avg']:g}、POC {a['poc']:g}\n"
+                         f"停損參考：跌破今天低點 {t_low:g}\n（發現日最低 {kill:g}）\n{tail}")
     for cid, h in books.items():                            # 持股提醒（各自傳給本人）
         for code, x in h.items():
             v = q.get(code)
