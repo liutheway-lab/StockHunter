@@ -1,6 +1,6 @@
 {
- "generated_at": "2026-11-20 15:53",
- "data_date": "2026-11-20",
+ "generated_at": "2026-11-23 15:51",
+ "data_date": "2026-11-23",
  "layer": 5,
  "layer_name": "強空頭",
  "active": [],
@@ -16,25 +16,5 @@
   "pullback": [],
   "flag": []
  },
- "absorb": [
-  {
-   "code": "6925",
-   "name": "意藍",
-   "suffix": ".TWO",
-   "industry": "數位雲端",
-   "market": "上櫃",
-   "close": 101.0,
-   "low": 86.5,
-   "high": 101.0,
-   "kind": "長下影",
-   "vol_mult": 3.6,
-   "chg": 9.66,
-   "turnover": 366928934,
-   "score": 66.7,
-   "avg": 95.41,
-   "poc": 97.6,
-   "date": "2026-11-20",
-   "sup": 98.6
-  }
- ]
+ "absorb": []
 }
