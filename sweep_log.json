@@ -3362,6 +3362,21 @@
    "ratio": null,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-23",
+   "sess": "0",
+   "t": 900,
+   "ts": "2026-11-23T09:05+08:00",
+   "name": "今日全天高 36,396@00:00",
+   "tier": "大",
+   "dir": "short",
+   "level": 36396.0,
+   "ext": 36465.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
