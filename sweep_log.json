@@ -3385,6 +3385,21 @@
    "ratio": null,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-23",
+   "sess": "0",
+   "t": 905,
+   "ts": "2026-11-23T09:10+08:00",
+   "name": "長上影線高點 36,786",
+   "tier": "影線",
+   "dir": "short",
+   "level": 36786.0,
+   "ext": 36786.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
