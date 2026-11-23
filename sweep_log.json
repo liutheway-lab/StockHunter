@@ -3347,6 +3347,21 @@
    "ratio": 1.6,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-23",
+   "sess": "0",
+   "t": 855,
+   "ts": "2026-11-23T09:00+08:00",
+   "name": "上個交易日低 35,563@13:45",
+   "tier": "大",
+   "dir": "long",
+   "level": 35563.0,
+   "ext": 34828.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
