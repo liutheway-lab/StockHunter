@@ -695,9 +695,10 @@ class Engine:
         self.nbars += 1
         need = _cfg("FUT_SWEEP_BARS", 2)
         mn = _cfg("FUT_SWEEP_MIN", 3)
-        # 這根的成交量是平常的幾倍（只放在提醒裡給你參考，不拿來過濾）
+        # 這根的成交量是平常的幾倍（掃蕩與長影線要不小於 FUT_SWEEP_VOLMIN 倍才提醒）
         prior = [v for v in self.vols[-20:] if v]
         ratio = (bar["v"] / (sum(prior) / len(prior))) if (bar.get("v") and len(prior) >= 6) else None
+        weak = ratio is not None and ratio < _cfg("FUT_SWEEP_VOLMIN", 1.0)        # 這根量比平常還小：掃蕩／長影線都不提醒
         # 開盤 30 分鐘高低（日盤 08:45～09:15）
         if bar["sess"] == "0":
             if bar["t"] < 915:
@@ -814,6 +815,8 @@ class Engine:
                 far = max(bar["h"], ex["ext"]) if (up and ex) else bar["h"] if up else (min(bar["l"], ex["ext"]) if ex else bar["l"])
                 if (up and far < level + mn) or ((not up) and far > level - mn):
                     continue
+                if weak:
+                    continue                                                        # 量太小的掃蕩不提醒（價位沒用掉，之後帶量再掃還會報）
                 far_t = (ex.get("et") if (ex and ((ex["ext"] > bar["h"]) if up else (ex["ext"] < bar["l"]))) else bar["t"])
                 s = {"dir": "short" if up else "long", "name": name, "level": level, "ext": far, "ext_t": far_t,
                      "pierce": (far - level) if up else (level - far), "n": 0, "tier": "大", "held": ex["n"] if ex else 0,
@@ -838,7 +841,7 @@ class Engine:
             self.swings = alive
             if not last_bar:
                 for d, ws in cands.items():
-                    if not ws or d in fired or any(p["tier"] == "小" and p["dir"] == d for p in self.pending):
+                    if weak or not ws or d in fired or any(p["tier"] == "小" and p["dir"] == d for p in self.pending):
                         continue
                     w = max(ws, key=lambda x: x["level"]) if d == "short" else min(ws, key=lambda x: x["level"])
                     up = d == "short"
@@ -855,7 +858,7 @@ class Engine:
             for d, wick in (("long", min(bar["o"], bar["c"]) - bar["l"]), ("short", bar["h"] - max(bar["o"], bar["c"]))):
                 if rng <= 0 or wick < need_pts or wick < _cfg("FUT_WICK_PCT", 0.6) * rng:
                     continue
-                if d in fresh or any(p["tier"] == "影線" and p["dir"] == d for p in self.pending):
+                if weak or d in fresh or any(p["tier"] == "影線" and p["dir"] == d for p in self.pending):
                     continue
                 lvl = bar["l"] if d == "long" else bar["h"]
                 w = {"dir": d, "name": f"wick_{bar['t']}", "level": lvl, "ext": lvl, "pierce": wick, "n": 0, "tier": "影線", "t": bar["t"], "lt": bar["t"], "ext_t": bar["t"]}
