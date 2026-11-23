@@ -3360,8 +3360,16 @@
    "ext": 34828.0,
    "trend": "逆勢",
    "ratio": null,
-   "status": "wait",
-   "result": null
+   "status": "track",
+   "result": null,
+   "entry": 36106.0,
+   "stop": 34828.0,
+   "stop2": 35525.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   },
   {
    "day": "2026-11-23",
@@ -3375,8 +3383,8 @@
    "ext": 36465.0,
    "trend": "順勢",
    "ratio": null,
-   "status": "wait",
-   "result": null
+   "status": "done",
+   "result": "失敗"
   }
  ],
  "meta": {
