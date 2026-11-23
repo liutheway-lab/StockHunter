@@ -3451,8 +3451,16 @@
    "ext": 36850.0,
    "trend": "順勢",
    "ratio": null,
-   "status": "wait",
-   "result": null
+   "status": "track",
+   "result": null,
+   "entry": 36663.0,
+   "stop": 36850.0,
+   "stop2": 36805.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
