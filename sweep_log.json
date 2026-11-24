@@ -3880,6 +3880,29 @@
    "ratio": 5.4,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-25",
+   "sess": "1",
+   "t": 2235,
+   "ts": "2026-11-24T22:40+08:00",
+   "name": "創新低追空 39,004@21:40",
+   "tier": "破",
+   "dir": "short",
+   "level": 39004.0,
+   "ext": 39538.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 38935.0,
+   "stop": 39538.0,
+   "stop2": 39538.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
