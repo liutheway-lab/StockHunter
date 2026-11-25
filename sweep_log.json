@@ -4057,9 +4057,9 @@
    "entry": 36873.0,
    "stop": 36737.0,
    "stop2": 36767.0,
-   "bars": 0,
-   "rf": 0.0,
-   "rn": 0.0,
+   "bars": 1,
+   "rf": 1.411764705882353,
+   "rn": 1.8113207547169812,
    "sf": false,
    "sn": false
   },
@@ -4075,8 +4075,8 @@
    "ext": 37049.0,
    "trend": "順勢",
    "ratio": 3.3,
-   "status": "wait",
-   "result": null
+   "status": "done",
+   "result": "失敗"
   }
  ],
  "meta": {
