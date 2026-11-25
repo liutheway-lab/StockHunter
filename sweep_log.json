@@ -4052,16 +4052,16 @@
    "ext": 36737.0,
    "trend": "逆勢",
    "ratio": 2.4,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 36873.0,
    "stop": 36737.0,
    "stop2": 36767.0,
-   "bars": 2,
+   "bars": 3,
    "rf": 2.5441176470588234,
    "rn": 3.2641509433962264,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   },
   {
    "day": "2026-11-26",
