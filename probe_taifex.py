@@ -1,11 +1,10 @@
-"""探測 v2：直接試抓期交所「期貨每筆成交資料」每日檔，並試算一次 POC。
+"""探測 v3：確認逐筆檔涵蓋的日期與時段、以及檔案公布時間。
 只讀不寫，結果全部印在 Actions 的 log。"""
 import csv
 import io
-import re
 import sys
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 import requests
@@ -20,97 +19,67 @@ def show(title):
     sys.stdout.flush()
 
 
-def parse_rows(raw_csv_bytes):
-    """回傳 (表頭, 資料列)。編碼先試 cp950，失敗改 utf-8。"""
+def decode(raw):
     for enc in ("cp950", "utf-8-sig"):
         try:
-            text = raw_csv_bytes.decode(enc)
-            break
+            return raw.decode(enc)
         except UnicodeDecodeError:
-            text = None
-    if text is None:
-        text = raw_csv_bytes.decode("cp950", errors="replace")
-    rows = list(csv.reader(io.StringIO(text)))
-    return rows[0], rows[1:]
+            pass
+    return raw.decode("cp950", errors="replace")
 
 
-def calc_poc(header, rows, product="TX"):
-    """用逐筆成交算 POC。欄位用名稱找，找不到就回報。"""
-    def col(*keys):
-        for i, h in enumerate(header):
-            if all(k in h for k in keys):
-                return i
-        return None
+def bucket(t):
+    """把成交時間(HHMMSS)分成日盤/夜盤/其他。"""
+    t = t.strip().zfill(6)
+    hhmm = int(t[:4])
+    if 845 <= hhmm <= 1345:
+        return "日盤 08:45-13:45"
+    if hhmm >= 1500:
+        return "夜盤前段 15:00-23:59"
+    if hhmm <= 500:
+        return "夜盤後段 00:00-05:00"
+    return "其他"
 
-    i_prod = col("商品")
-    i_month = col("到期")
-    i_time = col("時間")
-    i_price = col("價格")
-    i_vol = col("數量")
-    print("欄位位置:", dict(商品=i_prod, 到期=i_month, 時間=i_time,
-                          價格=i_price, 數量=i_vol))
-    if None in (i_prod, i_month, i_price, i_vol):
-        print("找不到必要欄位，表頭:", header)
+
+def analyze(day, content):
+    z = zipfile.ZipFile(io.BytesIO(content))
+    rows = list(csv.reader(io.StringIO(decode(z.read(z.namelist()[0])))))
+    header, rows = rows[0], rows[1:]
+    tx = [r for r in rows if len(r) >= 6 and r[1].strip() == "TX"
+          and "/" not in r[2]]
+    near = sorted({r[2].strip() for r in tx})
+    print("TX 單一月份合約:", near, "筆數:", len(tx))
+    if not tx:
         return
-    sel = [r for r in rows if len(r) > max(i_prod, i_month, i_price, i_vol)
-           and r[i_prod].strip() == product]
-    print(f"{product} 筆數:", len(sel))
-    if not sel:
-        return
-    months = defaultdict(int)
-    for r in sel:
-        months[r[i_month].strip()] += 1
-    near = sorted(m for m in months if "/" not in m)[0] if months else None
-    print("各到期月份筆數:", dict(months), "近月:", near)
-    sel = [r for r in sel if r[i_month].strip() == near]
-    times = [r[i_time] for r in sel if i_time is not None]
-    if times:
-        print("成交時間範圍:", min(times), "~", max(times))
-    vol = defaultdict(int)
-    for r in sel:
-        try:
-            vol[float(r[i_price])] += int(r[i_vol])
-        except ValueError:
-            continue
-    if not vol:
-        print("沒有可用的價格/數量")
-        return
-    poc = max(vol, key=vol.get)
-    print("POC 價位:", poc, "該價位成交量:", vol[poc])
-    top = sorted(vol.items(), key=lambda x: -x[1])[:5]
-    print("成交量前5價位:", top)
-    print("價格範圍:", min(vol), "~", max(vol))
+    near_m = near[0]
+    tx = [r for r in tx if r[2].strip() == near_m]
+    print("近月:", near_m, "筆數:", len(tx))
+    by_date = defaultdict(Counter)
+    tmin, tmax = {}, {}
+    for r in tx:
+        d, t = r[0].strip(), r[3].strip().zfill(6)
+        by_date[d][bucket(t)] += 1
+        tmin[d] = min(tmin.get(d, t), t)
+        tmax[d] = max(tmax.get(d, t), t)
+    for d in sorted(by_date):
+        print(f"成交日期 {d}: 時間 {tmin[d]}~{tmax[d]}", dict(by_date[d]))
 
 
 def main():
-    show("試抓每日逐筆檔（往前最多 10 天）")
+    show("最近 6 天的檔案：大小、上傳時間、日期與時段分布")
     day = date.today()
-    for _ in range(10):
+    for _ in range(6):
         url = URL.format(y=day.year, m=day.month, d=day.day)
         try:
             r = requests.get(url, headers=HEADERS, timeout=40)
-            print(day, "狀態碼:", r.status_code, "大小:", len(r.content))
+            lm = r.headers.get("Last-Modified")
+            print(f"\n檔名日期 {day} 狀態碼 {r.status_code} "
+                  f"大小 {len(r.content)} 上傳時間(GMT) {lm}")
             if r.status_code == 200 and r.content[:2] == b"PK":
-                z = zipfile.ZipFile(io.BytesIO(r.content))
-                print("zip 內檔案:", z.namelist())
-                raw = z.read(z.namelist()[0])
-                header, rows = parse_rows(raw)
-                print("表頭:", header)
-                print("前3列:", rows[:3])
-                print("總列數:", len(rows))
-                calc_poc(header, rows)
-                break
+                analyze(day, r.content)
         except Exception as e:
             print(day, "失敗:", repr(e))
         day -= timedelta(days=1)
-    else:
-        print("10 天內都沒抓到，改看頁面線索")
-        r = requests.get(
-            "https://www.taifex.com.tw/cht/3/dlFutPrevious30DaysSalesData",
-            headers=HEADERS, timeout=30)
-        for line in r.text.splitlines():
-            if re.search(r"zip|csv|download|Dailydownload|onclick", line, re.I):
-                print(line.strip()[:200])
     show("完成")
     print("把以上整段 log 貼回來給我。")
 
