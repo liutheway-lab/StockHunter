@@ -4145,6 +4145,29 @@
    "rn": 0.0,
    "sf": false,
    "sn": false
+  },
+  {
+   "day": "2026-11-26",
+   "sess": "1",
+   "t": 2355,
+   "ts": "2026-11-26T05:00+08:00",
+   "name": "創新高追多 37,990@15:10",
+   "tier": "破",
+   "dir": "long",
+   "level": 37990.0,
+   "ext": 35969.0,
+   "trend": "逆勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 38365.0,
+   "stop": 35969.0,
+   "stop2": 35969.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
