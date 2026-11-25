@@ -4054,6 +4054,21 @@
    "ratio": 2.4,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-26",
+   "sess": "1",
+   "t": 2110,
+   "ts": "2026-11-25T21:15+08:00",
+   "name": "盤中波段高 37,023@19:55",
+   "tier": "小",
+   "dir": "short",
+   "level": 37023.0,
+   "ext": 37049.0,
+   "trend": "順勢",
+   "ratio": 3.3,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
