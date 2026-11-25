@@ -4014,16 +4014,16 @@
    "ext": 37139.0,
    "trend": "逆勢",
    "ratio": 1.8,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 37254.0,
    "stop": 37139.0,
    "stop2": 37165.0,
-   "bars": 0,
+   "bars": 1,
    "rf": 0.0,
    "rn": 0.0,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {
