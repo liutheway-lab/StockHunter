@@ -4252,6 +4252,21 @@
    "ratio": 1.0,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-26",
+   "sess": "0",
+   "t": 920,
+   "ts": "2026-11-26T09:25+08:00",
+   "name": "今日開盤30分高 39,305@08:50",
+   "tier": "大",
+   "dir": "short",
+   "level": 39305.0,
+   "ext": 39517.0,
+   "trend": "逆勢",
+   "ratio": 0.9,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
