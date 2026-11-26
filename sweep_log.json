@@ -4206,6 +4206,21 @@
    "ratio": null,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-26",
+   "sess": "0",
+   "t": 900,
+   "ts": "2026-11-26T09:05+08:00",
+   "name": "長下影線低點 38,556@09:05",
+   "tier": "影線",
+   "dir": "long",
+   "level": 38556.0,
+   "ext": 38556.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
