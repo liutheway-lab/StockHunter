@@ -4717,6 +4717,29 @@
    "ratio": 1.5,
    "status": "wait",
    "result": null
+  },
+  {
+   "day": "2026-11-30",
+   "sess": "1",
+   "t": 2200,
+   "ts": "2026-11-27T22:05+08:00",
+   "name": "高點降低 39,340",
+   "tier": "轉折",
+   "dir": "short",
+   "level": 39340.0,
+   "ext": 39340.0,
+   "trend": "順勢",
+   "ratio": null,
+   "status": "track",
+   "result": null,
+   "entry": 39172.0,
+   "stop": 39340.0,
+   "stop2": 39340.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
