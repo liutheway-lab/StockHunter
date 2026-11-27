@@ -4423,7 +4423,7 @@
    "entry": 39447.0,
    "stop": 39577.0,
    "stop2": 39511.0,
-   "bars": 7,
+   "bars": 8,
    "rf": 3.0538461538461537,
    "rn": 0.0,
    "sf": false,
@@ -4446,7 +4446,7 @@
    "entry": 39077.0,
    "stop": 39365.0,
    "stop2": 39321.0,
-   "bars": 2,
+   "bars": 3,
    "rf": 0.0,
    "rn": 0.0,
    "sf": false,
@@ -4464,8 +4464,16 @@
    "ext": 39050.0,
    "trend": "順勢",
    "ratio": 0.8,
-   "status": "wait",
-   "result": null
+   "status": "track",
+   "result": null,
+   "entry": 39128.0,
+   "stop": 39050.0,
+   "stop2": 39107.0,
+   "bars": 0,
+   "rf": 0.0,
+   "rn": 0.0,
+   "sf": false,
+   "sn": false
   }
  ],
  "meta": {
