@@ -1,6 +1,6 @@
 {
- "generated_at": "2026-11-26 15:51",
- "data_date": "2026-11-26",
+ "generated_at": "2026-11-27 15:51",
+ "data_date": "2026-11-27",
  "layer": 5,
  "layer_name": "強空頭",
  "active": [],
@@ -10,7 +10,44 @@
   "pullback": [],
   "flag": [],
   "breakout": [],
-  "dry": []
+  "dry": [
+   {
+    "code": "1402",
+    "name": "遠東新",
+    "suffix": ".TW",
+    "industry": "紡織纖維",
+    "market": "上市",
+    "close": 26.35,
+    "key": 28.65,
+    "stop1": 25.6,
+    "target": 28.65,
+    "turnover": 233942442,
+    "score": 40.9,
+    "broke": false,
+    "vl_low": 29.799999237060547,
+    "vl_date": "10/14",
+    "vl_vol": 26622,
+    "vl_side": "壓"
+   },
+   {
+    "code": "2542",
+    "name": "興富發",
+    "suffix": ".TW",
+    "industry": "建材營造業",
+    "market": "上市",
+    "close": 37.35,
+    "key": 39.45,
+    "stop1": 35.2,
+    "target": 39.45,
+    "turnover": 215399285,
+    "score": 40.9,
+    "broke": false,
+    "vl_low": 40.45000076293945,
+    "vl_date": "09/23",
+    "vl_vol": 47140,
+    "vl_side": "壓"
+   }
+  ]
  },
  "watch": {
   "pullback": [],
