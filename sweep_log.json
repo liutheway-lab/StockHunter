@@ -4565,6 +4565,21 @@
    "ratio": 0.8,
    "status": "done",
    "result": "失敗"
+  },
+  {
+   "day": "2026-11-30",
+   "sess": "1",
+   "t": 1650,
+   "ts": "2026-11-27T16:55+08:00",
+   "name": "本盤高 39,321@15:10",
+   "tier": "大",
+   "dir": "short",
+   "level": 39321.0,
+   "ext": 39340.0,
+   "trend": "順勢",
+   "ratio": 1.0,
+   "status": "wait",
+   "result": null
   }
  ],
  "meta": {
