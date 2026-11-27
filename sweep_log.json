@@ -4692,16 +4692,16 @@
    "ext": 39215.0,
    "trend": "逆勢",
    "ratio": 0.4,
-   "status": "track",
-   "result": null,
+   "status": "done",
+   "result": "完成",
    "entry": 39317.0,
    "stop": 39215.0,
    "stop2": 39218.0,
-   "bars": 4,
+   "bars": 5,
    "rf": 0.22549019607843138,
    "rn": 0.23232323232323232,
-   "sf": false,
-   "sn": false
+   "sf": true,
+   "sn": true
   }
  ],
  "meta": {
